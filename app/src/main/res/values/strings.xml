@@ -1,0 +1,41 @@
+<resources>
+    <string name="app_name">EmergencyResponseApp</string>
+
+    <!-- Confirm call dialog strings -->
+    <string name="assigned_incident_prefix">Assigned Incident: %1$s</string>
+    <string name="divider">--------------------------------</string>
+    <string name="emergency_suffix">Emergency</string>
+    <string name="agency_label">Agency: %1$s</string>
+    <string name="hotline_label">Hotline: %1$s</string>
+    <string name="call_agency_button">CALL %1$s</string>
+    <string name="cancel">Cancel</string>
+
+    <!-- Toasts and messages -->
+    <string name="no_assigned_incident">No assigned incident to call command for.</string>
+    <string name="no_dialer_available">No dialer available</string>
+    <string name="unable_to_open_dialer">Unable to open dialer</string>
+
+    <!-- Action labels -->
+    <string name="navigate">Navigate</string>
+    <string name="mark_complete">Mark Complete</string>
+
+    <!-- Mark complete confirm dialog -->
+    <string name="confirm_mark_complete_title">Mark Incident Complete</string>
+    <string name="confirm_mark_complete_message">Are you sure you want to mark this incident as complete?</string>
+    <string name="confirm_yes">Yes</string>
+    <string name="confirm_no">No</string>
+
+    <!-- Result messages -->
+    <string name="mark_complete_success">Incident marked complete</string>
+    <string name="mark_complete_failure">Failed to mark incident complete</string>
+
+    <!-- Call command feature strings -->
+    <string name="call_command_label">Call Command</string>
+    <string name="call_options_title">Call Command — Select Department</string>
+    <string name="call_options_info">Choose a department below to open the dialer (confirmation required).</string>
+    <string name="call_now_button">CALL</string>
+    <string name="confirm_call_title">Confirm Call — %1$s</string>
+    <string name="confirm_call_message">You are about to open the dialer for the selected department. Proceed?</string>
+    <string name="close">Close</string>
+
+</resources>
