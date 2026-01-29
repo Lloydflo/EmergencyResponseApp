@@ -33,18 +33,22 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.LocalHospital
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FabPosition
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -415,21 +419,50 @@ fun HomeScreen() {
         }
     }
 
-    Scaffold(topBar = { ResponderTopAppBar(status = onlineStatus, imageUri = responderImageUri, drawableRes = responderDrawableRes, responderName = responderName) }) { paddingValues ->
+    Scaffold(
+        topBar = {
+            ResponderTopAppBar(
+                status = onlineStatus,
+                imageUri = responderImageUri,
+                drawableRes = responderDrawableRes,
+                responderName = responderName
+            )
+        },
+        floatingActionButtonPosition = FabPosition.End,
+        floatingActionButton = {
+            Column(
+                modifier = Modifier.padding(end = 12.dp, bottom = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalAlignment = Alignment.End
+            ) {
+                SmallFloatingActionButton(
+                    onClick = { showDepartmentSelection = true },
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Call,
+                        contentDescription = "Call Command"
+                    )
+                }
+
+                SmallFloatingActionButton(
+                    onClick = { handleShareLocationToggle(!isLocationShared) },
+                    containerColor = if (isLocationShared) Color(0xFF2E7D32) else MaterialTheme.colorScheme.primary,
+                    contentColor = Color.White
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.MyLocation,
+                        contentDescription = if (isLocationShared) "Stop Sharing Location" else "Share Location"
+                    )
+                }
+            }
+        }
+    ) { paddingValues ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(paddingValues),
             verticalArrangement = Arrangement.spacedBy(8.dp),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 16.dp)
         ) {
             item { ResponderStatusIndicator(status = responderStatus) }
-
-            item {
-                QuickActionButtons(
-                    isLocationShared = isLocationShared,
-                    onShareLocationToggle = handleShareLocationToggle,
-                    onCallCommand = { showDepartmentSelection = true }
-                )
-            }
 
             item {
                 if (showDepartmentSelection) {
