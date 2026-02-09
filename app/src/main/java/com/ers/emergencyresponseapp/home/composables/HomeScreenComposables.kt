@@ -66,7 +66,7 @@ fun QuickActionButtons(
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        QuickActionButton(icon = Icons.Default.Call, text = "Call Command", onClick = onCallCommand)
+        QuickActionButton(icon = Icons.Default.Call, text = "Call Command", textColor = MaterialTheme.colorScheme.onBackground, onClick = onCallCommand)
 
         // Share Location button now delegates toggle behavior to the parent via onShareLocationToggle
         QuickActionButton(icon = Icons.Default.MyLocation, text = if (isLocationShared) "Stop Sharing" else "Share Location", onClick = {
@@ -76,11 +76,17 @@ fun QuickActionButtons(
 }
 
 @Composable
-private fun QuickActionButton(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String, tint: Color = Color.Unspecified, onClick: () -> Unit) {
+private fun QuickActionButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    text: String,
+    tint: Color = Color.Unspecified,
+    textColor: Color = MaterialTheme.colorScheme.onSurface,
+    onClick: () -> Unit
+) {
     Button(onClick = onClick) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(imageVector = icon, contentDescription = text, tint = tint)
-            Text(text = text, style = MaterialTheme.typography.labelSmall)
+            Text(text = text, style = MaterialTheme.typography.labelSmall, color = textColor)
         }
     }
 }

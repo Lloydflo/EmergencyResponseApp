@@ -38,4 +38,8 @@
     <string name="confirm_call_message">You are about to open the dialer for the selected department. Proceed?</string>
     <string name="close">Close</string>
 
+    <!-- Backend configuration -->
+    <!-- Real devices: set to your PC's LAN IP + API folder name. With XAMPP, place the API in C:\xampp\htdocs\emergency_app so the base becomes http://192.168.1.11/emergency_app -->
+    <string name="backend_host">192.168.1.11/emergency_app</string>
+
 </resources>

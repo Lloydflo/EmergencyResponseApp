@@ -88,7 +88,7 @@ private fun IncidentOverviewCard() {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("STRUCTURAL FIRE", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.weight(1f))
-                Badge(containerColor = Color(0xFFD32F2F)) { Text("High Priority", color = Color.White, modifier = Modifier.padding(horizontal = 6.dp)) }
+                Badge(containerColor = Color(0xFFD32F2F)) { Text("High Priority", color = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.padding(horizontal = 6.dp)) }
             }
             Spacer(Modifier.height(8.dp))
             Text("Location: 451 Main Street, Metro City", style = MaterialTheme.typography.bodyMedium)

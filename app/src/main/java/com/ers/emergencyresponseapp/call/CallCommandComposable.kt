@@ -93,7 +93,7 @@ fun UnifiedCallCommandDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Text(text = stringResource(id = R.string.assigned_incident_prefix, assignedIncidentType ?: "N/A"), fontWeight = FontWeight.Bold)
+            Text(text = stringResource(id = R.string.assigned_incident_prefix, assignedIncidentType ?: "N/A"), fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -107,14 +107,14 @@ fun UnifiedCallCommandDialog(
 
                     if (index < agencies.lastIndex) {
                         Spacer(modifier = Modifier.height(8.dp))
-                        Text(text = stringResource(id = R.string.divider))
+                        Text(text = stringResource(id = R.string.divider), color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f))
                         Spacer(modifier = Modifier.height(8.dp))
                     }
                 }
             }
         },
         confirmButton = {
-            OutlinedButton(onClick = onDismiss) { Text(text = stringResource(id = R.string.close)) }
+            OutlinedButton(onClick = onDismiss) { Text(text = stringResource(id = R.string.close), color = MaterialTheme.colorScheme.onBackground) }
         }
     )
 
@@ -125,11 +125,11 @@ fun UnifiedCallCommandDialog(
             title = { Text(text = stringResource(id = R.string.confirm_call_title, selectedAgency!!.displayTitle), fontWeight = FontWeight.Bold) },
             text = {
                 Column {
-                    Text(text = "${selectedAgency!!.emoji} ${selectedAgency!!.displayTitle} ${stringResource(id = R.string.emergency_suffix)}", fontWeight = FontWeight.SemiBold)
+                    Text(text = "${selectedAgency!!.emoji} ${selectedAgency!!.displayTitle} ${stringResource(id = R.string.emergency_suffix)}", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
                     Spacer(modifier = Modifier.height(6.dp))
-                    Text(text = stringResource(id = R.string.agency_label, selectedAgency!!.agencyName))
+                    Text(text = stringResource(id = R.string.agency_label, selectedAgency!!.agencyName), color = MaterialTheme.colorScheme.onBackground)
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text(text = stringResource(id = R.string.hotline_label, selectedAgency!!.hotlineDisplay))
+                    Text(text = stringResource(id = R.string.hotline_label, selectedAgency!!.hotlineDisplay), color = MaterialTheme.colorScheme.onBackground)
                 }
             },
             confirmButton = {
@@ -151,10 +151,10 @@ fun UnifiedCallCommandDialog(
                         clearSelection()
                         onDismiss()
                     }
-                }) { Text(text = stringResource(id = R.string.call_agency_button, selectedAgency!!.callButtonLabel)) }
+                }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary)) { Text(text = stringResource(id = R.string.call_agency_button, selectedAgency!!.callButtonLabel)) }
             },
             dismissButton = {
-                OutlinedButton(onClick = { clearSelection() }) { Text(text = stringResource(id = R.string.cancel)) }
+                OutlinedButton(onClick = { clearSelection() }) { Text(text = stringResource(id = R.string.cancel), color = MaterialTheme.colorScheme.onBackground) }
             }
         )
     }
@@ -165,15 +165,15 @@ private fun DepartmentCallCard(agency: AgencyInfo, onCallClick: () -> Unit) {
     Card(shape = RoundedCornerShape(8.dp), elevation = CardDefaults.cardElevation(2.dp), modifier = Modifier.fillMaxWidth()) {
         Row(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
             Column {
-                Text(text = "${agency.emoji} ${agency.displayTitle} ${stringResource(id = R.string.emergency_suffix)}", fontWeight = FontWeight.SemiBold)
+                Text(text = "${agency.emoji} ${agency.displayTitle} ${stringResource(id = R.string.emergency_suffix)}", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
                 Spacer(modifier = Modifier.height(6.dp))
-                Text(text = stringResource(id = R.string.agency_label, agency.agencyName), style = MaterialTheme.typography.bodyMedium)
+                Text(text = stringResource(id = R.string.agency_label, agency.agencyName), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
                 Spacer(modifier = Modifier.height(4.dp))
-                Text(text = stringResource(id = R.string.hotline_label, agency.hotlineDisplay), style = MaterialTheme.typography.bodySmall)
+                Text(text = stringResource(id = R.string.hotline_label, agency.hotlineDisplay), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
             }
 
             Button(onClick = onCallClick, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)) {
-                Text(text = stringResource(id = R.string.call_agency_button, agency.callButtonLabel))
+                Text(text = stringResource(id = R.string.call_agency_button, agency.callButtonLabel), color = MaterialTheme.colorScheme.onPrimary)
             }
         }
     }

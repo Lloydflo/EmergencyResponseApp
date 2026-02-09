@@ -37,5 +37,6 @@ data class Incident(
     val location: String,
     val timeReported: Date,
     val status: IncidentStatus,
-    val description: String
+    val description: String,
+    val assignedTo: String? = null
 )
