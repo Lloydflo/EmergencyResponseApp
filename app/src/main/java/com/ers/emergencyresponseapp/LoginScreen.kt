@@ -229,6 +229,24 @@ fun LoginScreen(
                 ) {
                     Text("Send OTP")
                 }
+
+                // TEMPORARY: allow navigation while backend/DB is not working.
+                Spacer(modifier = Modifier.height(10.dp))
+                Button(
+                    onClick = {
+                        val e = email.value.trim().ifBlank { "test@example.com" }
+                        val prefs = context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
+                        prefs.edit()
+                            .putString("user_email", e)
+                            .putBoolean("user_verified", true)
+                            .apply()
+
+                        onLoggedIn(e)
+                    },
+                    modifier = Modifier.fillMaxWidth(0.9f)
+                ) {
+                    Text("Continue (temporary)")
+                }
             }
 
             error.value?.let {

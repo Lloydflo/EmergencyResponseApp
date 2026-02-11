@@ -7,11 +7,16 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.location.Location
 import android.provider.MediaStore
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -54,11 +59,13 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -66,6 +73,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -77,6 +85,7 @@ import com.ers.emergencyresponseapp.home.Incident
 import com.ers.emergencyresponseapp.home.IncidentPriority
 import com.ers.emergencyresponseapp.home.IncidentStatus
 import com.ers.emergencyresponseapp.home.IncidentType
+import com.ers.emergencyresponseapp.analytics.RouteHistoryStore
 import com.ers.emergencyresponseapp.home.composables.DepartmentSelectionDialog
 import com.ers.emergencyresponseapp.home.IncidentStore
 import com.google.android.gms.location.LocationCallback
@@ -96,6 +105,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentHeight
 
 // --- Simple types used for incoming emergency requests (local, UI-only) ---
 private enum class ResponderOnlineStatus { Online, Offline }
@@ -117,6 +128,22 @@ private data class EmergencyRequest(
     val status: String = "Reported"
 )
 
+private fun saveUriToAppStorage(ctx: android.content.Context, uri: Uri): String? {
+    return try {
+        val dir = File(ctx.filesDir, "profile_photos").apply { if (!exists()) mkdirs() }
+        val file = File(dir, "profile_${System.currentTimeMillis()}.jpg")
+        ctx.contentResolver.openInputStream(uri)?.use { input ->
+            FileOutputStream(file).use { output ->
+                input.copyTo(output)
+            }
+        } ?: return null
+        Uri.fromFile(file).toString()
+    } catch (e: Exception) {
+        Log.e("HomeScreen", "Failed to persist profile photo: ${e.message}")
+        null
+    }
+}
+
 // --- Small reusable UI pieces (copied/merged from RespondersScreen, UI-only) ---
 @Composable
 private fun ResponderAvatar(
@@ -132,36 +159,180 @@ private fun ResponderAvatar(
         when {
             drawableRes != null -> {
                 val painter = painterResource(id = drawableRes)
-                Image(painter = painter, contentDescription = contentDescription, modifier = Modifier.fillMaxSize().clip(CircleShape))
+                Image(
+                    painter = painter,
+                    contentDescription = contentDescription,
+                    modifier = Modifier.fillMaxSize().clip(CircleShape),
+                    contentScale = ContentScale.Crop
+                )
             }
             imageUri != null -> {
                 val bitmap = remember(imageUri) {
                     try {
-                        val uri = imageUri.toUri()
-                        context.contentResolver.openInputStream(uri)?.use { stream ->
-                            BitmapFactory.decodeStream(stream)
+                        if (imageUri.startsWith("file://")) {
+                            val path = Uri.parse(imageUri).path
+                            if (path != null) BitmapFactory.decodeFile(path) else null
+                        } else {
+                            val uri = imageUri.toUri()
+                            context.contentResolver.openInputStream(uri)?.use { stream ->
+                                BitmapFactory.decodeStream(stream)
+                            }
                         }
                     } catch (_: Exception) { null }
                 }
                 if (bitmap != null) {
-                    Image(bitmap = bitmap.asImageBitmap(), contentDescription = contentDescription, modifier = Modifier.fillMaxSize().clip(CircleShape))
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = contentDescription,
+                        modifier = Modifier.fillMaxSize().clip(CircleShape),
+                        contentScale = ContentScale.Crop
+                    )
                 } else {
                     Icon(imageVector = Icons.Default.AccountCircle, contentDescription = contentDescription, modifier = Modifier.fillMaxSize())
                 }
             }
             else -> Icon(imageVector = Icons.Default.AccountCircle, contentDescription = contentDescription, modifier = Modifier.fillMaxSize())
+         }
+
+         val dotColor = if (status == ResponderOnlineStatus.Online) Color(0xFF98EE9C) else Color.Gray
+         Box(
+             modifier = Modifier
+                 .size(10.dp)
+                 .align(Alignment.BottomEnd)
+                 .padding(2.dp)
+                 .clip(CircleShape)
+                 .background(dotColor)
+                 .border(width = 2.dp, color = MaterialTheme.colorScheme.surface, shape = CircleShape)
+         )
+     }
+}
+
+// --- Helper functions for HomeScreen (must be defined before use) ---
+private fun MutableList<EmergencyRequest>.evaluateAndAssignIfAvailable(
+    responderAvailable: () -> Boolean,
+    accept: (EmergencyRequest) -> Unit
+) {
+    if (!responderAvailable()) return
+    val order = listOf(EmergencyPriority.High, EmergencyPriority.Medium, EmergencyPriority.Low)
+    for (p in order) {
+        val candidate = this.firstOrNull { it.priority == p }
+        if (candidate != null) {
+            accept(candidate)
+            return
+        }
+    }
+}
+
+private fun acceptIncident(
+    incoming: MutableList<EmergencyRequest>,
+    incident: EmergencyRequest,
+    onAssigned: (EmergencyRequest) -> Unit
+) {
+    incoming.removeAll { it.id == incident.id }
+    val assigned = incident.copy(status = "Assigned")
+    onAssigned(assigned)
+}
+
+private fun demoFeedIncomingRequests(list: MutableList<EmergencyRequest>) {
+    val types = listOf("Medical", "Fire", "Crime", "Disaster")
+    val priorities = EmergencyPriority.entries
+    val random = java.util.Random()
+
+    fun randomInt(range: IntRange): Int = range.random()
+
+    while (list.size < 6) {
+        val id = list.size + 1
+        val type = types[random.nextInt(types.size)]
+        val priority = priorities[random.nextInt(priorities.size)]
+        val distance = "${randomInt(1..20)} km"
+        val timestamp = "${randomInt(1..12)}:${randomInt(0..59).toString().padStart(2, '0')} ${if (random.nextBoolean()) "AM" else "PM"}"
+        val lat = random.nextDouble() * 180.0 - 90.0
+        val lng = random.nextDouble() * 360.0 - 180.0
+        val address = "Random ${type} ${id} St"
+
+        list.add(EmergencyRequest(id, type, distance, timestamp, priority, lat, lng, address, "Description for ${type.lowercase()} incident #$id"))
+    }
+}
+
+private fun openMapPin(context: android.content.Context, lat: Double?, lng: Double?, address: String?) {
+    try {
+        val primaryUri = when {
+            !address.isNullOrBlank() -> ("geo:0,0?q=${Uri.encode(address)}").toUri()
+            lat != null && lng != null -> ("geo:$lat,$lng?q=$lat,$lng(${Uri.encode(address ?: "Incident")})").toUri()
+            else -> null
         }
 
-        val dotColor = if (status == ResponderOnlineStatus.Online) Color(0xFF98EE9C) else Color.Gray
-        Box(
-            modifier = Modifier
-                .size(10.dp)
-                .align(Alignment.BottomEnd)
-                .padding(2.dp)
-                .clip(CircleShape)
-                .background(dotColor)
-                .border(width = 2.dp, color = MaterialTheme.colorScheme.surface, shape = CircleShape)
-        )
+        if (primaryUri != null) {
+            val mapIntent = Intent(Intent.ACTION_VIEW, primaryUri).apply { setPackage("com.google.android.apps.maps") }
+            val resolveInfo = context.packageManager.resolveActivity(mapIntent, 0)
+            if (resolveInfo != null) { context.startActivity(mapIntent); return }
+
+            val fallbackIntent = Intent(Intent.ACTION_VIEW, primaryUri)
+            val fallbackResolve = context.packageManager.resolveActivity(fallbackIntent, 0)
+            if (fallbackResolve != null) { context.startActivity(fallbackIntent); return }
+        }
+
+        Toast.makeText(context, "No map application available to view location", Toast.LENGTH_SHORT).show()
+    } catch (e: Exception) {
+        Log.d("HomeScreen", "Error opening map pin: ${e.message}")
+        Toast.makeText(context, "Unable to open map", Toast.LENGTH_SHORT).show()
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun EmergencyRequestCard(request: EmergencyRequest, showBackupBadge: Boolean = false) {
+    Card(modifier = Modifier.fillMaxWidth(), elevation = CardDefaults.cardElevation(4.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.LocalHospital, contentDescription = request.type, tint = MaterialTheme.colorScheme.primary)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(text = request.type, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+                Spacer(modifier = Modifier.weight(1f))
+                if (showBackupBadge) {
+                    Box(modifier = Modifier.background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.08f), RoundedCornerShape(8.dp)).padding(horizontal = 8.dp, vertical = 4.dp)) {
+                        Text(text = "Backup", color = MaterialTheme.colorScheme.secondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
+                Badge(containerColor = request.priority.color) { Text(request.priority.name, color = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp), fontSize = 12.sp) }
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(text = "${request.distance} • ${request.timestamp}", color = MaterialTheme.colorScheme.onSurface)
+            if (showBackupBadge) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = request.address ?: "Address unknown",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                val ctx = LocalContext.current
+                OutlinedButton(onClick = {
+                    openMapPin(ctx, request.latitude, request.longitude, request.address)
+                }, modifier = Modifier.height(36.dp)) { Text("View") }
+
+                if (!showBackupBadge) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    OutlinedButton(onClick = { /* accept */ }, modifier = Modifier.height(36.dp)) { Text("Accept") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmergencyRequestList(requests: List<EmergencyRequest>, title: String = "Incoming Emergency Requests", showBackupBadge: Boolean = false) {
+    Column(Modifier.padding(top = 8.dp)) {
+        Text(text = title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = 16.dp))
+        Spacer(Modifier.height(8.dp))
+        LazyColumn(modifier = Modifier.padding(horizontal = 16.dp).heightIn(max = 300.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            items(requests) { req -> EmergencyRequestCard(req, showBackupBadge = showBackupBadge) }
+        }
     }
 }
 
@@ -176,22 +347,58 @@ fun HomeScreen(responderRole: String? = null) {
     val storedDepartment = storedPrefs.getString("department", null)
     val effectiveRole = storedDepartment?.lowercase() ?: responderRole?.takeIf { it.isNotBlank() }
 
-    // Basic responder identity & avatar
-    val responderImageUri by remember { mutableStateOf<String?>(null) }
-    val responderDrawableRes by remember { mutableStateOf<Int?>(null) }
-    // Persist responder name in SharedPreferences so it survives app restarts
+    // Persist responder/account fields in SharedPreferences so they survive app restarts
     val prefs = context.getSharedPreferences("ers_prefs", android.content.Context.MODE_PRIVATE)
-    var responderName by remember { mutableStateOf(prefs.getString("responder_name", "Name") ?: "Name") }
-    // Edit name dialog state
-    var showEditNameDialog by remember { mutableStateOf(false) }
-    var editNameInput by remember { mutableStateOf("") }
+
+    // Account settings state
+    var accountFullName by remember { mutableStateOf(prefs.getString("account_full_name", "") ?: "") }
+    var accountUsername by remember { mutableStateOf(prefs.getString("account_username", "") ?: "") }
+    var accountEmail by remember { mutableStateOf(prefs.getString("account_email", "") ?: "") }
+    var accountPhotoUri by remember { mutableStateOf(prefs.getString("account_photo", null)) }
+    var isDarkMode by remember { mutableStateOf(prefs.getBoolean("dark_mode", false)) }
+
+    val pickProfilePhotoLauncher = rememberLauncherForActivityResult(contract = ActivityResultContracts.GetContent()) { uri: Uri? ->
+        if (uri != null) {
+            val storedUri = saveUriToAppStorage(context, uri) ?: uri.toString()
+            accountPhotoUri = storedUri
+            // Persist immediately so the avatar survives app background/restore.
+            try { prefs.edit().putString("account_photo", accountPhotoUri).apply() } catch (_: Exception) { /* ignore */ }
+        }
+    }
+
+    // Basic responder identity & avatar
+    val responderImageUri = accountPhotoUri
+    val responderDrawableRes by remember { mutableStateOf<Int?>(null) }
+    // Show the account username (from settings) as the displayed responder name.
+    var responderName by remember { mutableStateOf(prefs.getString("account_username", prefs.getString("responder_name", "Name") ?: "Name") ?: "Name") }
+
+    // Keep responderName in sync if the account username is changed in settings during runtime
+    LaunchedEffect(accountUsername) {
+        if (!accountUsername.isNullOrBlank()) {
+            responderName = accountUsername
+        }
+    }
 
     // Online/offline and availability
     var onlineStatus by remember { mutableStateOf(ResponderOnlineStatus.Online) }
     var responderAvailable by remember { mutableStateOf(true) }
     // Incoming requests and assigned incident
     val incomingRequests = remember { mutableStateListOf<EmergencyRequest>() }
-    var assignedIncident by remember { mutableStateOf<EmergencyRequest?>(null) }
+
+    // New incident notification state
+    var showNewIncidentNotification by remember { mutableStateOf(false) }
+    var newIncidentMessage by remember { mutableStateOf("") }
+    var showAssignedAfterNotification by remember { mutableStateOf(true) }
+    var lastNotifiedIncidentId by remember {
+        mutableStateOf(prefs.getString("last_notified_incident_id", null))
+    }
+    var lastAssignedIncidentId by remember {
+        mutableStateOf(prefs.getString("last_assigned_incident_id", null))
+    }
+    var navDestinationIncidentId by remember { mutableStateOf<String?>(null) }
+    var navDestinationLat by remember { mutableStateOf<Double?>(null) }
+    var navDestinationLng by remember { mutableStateOf<Double?>(null) }
+    val onSceneEnabledMap = remember { mutableStateMapOf<String, Boolean>() }
 
     // Derive the visible incoming requests based on effectiveRole (nav role or stored department)
     val visibleIncomingRequests = remember(incomingRequests, effectiveRole) {
@@ -201,6 +408,8 @@ fun HomeScreen(responderRole: String? = null) {
 
     // Dialog state for call confirmation
     var showDepartmentSelection by remember { mutableStateOf(false) }
+    var showSettingsDialog by remember { mutableStateOf(false) }
+
 
     // Mark-complete / proof form state (UI only)
     var showMarkCompleteDialog by remember { mutableStateOf(false) }
@@ -272,108 +481,50 @@ fun HomeScreen(responderRole: String? = null) {
 
     // Periodically refresh active incidents so items older than 1 hour are removed automatically
     LaunchedEffect(Unit) {
+        // Initial load so Assigned/Active/Incoming lists have data on first render
+        loadIncidents()
+        fun persistAssigned(incId: String?) {
+            lastAssignedIncidentId = incId
+            try {
+                val editor = prefs.edit()
+                if (incId == null) editor.remove("last_assigned_incident_id")
+                else editor.putString("last_assigned_incident_id", incId)
+                editor.apply()
+            } catch (_: Exception) { /* ignore */ }
+        }
+
+        val savedAssigned = lastAssignedIncidentId?.let { id ->
+            IncidentStore.incidents.firstOrNull { it.id == id && it.status != IncidentStatus.RESOLVED }
+        }
+        if (savedAssigned != null) {
+            if (savedAssigned.assignedTo != responderName) {
+                IncidentStore.assignIncident(savedAssigned.id, responderName)
+                incidentsList = IncidentStore.incidents.toList()
+            }
+        } else if (incidentsList.none { it.assignedTo == responderName && it.status != IncidentStatus.RESOLVED }) {
+            incidentsList.firstOrNull { it.status != IncidentStatus.RESOLVED }?.let { inc ->
+                IncidentStore.assignIncident(inc.id, responderName)
+                incidentsList = IncidentStore.incidents.toList()
+                persistAssigned(inc.id)
+            }
+        }
+        if (incomingRequests.isEmpty()) {
+            demoFeedIncomingRequests(incomingRequests)
+        }
+        refreshActiveIncidents()
+
         while (true) {
             refreshActiveIncidents()
             delay(60_000L) // check every minute
         }
     }
 
-    // Nav to incident using Google Maps (UI-only, safe)
-    fun navigateToLocation(lat: Double?, lng: Double?, address: String?) {
-        // Prefer coordinates if available (more accurate), otherwise fall back to address query
-        try {
-            if (lat != null && lng != null) {
-                // Use Google Maps navigation to coordinates
-                val gmmIntentUri = ("google.navigation:q=$lat,$lng").toUri()
-                val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri).apply { setPackage("com.google.android.apps.maps") }
-                val resolveInfo = context.packageManager.resolveActivity(mapIntent, 0)
-                if (resolveInfo != null) {
-                    context.startActivity(mapIntent)
-                    return
-                } else {
-                    // Fallback to geo URI with label
-                    val geoUri = ("geo:$lat,$lng?q=$lat,$lng(${Uri.encode(address ?: "Incident")})").toUri()
-                    val geoIntent = Intent(Intent.ACTION_VIEW, geoUri)
-                    val fallbackResolve = context.packageManager.resolveActivity(geoIntent, 0)
-                    if (fallbackResolve != null) { context.startActivity(geoIntent); return }
-                }
-            }
-
-            // If coordinates not available or failed, fall back to address-based navigation
-            if (!address.isNullOrBlank()) {
-                val gmmIntentUri = ("google.navigation:q=${Uri.encode(address)}").toUri()
-                val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri).apply { setPackage("com.google.android.apps.maps") }
-                val resolveInfo = context.packageManager.resolveActivity(mapIntent, 0)
-                if (resolveInfo != null) { context.startActivity(mapIntent); return } else {
-                    val geoIntent = Intent(Intent.ACTION_VIEW, ("geo:0,0?q=${Uri.encode(address)}").toUri())
-                    val fallbackResolve = context.packageManager.resolveActivity(geoIntent, 0)
-                    if (fallbackResolve != null) { context.startActivity(geoIntent); return }
-                }
-            }
-
-            // Nothing available
-            Toast.makeText(context, "No location available for navigation", Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            Toast.makeText(context, "Unable to open navigation", Toast.LENGTH_SHORT).show()
-            Log.d("HomeScreen", "Error launching navigation: ${e.message}")
-        }
-    }
-
-    // Report that responder is on scene for an Incident (updates local UI state and notifies admin placeholder)
-    fun sendOnSceneReport(incident: Incident) {
-        try {
-            // update the incident status to ON_SCENE if not already
-            val updated = incidentsList.map { if (it.id == incident.id) it.copy(status = IncidentStatus.ON_SCENE) else it }
-            incidentsList = updated
-            refreshActiveIncidents()
-            Toast.makeText(context, "On-scene reported to command", Toast.LENGTH_SHORT).show()
-            Log.i("HomeScreen", "On-scene report for incident ${incident.id}")
-            // In a full implementation you would POST to backend here
-        } catch (e: Exception) {
-            Log.e("HomeScreen", "Failed to report on-scene: ${e.message}")
-            Toast.makeText(context, "Failed to send on-scene report", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    // Mark an incident as done (RESOLVED) with notes and proof URI. This updates local UI and simulates sending proof to admin.
-    fun markIncidentDone(incident: Incident, notes: String, proofUri: String?) {
-        try {
-            // Update the shared store so other screens (Reviews) see this incident as RESOLVED
-            val prefsName = prefs.getString("responder_name", "Name")
-            IncidentStore.markResolved(incident.id, prefsName)
-            // keep local derived lists in sync
-            incidentsList = IncidentStore.incidents.toList()
-            refreshActiveIncidents()
-            Toast.makeText(context, "Incident marked complete and proof sent", Toast.LENGTH_SHORT).show()
-            Log.i("HomeScreen", "Marked incident ${incident.id} resolved. Notes: ${notes}. Proof: ${proofUri}")
-            // Placeholder: upload proofUri + notes to server if backend available
-        } catch (e: Exception) {
-            Log.e("HomeScreen", "Failed to mark incident done: ${e.message}")
-            Toast.makeText(context, "Failed to mark complete", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    // Assignment handlers (UI-only placeholders)
-    val acceptHandler: (EmergencyRequest) -> Unit = { req -> acceptIncident(incomingRequests, req) { assigned -> assignedIncident = assigned; responderAvailable = false; onlineStatus = ResponderOnlineStatus.Offline; Log.i("Assignment", "Assigned incident ${assigned.id}") } }
-
-    // Demo feeder and auto-assignment
-    LaunchedEffect(Unit) { demoFeedIncomingRequests(incomingRequests) }
-    LaunchedEffect(incomingRequests.size, effectiveRole) {
-        val snapshot = incomingRequests.toMutableList()
-        // If an effective role is provided, only consider incoming requests matching that role/type
-        val consider = if (effectiveRole.isNullOrBlank()) snapshot else snapshot.filter { it.type.equals(effectiveRole, ignoreCase = true) }.toMutableList()
-        consider.evaluateAndAssignIfAvailable({ responderAvailable }, acceptHandler)
-    }
-
-    // Load incidents on compose
-    LaunchedEffect(Unit) { loadIncidents() }
-    LaunchedEffect(incidentsList) { calculateCounts(); refreshActiveIncidents() }
-
-    // Location sharing
+    // Location tracking state (for sharing + On Scene distance checks)
     var isLocationShared by remember { mutableStateOf(false) }
     var currentLatitude by remember { mutableStateOf<Double?>(null) }
     var currentLongitude by remember { mutableStateOf<Double?>(null) }
     val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
+
     val locationCallback = remember {
         object : LocationCallback() {
             override fun onLocationResult(locationResult: LocationResult) {
@@ -385,23 +536,192 @@ fun HomeScreen(responderRole: String? = null) {
         }
     }
 
+    val onSceneLocationCallback = remember {
+        object : LocationCallback() {
+            override fun onLocationResult(locationResult: LocationResult) {
+                val destinationLat = navDestinationLat
+                val destinationLng = navDestinationLng
+                val destinationId = navDestinationIncidentId
+                val current = locationResult.lastLocation
+
+                if (destinationLat == null || destinationLng == null || destinationId.isNullOrBlank() || current == null) {
+                    return
+                }
+
+                val results = FloatArray(1)
+                Location.distanceBetween(
+                    current.latitude,
+                    current.longitude,
+                    destinationLat,
+                    destinationLng,
+                    results
+                )
+
+                onSceneEnabledMap[destinationId] = results[0] <= 20f
+            }
+        }
+    }
+
     @Suppress("DEPRECATION")
     fun startLocationUpdates() {
-        // Ensure location permission is granted before requesting updates to avoid SecurityException
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            // Permission not granted; request it via the launcher (caller handles launching)
             return
         }
 
-        val locationRequest = LocationRequest.Builder(10000) // 10 seconds
+        val request = LocationRequest.Builder(10000)
             .setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY)
             .build()
 
         try {
-            fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback, null)
+            fusedLocationClient.requestLocationUpdates(request, locationCallback, null)
         } catch (se: SecurityException) {
-            // Should not happen because we checked permission, but guard anyway
             Log.d("HomeScreen", "Location updates request failed: ${se.message}")
+        }
+    }
+
+    // Nav to incident using Google Maps (UI-only, safe)
+    fun navigateToLocation(lat: Double?, lng: Double?, address: String?) {
+        // Prefer coordinates if available (more accurate), otherwise fall back to address query
+        try {
+            // Persist the last navigation target so it can be resumed later.
+            val lastNavPrefs = context.getSharedPreferences("nav_prefs", android.content.Context.MODE_PRIVATE)
+            if (lat != null && lng != null) {
+                lastNavPrefs.edit()
+                    .putString("last_nav_lat", lat.toString())
+                    .putString("last_nav_lng", lng.toString())
+                    .putString("last_nav_addr", address)
+                    .apply()
+            } else if (!address.isNullOrBlank()) {
+                lastNavPrefs.edit()
+                    .putString("last_nav_lat", "")
+                    .putString("last_nav_lng", "")
+                    .putString("last_nav_addr", address)
+                    .apply()
+            }
+
+            val savedLat = lastNavPrefs.getString("last_nav_lat", "")
+            val savedLng = lastNavPrefs.getString("last_nav_lng", "")
+            val savedAddr = lastNavPrefs.getString("last_nav_addr", null)
+
+            val resolvedLat = lat ?: savedLat?.takeIf { it.isNotBlank() }?.toDoubleOrNull()
+            val resolvedLng = lng ?: savedLng?.takeIf { it.isNotBlank() }?.toDoubleOrNull()
+            val resolvedAddr = address ?: savedAddr
+
+            if (resolvedLat != null && resolvedLng != null) {
+                 // Use Google Maps navigation to coordinates
+                val gmmIntentUri = ("google.navigation:q=$resolvedLat,$resolvedLng").toUri()
+                 val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri).apply { setPackage("com.google.android.apps.maps") }
+                 val resolveInfo = context.packageManager.resolveActivity(mapIntent, 0)
+                 if (resolveInfo != null) {
+                     context.startActivity(mapIntent)
+                     return
+                 } else {
+                     // Fallback to geo URI with label
+                     val geoUri = ("geo:$resolvedLat,$resolvedLng?q=$resolvedLat,$resolvedLng(${Uri.encode(resolvedAddr ?: "Incident")})").toUri()
+                     val geoIntent = Intent(Intent.ACTION_VIEW, geoUri)
+                     val fallbackResolve = context.packageManager.resolveActivity(geoIntent, 0)
+                     if (fallbackResolve != null) { context.startActivity(geoIntent); return }
+                 }
+             }
+
+             // If coordinates not available or failed, fall back to address-based navigation
+            if (!resolvedAddr.isNullOrBlank()) {
+                val gmmIntentUri = ("google.navigation:q=${Uri.encode(resolvedAddr)}").toUri()
+                 val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri).apply { setPackage("com.google.android.apps.maps") }
+                 val resolveInfo = context.packageManager.resolveActivity(mapIntent, 0)
+                 if (resolveInfo != null) { context.startActivity(mapIntent); return } else {
+                    val geoIntent = Intent(Intent.ACTION_VIEW, ("geo:0,0?q=${Uri.encode(resolvedAddr)}").toUri())
+                     val fallbackResolve = context.packageManager.resolveActivity(geoIntent, 0)
+                     if (fallbackResolve != null) { context.startActivity(geoIntent); return }
+                 }
+             }
+
+             // Nothing available
+             Toast.makeText(context, "No location available for navigation", Toast.LENGTH_SHORT).show()
+         } catch (e: Exception) {
+             Toast.makeText(context, "Unable to open navigation", Toast.LENGTH_SHORT).show()
+             Log.d("HomeScreen", "Error launching navigation: ${e.message}")
+         }
+     }
+
+    // Report that responder is on scene for an Incident (updates local UI state and notifies admin placeholder)
+    fun sendOnSceneReport(incident: Incident) {
+        try {
+            // update the incident status to ON_SCENE if not already
+            val updated = incidentsList.map { if (it.id == incident.id) it.copy(status = IncidentStatus.ON_SCENE) else it }
+            incidentsList = updated
+            refreshActiveIncidents()
+            RouteHistoryStore.completeRoute(context, incident.id)
+            fusedLocationClient.removeLocationUpdates(onSceneLocationCallback)
+            Toast.makeText(context, "On-scene reported to command", Toast.LENGTH_SHORT).show()
+            Log.i("HomeScreen", "On-scene report for incident ${incident.id}")
+            // In a full implementation you would POST to backend here
+        } catch (e: Exception) {
+            Log.e("HomeScreen", "Failed to report on-scene: ${e.message}")
+            Toast.makeText(context, "Failed to send on-scene report", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // Mark an incident as done (RESOLVED) with notes and proof URI.
+    fun markIncidentDone(incident: Incident, notes: String, proofUri: String?) {
+        try {
+            // Prefer the account username (settings) as the author of actions; fall back to responderName variable.
+            val prefsName = prefs.getString("account_username", responderName)
+             IncidentStore.markResolved(incident.id, prefsName)
+             incidentsList = IncidentStore.incidents.toList()
+             refreshActiveIncidents()
+             if (lastNotifiedIncidentId == incident.id) {
+                 lastNotifiedIncidentId = null
+                 try { prefs.edit().remove("last_notified_incident_id").apply() } catch (_: Exception) { /* ignore */ }
+             }
+             if (lastAssignedIncidentId == incident.id) {
+                 lastAssignedIncidentId = null
+                 try { prefs.edit().remove("last_assigned_incident_id").apply() } catch (_: Exception) { /* ignore */ }
+             }
+            // Auto-assign the next available incident so a new assignment triggers a notification.
+            val desiredType: IncidentType? = effectiveRole?.let { roleStr ->
+                when (roleStr.trim().lowercase()) {
+                    "fire" -> IncidentType.FIRE
+                    "medical" -> IncidentType.MEDICAL
+                    "crime" -> IncidentType.CRIME
+                    else -> null
+                }
+            }
+            val nextIncident = IncidentStore.incidents.firstOrNull { inc ->
+                val matchesType = desiredType?.let { inc.type == it } ?: true
+                val unassigned = inc.assignedTo.isNullOrBlank()
+                val notResolved = inc.status != IncidentStatus.RESOLVED
+                matchesType && unassigned && notResolved
+            }
+            if (nextIncident != null) {
+                IncidentStore.assignIncident(nextIncident.id, responderName)
+                incidentsList = IncidentStore.incidents.toList()
+                refreshActiveIncidents()
+                lastAssignedIncidentId = nextIncident.id
+                try { prefs.edit().putString("last_assigned_incident_id", nextIncident.id).apply() } catch (_: Exception) { /* ignore */ }
+            }
+            Toast.makeText(context, "Incident marked complete and proof sent", Toast.LENGTH_SHORT).show()
+            Log.i("HomeScreen", "Marked incident ${incident.id} resolved. Notes: ${notes}. Proof: ${proofUri}")
+        } catch (e: Exception) {
+            Log.e("HomeScreen", "Failed to mark incident done: ${e.message}")
+            Toast.makeText(context, "Failed to mark complete", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    fun startOnSceneTracking() {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            return
+        }
+
+        val request = LocationRequest.Builder(5000)
+            .setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY)
+            .build()
+
+        try {
+            fusedLocationClient.requestLocationUpdates(request, onSceneLocationCallback, null)
+        } catch (se: SecurityException) {
+            Log.d("HomeScreen", "On-scene tracking request failed: ${se.message}")
         }
     }
 
@@ -411,12 +731,21 @@ fun HomeScreen(responderRole: String? = null) {
         currentLongitude = null
     }
 
+
     val locationPermissionLauncher = rememberLauncherForActivityResult(contract = ActivityResultContracts.RequestPermission(), onResult = { isGranted: Boolean ->
         if (isGranted) {
             isLocationShared = true
             startLocationUpdates()
         } else {
             isLocationShared = false
+            Toast.makeText(context, "Location permission denied", Toast.LENGTH_SHORT).show()
+        }
+    })
+
+    val onScenePermissionLauncher = rememberLauncherForActivityResult(contract = ActivityResultContracts.RequestPermission(), onResult = { isGranted: Boolean ->
+        if (isGranted) {
+            startOnSceneTracking()
+        } else {
             Toast.makeText(context, "Location permission denied", Toast.LENGTH_SHORT).show()
         }
     })
@@ -466,16 +795,84 @@ fun HomeScreen(responderRole: String? = null) {
             }
         }
     ) { paddingValues ->
-        // UI-only state for dialogs opened by the navigation buttons (Incoming / Settings)
-        var showIncomingDialog by remember { mutableStateOf(false) }
+        Box(modifier = Modifier.fillMaxSize()) {
+            // UI-only state for dialogs opened by the navigation buttons (Incoming / Settings)
+            var showIncomingDialog by remember { mutableStateOf(false) }
 
-        // Compute counts for the statistic cards using existing incident lists (active incidents)
-        val fireCount = activeIncidents.count { it.type == IncidentType.FIRE }
-        val medicalCount = activeIncidents.count { it.type == IncidentType.MEDICAL }
-        val crimeCount = activeIncidents.count { it.type == IncidentType.CRIME }
+            // Compute counts for the statistic cards using existing incident lists (active incidents)
+            val fireCount = activeIncidents.count { it.type == IncidentType.FIRE }
+            val medicalCount = activeIncidents.count { it.type == IncidentType.MEDICAL }
+            val crimeCount = activeIncidents.count { it.type == IncidentType.CRIME }
 
-        // Layout: Top row (Hello + Name left, Avatar right) -> Stat cards -> Assigned incidents (filtered by responderRole) -> Map/Incoming buttons -> Settings/More
-        Column(
+            // Resolve assigned incidents once per composition, and show only one.
+            val assignedCandidateForRole = run {
+                val desiredType: IncidentType? = effectiveRole?.let { roleStr ->
+                    when (roleStr.trim().lowercase()) {
+                        "fire" -> IncidentType.FIRE
+                        "medical" -> IncidentType.MEDICAL
+                        "crime" -> IncidentType.CRIME
+                        else -> null
+                    }
+                }
+
+                val source = IncidentStore.incidents
+                val savedAssigned = lastAssignedIncidentId?.let { id ->
+                    source.firstOrNull { it.id == id && it.status != IncidentStatus.RESOLVED }
+                }
+                if (savedAssigned != null) {
+                    val matchesType = desiredType?.let { savedAssigned.type == it } ?: true
+                    if (matchesType) return@run listOf(savedAssigned)
+                }
+                 val filtered = source.filter { inc ->
+                     val matchesType = desiredType?.let { inc.type == it } ?: true
+                     val notResolved = inc.status != IncidentStatus.RESOLVED
+                     val assignedToMe = inc.assignedTo == responderName
+                     matchesType && notResolved && assignedToMe
+                 }
+
+                fun prioRank(p: IncidentPriority) = when (p) {
+                    IncidentPriority.HIGH -> 3
+                    IncidentPriority.MEDIUM -> 2
+                    IncidentPriority.LOW -> 1
+                }
+
+                filtered.sortedWith(compareByDescending<Incident> { prioRank(it.priority) }
+                    .thenByDescending { it.timeReported.time })
+                    .take(1)
+            }
+
+            val assignedListForRole = if (showAssignedAfterNotification) {
+                assignedCandidateForRole
+            } else {
+                emptyList()
+            }
+
+            // Ensure On Scene starts disabled for any newly displayed assignment.
+            assignedListForRole.firstOrNull()?.id?.let { id ->
+                if (!onSceneEnabledMap.containsKey(id)) {
+                    onSceneEnabledMap[id] = false
+                }
+            }
+
+            // Notify before showing the newly assigned incident.
+            LaunchedEffect(assignedCandidateForRole.firstOrNull()?.id) {
+                val inc = assignedCandidateForRole.firstOrNull() ?: return@LaunchedEffect
+                if (lastNotifiedIncidentId == inc.id) return@LaunchedEffect
+
+                lastNotifiedIncidentId = inc.id
+                try { prefs.edit().putString("last_notified_incident_id", inc.id).apply() } catch (_: Exception) { /* ignore */ }
+                val loc = inc.location.ifBlank { "Unknown location" }
+                newIncidentMessage = "New ${inc.type.displayName} incident assigned: $loc"
+                showAssignedAfterNotification = false
+                showNewIncidentNotification = true
+                // Auto-dismiss after 3 seconds, then allow the incident to appear.
+                delay(3000L)
+                showNewIncidentNotification = false
+                showAssignedAfterNotification = true
+            }
+
+            // Layout: Top row (Hello + Name left, Avatar right) -> Stat cards -> Assigned incidents -> Map/Incoming buttons -> Settings/More
+            Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
@@ -500,13 +897,10 @@ fun HomeScreen(responderRole: String? = null) {
                             Spacer(modifier = Modifier.height(6.dp))
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 // Make the name wrap its content and add a small end padding so the edit icon sits closer
-                                Text(text = responderName.ifBlank { "Responder" }, color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.Bold, fontSize = 22.sp, modifier = Modifier.padding(end = 6.dp))
-                                // Slightly reduce the IconButton size to tighten spacing while keeping a usable touch target
-                                IconButton(onClick = { editNameInput = responderName; showEditNameDialog = true }, modifier = Modifier.size(36.dp)) {
-                                    Icon(imageVector = Icons.Default.Edit, contentDescription = "Edit name", tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(18.dp))
-                                }
-                            }
-                        }
+                                Text(text = responderName.ifBlank { "Responder" }, color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.Bold, fontSize = 22.sp)
+
+                             }
+                         }
 
                         // Circular profile portrait with themed background ring
                         Box(modifier = Modifier.size(64.dp)) {
@@ -556,44 +950,6 @@ fun HomeScreen(responderRole: String? = null) {
             Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(text = "Assigned Incidents", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
 
-                // Pick up to two assigned incidents, restricting them to the responder's department and the current responder.
-                // Compute directly from IncidentStore.incidents (no 'remember' wrapper) so it always reflects updates when navigating.
-                val assignedListForRole = run {
-                    // Map role string to IncidentType if possible
-                    val desiredType: IncidentType? = effectiveRole?.let { roleStr ->
-                        when (roleStr.trim().lowercase()) {
-                            "fire" -> IncidentType.FIRE
-                            "medical" -> IncidentType.MEDICAL
-                            "crime" -> IncidentType.CRIME
-                            else -> null
-                        }
-                    }
-
-                    // Read directly from the shared store so changes are observed by Compose
-                    val source = IncidentStore.incidents
-
-                    // If we don't have a department (desiredType == null) return empty - do not show other departments
-                    if (desiredType == null) return@run emptyList<Incident>()
-
-                    // Filter strictly to desired type and to non-resolved incidents assigned to this responder (or unassigned)
-                    val filtered = source.filter { inc ->
-                        val matchesType = inc.type == desiredType
-                        val notResolved = inc.status != IncidentStatus.RESOLVED
-                        val assignedToMeOrUnassigned = inc.assignedTo == null || inc.assignedTo == responderName
-                        matchesType && notResolved && assignedToMeOrUnassigned
-                    }
-
-                    // Map priority to rank for sorting (higher value = higher priority)
-                    fun prioRank(p: IncidentPriority) = when (p) {
-                        IncidentPriority.HIGH -> 3
-                        IncidentPriority.MEDIUM -> 2
-                        IncidentPriority.LOW -> 1
-                    }
-
-                    filtered.sortedWith(compareByDescending<Incident> { prioRank(it.priority) }
-                        .thenByDescending { it.timeReported.time })
-                        .take(2)
-                }
 
                 if (assignedListForRole.isEmpty()) {
                     Card(modifier = Modifier.fillMaxWidth(), elevation = CardDefaults.cardElevation(2.dp), shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
@@ -700,7 +1056,35 @@ fun HomeScreen(responderRole: String? = null) {
                                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                         // Navigate icon-only button
                                         OutlinedButton(
-                                            onClick = { navigateToLocation(null, null, inc.location) },
+                                            onClick = {
+                                                val navPrefs = context.getSharedPreferences("nav_prefs", android.content.Context.MODE_PRIVATE)
+                                                navPrefs.edit().putString("last_nav_incident_id", inc.id).apply()
+                                                onSceneEnabledMap[inc.id] = false
+                                                navDestinationIncidentId = inc.id
+                                                navDestinationLat = inc.latitude
+                                                navDestinationLng = inc.longitude
+
+                                                if (currentLatitude != null && currentLongitude != null && inc.latitude != null && inc.longitude != null) {
+                                                    RouteHistoryStore.startRoute(
+                                                        context = context,
+                                                        incidentId = inc.id,
+                                                        startLat = currentLatitude ?: 0.0,
+                                                        startLng = currentLongitude ?: 0.0,
+                                                        destLat = inc.latitude,
+                                                        destLng = inc.longitude
+                                                    )
+                                                }
+
+                                                if (navDestinationLat != null && navDestinationLng != null) {
+                                                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+                                                        startOnSceneTracking()
+                                                    } else {
+                                                        onScenePermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                                                    }
+                                                }
+
+                                                navigateToLocation(inc.latitude, inc.longitude, inc.location)
+                                            },
                                             modifier = Modifier.size(40.dp).combinedClickable(onClick = {}, onLongClick = {
                                                 showNavLabel.value = true
                                                 scope.launch { delay(1200); showNavLabel.value = false }
@@ -715,6 +1099,7 @@ fun HomeScreen(responderRole: String? = null) {
                                         // On Scene icon-only button
                                         OutlinedButton(
                                             onClick = { sendOnSceneReport(inc) },
+                                            enabled = onSceneEnabledMap[inc.id] == true,
                                             modifier = Modifier.size(40.dp).combinedClickable(onClick = {}, onLongClick = {
                                                 showOnSceneLabel.value = true
                                                 scope.launch { delay(1200); showOnSceneLabel.value = false }
@@ -857,7 +1242,7 @@ fun HomeScreen(responderRole: String? = null) {
             // Primary action buttons: Incoming Incidents and Settings
             Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedButton(onClick = { showIncomingDialog = true }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp)) { Text("Incoming Incidents") }
-                OutlinedButton(onClick = { showDepartmentSelection = true }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp)) { Text("Settings") }
+                OutlinedButton(onClick = { showSettingsDialog = true }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp)) { Text("Settings") }
             }
 
             // Incoming incidents dialog (reuses EmergencyRequestList composable)
@@ -885,16 +1270,27 @@ fun HomeScreen(responderRole: String? = null) {
 
             // Mark Complete dialog with proof (notes + image). This enforces adding proof before submission.
             if (showMarkCompleteDialog && markTargetIncidentInc != null) {
-                AlertDialog(
-                    onDismissRequest = { showMarkCompleteDialog = false; markTargetIncidentInc = null },
-                    title = { Text(text = "Mark Incident Complete", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground) },
-                    text = {
-                        Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text(text = "Provide a short note and take a photo as proof that the incident has been completed.", color = MaterialTheme.colorScheme.onBackground)
+                val hasProof = selectedProofUri != null
+                val hasTwoWords = proofNotes.trim().split(Regex("\\s+")).filter { it.isNotBlank() }.size >= 2
+                 AlertDialog(
+                     onDismissRequest = { showMarkCompleteDialog = false; markTargetIncidentInc = null },
+                     title = { Text(text = "Mark Incident Complete", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground) },
+                     text = {
+                         Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                             Text(text = "Provide a short note and take a photo as proof that the incident has been completed.", color = MaterialTheme.colorScheme.onBackground)
 
-                            androidx.compose.material3.OutlinedTextField(value = proofNotes, onValueChange = { proofNotes = it }, label = { Text("Completion notes") }, modifier = Modifier.fillMaxWidth())
+                             androidx.compose.material3.OutlinedTextField(
+                                 value = proofNotes,
+                                 onValueChange = { proofNotes = it },
+                                 label = { Text("Completion notes") },
+                                 modifier = Modifier.fillMaxWidth(),
+                                 colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                                     focusedTextColor = if (!hasProof) Color.White else MaterialTheme.colorScheme.onBackground,
+                                     unfocusedTextColor = if (!hasProof) Color.White else MaterialTheme.colorScheme.onBackground
+                                 )
+                             )
 
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 // Camera capture button (use primary container so label contrasts)
                                 Button(onClick = {
                                     // Launch camera intent (returns small Bitmap in extras)
@@ -925,23 +1321,20 @@ fun HomeScreen(responderRole: String? = null) {
                          }
                      },
                      confirmButton = {
-                        Button(onClick = {
-                             // Validate proof presence
-                             val inc = markTargetIncidentInc
-                             if (inc != null) {
-                                 if (selectedProofUri == null) {
-                                     Toast.makeText(context, "Please attach a photo as proof before submitting", Toast.LENGTH_SHORT).show()
-                                     return@Button
+                         Button(
+                             onClick = {
+                                 val inc = markTargetIncidentInc
+                                 if (inc != null) {
+                                     markIncidentDone(inc, proofNotes, selectedProofUri)
+                                     showMarkCompleteDialog = false
+                                     markTargetIncidentInc = null
+                                     proofNotes = ""
+                                     selectedProofUri = null
                                  }
-
-                                 // Mark the incident as resolved in the UI and (placeholder) send proof to admin
-                                 markIncidentDone(inc, proofNotes, selectedProofUri)
-                                 showMarkCompleteDialog = false
-                                 markTargetIncidentInc = null
-                                 proofNotes = ""
-                                 selectedProofUri = null
-                             }
-                        }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary)) { Text("Submit") }
+                             },
+                             enabled = hasTwoWords && hasProof,
+                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary)
+                         ) { Text("Submit") }
                      },
                      dismissButton = {
                         androidx.compose.material3.TextButton(onClick = { showMarkCompleteDialog = false; markTargetIncidentInc = null }) { Text("Cancel", color = MaterialTheme.colorScheme.onBackground) }
@@ -949,184 +1342,196 @@ fun HomeScreen(responderRole: String? = null) {
                  )
              }
 
+            // End of main scrollable content column.
+        }
+
             // Keep the dialog outside the main content so it can appear regardless of scroll.
             if (showDepartmentSelection) {
                 DepartmentSelectionDialog(onDismiss = { showDepartmentSelection = false })
             }
 
-            // Edit name dialog
-            if (showEditNameDialog) {
-                AlertDialog(
-                    onDismissRequest = { showEditNameDialog = false },
-                    title = { Text(text = "Edit Responder Name", fontWeight = FontWeight.SemiBold) },
-                    text = {
-                        Column {
-                            androidx.compose.material3.OutlinedTextField(
-                                value = editNameInput,
-                                onValueChange = { editNameInput = it },
-                                label = { Text("Name") },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth()
-                            )
+            if (showSettingsDialog) {
+                AccountSettingsDialog(
+                    fullName = accountFullName,
+                    username = accountUsername,
+                    email = accountEmail,
+                    photoUri = accountPhotoUri,
+                    isDarkMode = isDarkMode,
+                    onFullNameChange = { accountFullName = it },
+                    onUsernameChange = { accountUsername = it },
+                    onEmailChange = { accountEmail = it },
+                    onDarkModeChange = { enabled ->
+                        isDarkMode = enabled
+                        prefs.edit().putBoolean("dark_mode", enabled).apply()
+                    },
+                    onPickPhoto = { pickProfilePhotoLauncher.launch("image/*") },
+                    onSave = {
+                        prefs.edit()
+                            .putString("account_full_name", accountFullName.trim())
+                            .putString("account_username", accountUsername.trim())
+                            .putString("account_email", accountEmail.trim())
+                            .putString("account_photo", accountPhotoUri)
+                            .apply()
+                        // Update displayed responder name to use the username set in settings.
+                        if (!accountUsername.isNullOrBlank()) {
+                            responderName = accountUsername.trim()
                         }
-                    },
-                    confirmButton = {
-                        Button(onClick = {
-                            val newName = editNameInput.trim()
-                            if (newName.isNotEmpty()) {
-                                responderName = newName
-                                // save persistently
-                                try { prefs.edit().putString("responder_name", newName).apply() } catch (_: Exception) { /* ignore */ }
+                        showSettingsDialog = false
+                     },
+                     onBack = { showSettingsDialog = false },
+                     onLogout = {
+                         prefs.edit().clear().apply()
+                         context.getSharedPreferences("user_prefs", android.content.Context.MODE_PRIVATE).edit().clear().apply()
+                         Toast.makeText(context, "Logged out", Toast.LENGTH_SHORT).show()
+                         showSettingsDialog = false
+                     }
+                 )
+             }
+
+            // New incident notification popup (overlay at top)
+            Box(
+                modifier = Modifier.fillMaxWidth(),
+                contentAlignment = Alignment.TopCenter
+            ) {
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = showNewIncidentNotification,
+                    enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
+                    exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth(0.95f)
+                            .padding(top = 16.dp)
+                            .combinedClickable(
+                                onClick = { showNewIncidentNotification = false },
+                                onLongClick = { showNewIncidentNotification = false }
+                            ),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF1B5E20)),
+                        elevation = CardDefaults.cardElevation(8.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.LocalHospital,
+                                contentDescription = "New Incident",
+                                tint = Color.White,
+                                modifier = Modifier.size(32.dp)
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "New Incident Assigned!",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = newIncidentMessage,
+                                    color = Color.White.copy(alpha = 0.9f),
+                                    fontSize = 14.sp,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             }
-                            showEditNameDialog = false
-                        }) { Text("Save") }
-                    },
-                    dismissButton = {
-                        androidx.compose.material3.TextButton(onClick = { showEditNameDialog = false }) { Text("Cancel") }
+                            IconButton(onClick = { showNewIncidentNotification = false }) {
+                                Icon(
+                                    imageVector = Icons.Default.Done,
+                                    contentDescription = "Dismiss",
+                                    tint = Color.White
+                                )
+                            }
+                        }
                     }
-                )
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun EmergencyRequestCard(request: EmergencyRequest, showBackupBadge: Boolean = false) {
-    Card(modifier = Modifier.fillMaxWidth(), elevation = CardDefaults.cardElevation(4.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.LocalHospital, contentDescription = request.type, tint = MaterialTheme.colorScheme.primary)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(text = request.type, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
-                Spacer(modifier = Modifier.weight(1f))
-                if (showBackupBadge) {
-                    // small visual indicator that this is a backup request from another department
-                    Box(modifier = Modifier.background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.08f), RoundedCornerShape(8.dp)).padding(horizontal = 8.dp, vertical = 4.dp)) {
-                        Text(text = "Backup", color = MaterialTheme.colorScheme.secondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                    }
-                    Spacer(modifier = Modifier.width(8.dp))
-                }
-                Badge(containerColor = request.priority.color) { Text(request.priority.name, color = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp), fontSize = 12.sp) }
-            }
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(text = "${request.distance} • ${request.timestamp}", color = MaterialTheme.colorScheme.onSurface)
-            // If this is a backup request, show the incident address so the responder can see where backup is needed
-            if (showBackupBadge) {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = request.address ?: "Address unknown",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                val ctx = LocalContext.current
-                OutlinedButton(onClick = {
-                    // Open the map app and show a pin for the address (preferred) or coordinates
-                    openMapPin(ctx, request.latitude, request.longitude, request.address)
-                }, modifier = Modifier.height(36.dp)) { Text("View") }
-
-                // Only show accept for non-backup requests. Backup acceptance is via admin (website).
-                if (!showBackupBadge) {
-                    Spacer(modifier = Modifier.width(8.dp))
-                    OutlinedButton(onClick = { /* accept */ }, modifier = Modifier.height(36.dp)) { Text("Accept") }
                 }
             }
-        }
-    }
-}
+        } // closes outer Box (content root)
+    } // closes Scaffold
+} // closes HomeScreen
 
 @Composable
-private fun EmergencyRequestList(requests: List<EmergencyRequest>, title: String = "Incoming Emergency Requests", showBackupBadge: Boolean = false) {
-    Column(Modifier.padding(top = 8.dp)) {
-        Text(text = title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = 16.dp))
-        Spacer(Modifier.height(8.dp))
-        LazyColumn(modifier = Modifier.padding(horizontal = 16.dp).heightIn(max = 300.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(requests) { req -> EmergencyRequestCard(req, showBackupBadge = showBackupBadge) }
-        }
-    }
-}
-
-// --- Helpers (moved above HomeScreen so they're available when HomeScreen references them) ---
-private fun MutableList<EmergencyRequest>.evaluateAndAssignIfAvailable(
-    responderAvailable: () -> Boolean,
-    accept: (EmergencyRequest) -> Unit
+private fun AccountSettingsDialog(
+    fullName: String,
+    username: String,
+    email: String,
+    photoUri: String?,
+    isDarkMode: Boolean,
+    onFullNameChange: (String) -> Unit,
+    onUsernameChange: (String) -> Unit,
+    onEmailChange: (String) -> Unit,
+    onDarkModeChange: (Boolean) -> Unit,
+    onPickPhoto: () -> Unit,
+    onSave: () -> Unit,
+    onBack: () -> Unit,
+    onLogout: () -> Unit
 ) {
-    if (!responderAvailable()) return
-    val order = listOf(EmergencyPriority.High, EmergencyPriority.Medium, EmergencyPriority.Low)
-    for (p in order) {
-        val candidate = this.firstOrNull { it.priority == p }
-        if (candidate != null) {
-            accept(candidate)
-            return
+    AlertDialog(
+        onDismissRequest = onBack,
+        title = { Text("Account Settings", fontWeight = FontWeight.SemiBold) },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth().wrapContentHeight(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    ResponderAvatar(
+                        modifier = Modifier.size(64.dp),
+                        imageUri = photoUri,
+                        drawableRes = null,
+                        status = ResponderOnlineStatus.Offline,
+                        contentDescription = "Profile photo"
+                    )
+                    OutlinedButton(onClick = onPickPhoto, modifier = Modifier.widthIn(min = 120.dp)) {
+                        Text("Add Photo")
+                    }
+                }
+
+                OutlinedTextField(
+                    value = fullName,
+                    onValueChange = onFullNameChange,
+                    label = { Text("Full name") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = username,
+                    onValueChange = onUsernameChange,
+                    label = { Text("Username") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = email,
+                    onValueChange = onEmailChange,
+                    label = { Text("Email") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Night mode")
+                    androidx.compose.material3.Switch(
+                        checked = isDarkMode,
+                        onCheckedChange = onDarkModeChange
+                    )
+                }
+
+                androidx.compose.material3.HorizontalDivider()
+                Text("Account Actions", fontWeight = FontWeight.SemiBold)
+                OutlinedButton(onClick = onLogout, colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)) {
+                    Text("Logout")
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onSave) { Text("Save Changes") }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onBack) { Text("Back") }
         }
-    }
-}
-
-// Accept an incoming emergency request and mark it assigned (UI-only)
-private fun acceptIncident(
-    incoming: MutableList<EmergencyRequest>,
-    incident: EmergencyRequest,
-    onAssigned: (EmergencyRequest) -> Unit
-) {
-    incoming.removeAll { it.id == incident.id }
-    val assigned = incident.copy(status = "Assigned")
-    onAssigned(assigned)
-}
-
-
-// Demo feeder to add some incoming requests for UI testing
-private fun demoFeedIncomingRequests(list: MutableList<EmergencyRequest>) {
-    val types = listOf("Medical", "Fire", "Crime", "Disaster")
-    val priorities = EmergencyPriority.entries
-    val random = java.util.Random()
-
-    fun randomInt(range: IntRange): Int = range.random()
-
-    while (list.size < 6) {
-        val id = list.size + 1
-        val type = types[random.nextInt(types.size)]
-        val priority = priorities[random.nextInt(priorities.size)]
-        val distance = "${randomInt(1..20)} km"
-        val timestamp = "${randomInt(1..12)}:${randomInt(0..59).toString().padStart(2, '0')} ${if (random.nextBoolean()) "AM" else "PM"}"
-        val lat = random.nextDouble() * 180.0 - 90.0
-        val lng = random.nextDouble() * 360.0 - 180.0
-        val address = "Random ${type} ${id} St"
-
-        list.add(EmergencyRequest(id, type, distance, timestamp, priority, lat, lng, address, "Description for ${type.lowercase()} incident #$id"))
-    }
-}
-
-// Show a pin/marker for an incident on the user's map application (uses geo: URI with query).
-private fun openMapPin(context: android.content.Context, lat: Double?, lng: Double?, address: String?) {
-    try {
-        // Prefer an address-based geo URI so the map app pins the human-friendly address label.
-        val primaryUri = when {
-            !address.isNullOrBlank() -> ("geo:0,0?q=${Uri.encode(address)}").toUri()
-            lat != null && lng != null -> ("geo:$lat,$lng?q=$lat,$lng(${Uri.encode(address ?: "Incident")})").toUri()
-            else -> null
-        }
-
-        if (primaryUri != null) {
-            // Prefer Google Maps app to ensure consistent pin behavior (does not start navigation)
-            val mapIntent = Intent(Intent.ACTION_VIEW, primaryUri).apply { setPackage("com.google.android.apps.maps") }
-            val resolveInfo = context.packageManager.resolveActivity(mapIntent, 0)
-            if (resolveInfo != null) { context.startActivity(mapIntent); return }
-
-            // Fallback to generic geo intent
-            val fallbackIntent = Intent(Intent.ACTION_VIEW, primaryUri)
-            val fallbackResolve = context.packageManager.resolveActivity(fallbackIntent, 0)
-            if (fallbackResolve != null) { context.startActivity(fallbackIntent); return }
-        }
-
-        // Nothing available
-        Toast.makeText(context, "No map application available to view location", Toast.LENGTH_SHORT).show()
-    } catch (e: Exception) {
-        Log.d("HomeScreen", "Error opening map pin: ${e.message}")
-        Toast.makeText(context, "Unable to open map", Toast.LENGTH_SHORT).show()
-    }
+    )
 }

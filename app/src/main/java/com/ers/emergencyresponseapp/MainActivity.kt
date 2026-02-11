@@ -25,9 +25,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.RateReview
+import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import android.content.Context
+import android.content.SharedPreferences
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -41,18 +43,33 @@ sealed class NavItem(val route: String, val title: String, val icon: ImageVector
     object Home : NavItem("home", "Home", Icons.Filled.Home)
     object CoordinationPortal : NavItem("coordination_portal", "Coordination", Icons.Filled.Groups)
     object ReviewsFeedback : NavItem("reviews_feedback", "Reviews", Icons.Filled.RateReview)
+    object Analytics : NavItem("analytics", "Analytics", Icons.Filled.Timeline)
 }
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            EmergencyResponseAppTheme {
+            val context = LocalContext.current
+            val prefs = context.getSharedPreferences("ers_prefs", Context.MODE_PRIVATE)
+            var isDarkMode by remember { mutableStateOf(prefs.getBoolean("dark_mode", false)) }
+
+            DisposableEffect(prefs) {
+                val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+                    if (key == "dark_mode") {
+                        isDarkMode = prefs.getBoolean("dark_mode", false)
+                    }
+                }
+                prefs.registerOnSharedPreferenceChangeListener(listener)
+                onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
+            }
+
+            EmergencyResponseAppTheme(darkTheme = isDarkMode) {
                 Surface(color = MaterialTheme.colorScheme.background) {
                     val navController = rememberNavController()
                     val navBackStackEntry by navController.currentBackStackEntryAsState()
                     val currentRoute = navBackStackEntry?.destination?.route
-                    val mainDestinations = setOf("coordination_portal", "reviews_feedback")
+                    val mainDestinations = setOf("coordination_portal", "reviews_feedback", "analytics")
                     // Show bottom bar for any home route (home or home/<role>) and other main destinations
                     val showBottomBar = (currentRoute?.startsWith("home") == true) || (currentRoute in mainDestinations)
 
@@ -105,12 +122,19 @@ class MainActivity : ComponentActivity() {
 
                                 // Coordination portal screen (accessible from bottom navigation)
                                 composable("coordination_portal") {
-                                    CoordinationPortalScreen()
+                                    val localContext = LocalContext.current
+                                    val localPrefs = localContext.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
+                                    val department = localPrefs.getString("department", "fire") ?: "fire"
+                                    CoordinationPortalScreen(currentResponderId = "current_user", currentResponderRole = department)
                                 }
 
                                 // Reviews & Feedback screen (accessible from bottom navigation)
                                 composable("reviews_feedback") {
                                     ReviewsFeedbackScreen()
+                                }
+
+                                composable("analytics") {
+                                    HistoricalRouteAnalyticsScreen()
                                 }
                              }
                          }
@@ -123,7 +147,7 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun BottomNavigationBar(currentRoute: String?, onNavigate: (String) -> Unit) {
-    val items = listOf(NavItem.Home, NavItem.CoordinationPortal, NavItem.ReviewsFeedback)
+    val items = listOf(NavItem.Home, NavItem.CoordinationPortal, NavItem.ReviewsFeedback, NavItem.Analytics)
     val context = LocalContext.current
     // registration stores department under 'user_prefs'
     val prefs = context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)

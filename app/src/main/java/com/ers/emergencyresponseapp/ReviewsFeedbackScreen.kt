@@ -1,6 +1,10 @@
 package com.ers.emergencyresponseapp
 
+import android.graphics.BitmapFactory
+import android.net.Uri
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -10,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -41,15 +46,17 @@ import com.ers.emergencyresponseapp.home.IncidentStatus
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.compose.ui.tooling.preview.Preview
-import com.ers.emergencyresponseapp.ui.theme.EmergencyResponseAppTheme
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.ui.tooling.preview.Preview
+import com.ers.emergencyresponseapp.ui.theme.EmergencyResponseAppTheme
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import android.widget.Toast
+import androidx.compose.ui.layout.ContentScale
 
 private enum class ReviewStatus(val title: String, val color: Color) {
     Pending("Pending Review", Color(0xFFFFA000)),
@@ -61,7 +68,8 @@ private data class ReviewableIncident(
     val id: String,
     val type: String,
     val date: String,
-    val status: ReviewStatus
+    val status: ReviewStatus,
+    val proofUri: String? = null // optional image proof captured when marking done
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -129,6 +137,9 @@ private fun IncidentReviewList(selectedFilter: ReviewStatus) {
     val detailsText = rememberSaveable { mutableStateOf("") }
     val detailsSelected = remember { mutableStateOf<ReviewableIncident?>(null) }
 
+    // State for image preview dialog (full screen)
+    val showImageDialog = remember { mutableStateOf<String?>(null) }
+
     // Simple in-memory storage of submitted reviews (for demo). Pair(incidentId, text) where id has no leading '#'
     val submittedReviews = remember { mutableStateListOf<Pair<String,String>>() }
 
@@ -144,7 +155,8 @@ private fun IncidentReviewList(selectedFilter: ReviewStatus) {
         .filter { it.status == IncidentStatus.RESOLVED && it.assignedTo == responderName }
         .map { inc ->
             val isSubmitted = submittedReviews.any { it.first == inc.id }
-            ReviewableIncident("#${inc.id}", inc.type.displayName, java.text.SimpleDateFormat("yyyy-MM-dd | HH:mm", java.util.Locale.getDefault()).format(inc.timeReported), if (isSubmitted) ReviewStatus.Submitted else ReviewStatus.Pending)
+            val proof = try { IncidentStore.getProofUri(inc.id) } catch (_: Exception) { null }
+            ReviewableIncident("#${inc.id}", inc.type.displayName, java.text.SimpleDateFormat("yyyy-MM-dd | HH:mm", java.util.Locale.getDefault()).format(inc.timeReported), if (isSubmitted) ReviewStatus.Submitted else ReviewStatus.Pending, proof)
         }
 
     // Keep some static submitted/completed examples after the pending ones
@@ -176,8 +188,33 @@ private fun IncidentReviewList(selectedFilter: ReviewStatus) {
                             Text(text = incident.status.title, color = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), fontSize = 12.sp)
                         }
                     }
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(text = "Date: ${incident.date}", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    // Show date and proof thumbnail if available
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                        Text(text = "Date: ${incident.date}", style = MaterialTheme.typography.bodyMedium)
+                        incident.proofUri?.let { uriStr ->
+                            val ctx = LocalContext.current
+                            val bitmap = remember(uriStr) {
+                                try {
+                                    if (uriStr.startsWith("file://")) {
+                                        val path = Uri.parse(uriStr).path
+                                        if (path != null) BitmapFactory.decodeFile(path) else null
+                                    } else {
+                                        val uri = Uri.parse(uriStr)
+                                        ctx.contentResolver.openInputStream(uri)?.use { stream -> BitmapFactory.decodeStream(stream) }
+                                    }
+                                } catch (_: Exception) { null }
+                            }
+                            if (bitmap != null) {
+                                Image(
+                                    bitmap = bitmap.asImageBitmap(),
+                                    contentDescription = "Proof",
+                                    modifier = Modifier.size(64.dp).clickable { showImageDialog.value = uriStr },
+                                    contentScale = ContentScale.Crop
+                                )
+                            }
+                        }
+                    }
                     Spacer(modifier = Modifier.height(16.dp))
                     OutlinedButton(onClick = {
                         if (incident.status == ReviewStatus.Pending) {
@@ -244,6 +281,38 @@ private fun IncidentReviewList(selectedFilter: ReviewStatus) {
             text = { Column { Text(text = detailsText.value) } },
             confirmButton = { Button(onClick = { showDetailsDialog.value = false; detailsSelected.value = null }) { Text("OK") } },
             dismissButton = { /* no-op */ }
+        )
+    }
+
+    // Full image preview dialog
+    val previewUri = showImageDialog.value
+    if (previewUri != null) {
+        AlertDialog(
+            onDismissRequest = { showImageDialog.value = null },
+            title = { /* no title for image */ Text("") },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                    val ctx = LocalContext.current
+                    val fullBitmap = remember(previewUri) {
+                        try {
+                            if (previewUri.startsWith("file://")) {
+                                val path = Uri.parse(previewUri).path
+                                if (path != null) BitmapFactory.decodeFile(path) else null
+                            } else {
+                                val uri = Uri.parse(previewUri)
+                                ctx.contentResolver.openInputStream(uri)?.use { stream -> BitmapFactory.decodeStream(stream) }
+                            }
+                        } catch (_: Exception) { null }
+                    }
+
+                    if (fullBitmap != null) {
+                        Image(bitmap = fullBitmap.asImageBitmap(), contentDescription = "Full proof image", modifier = Modifier.fillMaxWidth().sizeIn(maxHeight = 600.dp), contentScale = ContentScale.Fit)
+                    } else {
+                        Text("Image not available")
+                    }
+                }
+            },
+            confirmButton = { Button(onClick = { showImageDialog.value = null }) { Text("Close") } }
         )
     }
 }
