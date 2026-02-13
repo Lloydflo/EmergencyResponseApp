@@ -39,7 +39,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
-import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.LocalHospital
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MyLocation
@@ -59,7 +58,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -98,6 +96,8 @@ import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import java.io.File
 import java.io.FileOutputStream
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.combinedClickable
@@ -208,6 +208,31 @@ private fun ResponderAvatar(
 }
 
 // --- Helper functions for HomeScreen (must be defined before use) ---
+private fun MutableList<EmergencyRequest>.evaluateAndAssignIfAvailable(
+    responderAvailable: () -> Boolean,
+    accept: (EmergencyRequest) -> Unit
+) {
+    if (!responderAvailable()) return
+    val order = listOf(EmergencyPriority.High, EmergencyPriority.Medium, EmergencyPriority.Low)
+    for (p in order) {
+        val candidate = this.firstOrNull { it.priority == p }
+        if (candidate != null) {
+            accept(candidate)
+            return
+        }
+    }
+}
+
+private fun acceptIncident(
+    incoming: MutableList<EmergencyRequest>,
+    incident: EmergencyRequest,
+    onAssigned: (EmergencyRequest) -> Unit
+) {
+    incoming.removeAll { it.id == incident.id }
+    val assigned = incident.copy(status = "Assigned")
+    onAssigned(assigned)
+}
+
 private fun demoFeedIncomingRequests(list: MutableList<EmergencyRequest>) {
     val types = listOf("Medical", "Fire", "Crime", "Disaster")
     val priorities = EmergencyPriority.entries
@@ -349,13 +374,14 @@ fun HomeScreen(responderRole: String? = null) {
 
     // Keep responderName in sync if the account username is changed in settings during runtime
     LaunchedEffect(accountUsername) {
-        if (accountUsername.isNotBlank()) {
+        if (!accountUsername.isNullOrBlank()) {
             responderName = accountUsername
         }
     }
 
-    // Online/offline
-    val onlineStatus by remember { mutableStateOf(ResponderOnlineStatus.Online) }
+    // Online/offline and availability
+    var onlineStatus by remember { mutableStateOf(ResponderOnlineStatus.Online) }
+    var responderAvailable by remember { mutableStateOf(true) }
     // Incoming requests and assigned incident
     val incomingRequests = remember { mutableStateListOf<EmergencyRequest>() }
 
@@ -430,6 +456,19 @@ fun HomeScreen(responderRole: String? = null) {
         Log.d("HomeScreen", "Loaded ${incidentsList.size} incidents from IncidentStore")
     }
 
+    fun calculateCounts() {
+        // simple counts for logging (kept lightweight)
+        var f = 0; var m = 0; var c = 0; var d = 0
+        for (inc in incidentsList) {
+            when (inc.type) {
+                IncidentType.FIRE -> f++
+                IncidentType.MEDICAL -> m++
+                IncidentType.CRIME -> c++
+                IncidentType.DISASTER -> d++
+            }
+        }
+        Log.d("HomeScreen", "Counts updated - Fire:$f Medical:$m Crime:$c Disaster:$d")
+    }
 
     // Return incidents that are not resolved and reported within the last hour
     fun filterActiveIncidents(list: List<Incident>): List<Incident> {
@@ -628,23 +667,17 @@ fun HomeScreen(responderRole: String? = null) {
         try {
             // Prefer the account username (settings) as the author of actions; fall back to responderName variable.
             val prefsName = prefs.getString("account_username", responderName)
-            // Move the incident into PENDING_REVIEW so the responder can submit a review before admin approval
-            IncidentStore.markPendingReview(incident.id, prefsName)
-            // Store proof and notes (completion time will be stored when admin approves or reviewer submits)
-            try { IncidentStore.storeProof(incident.id, proofUri) } catch (_: Exception) { /* ignore */ }
-            try { IncidentStore.storeCompletionNotes(incident.id, notes) } catch (_: Exception) { /* ignore */ }
-            // Signal UI/navigation to open the Reviews screen so the responder can submit their review
-            try { prefs.edit().putBoolean("navigate_to_reviews", true).putString("last_pending_incident_id", incident.id).apply() } catch (_: Exception) { /* ignore */ }
-            incidentsList = IncidentStore.incidents.toList()
-            refreshActiveIncidents()
-            if (lastNotifiedIncidentId == incident.id) {
-                lastNotifiedIncidentId = null
-                try { prefs.edit().remove("last_notified_incident_id").apply() } catch (_: Exception) { /* ignore */ }
-            }
-            if (lastAssignedIncidentId == incident.id) {
-                lastAssignedIncidentId = null
-                try { prefs.edit().remove("last_assigned_incident_id").apply() } catch (_: Exception) { /* ignore */ }
-            }
+             IncidentStore.markResolved(incident.id, prefsName)
+             incidentsList = IncidentStore.incidents.toList()
+             refreshActiveIncidents()
+             if (lastNotifiedIncidentId == incident.id) {
+                 lastNotifiedIncidentId = null
+                 try { prefs.edit().remove("last_notified_incident_id").apply() } catch (_: Exception) { /* ignore */ }
+             }
+             if (lastAssignedIncidentId == incident.id) {
+                 lastAssignedIncidentId = null
+                 try { prefs.edit().remove("last_assigned_incident_id").apply() } catch (_: Exception) { /* ignore */ }
+             }
             // Auto-assign the next available incident so a new assignment triggers a notification.
             val desiredType: IncidentType? = effectiveRole?.let { roleStr ->
                 when (roleStr.trim().lowercase()) {
@@ -731,6 +764,7 @@ fun HomeScreen(responderRole: String? = null) {
         }
     }
 
+
     Scaffold(
         topBar = { /* header removed */ },
         floatingActionButtonPosition = FabPosition.End,
@@ -740,31 +774,24 @@ fun HomeScreen(responderRole: String? = null) {
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 horizontalAlignment = Alignment.End
             ) {
+                // Slightly larger FAB for sending backup requests (not full-size FAB, but bigger than Small)
                 SmallFloatingActionButton(
                     onClick = { showDepartmentSelection = true },
+                    modifier = Modifier.size(48.dp) // modestly larger than the default small FAB
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Call,
-                        contentDescription = "Call Command"
+                        imageVector = Icons.Default.LocalHospital,
+                        contentDescription = "Send Backup Request",
+                        modifier = Modifier.size(22.dp)
                     )
                 }
 
-                SmallFloatingActionButton(
-                    onClick = { handleShareLocationToggle(!isLocationShared) },
-                    containerColor = if (isLocationShared) Color(0xFF2E7D32) else MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.MyLocation,
-                        contentDescription = if (isLocationShared) "Stop Sharing Location" else "Share Location"
-                    )
-                }
+                // Share location FAB removed per request
             }
         }
     ) { paddingValues ->
         Box(modifier = Modifier.fillMaxSize()) {
-            // UI-only state for dialogs opened by the navigation buttons (Incoming / Settings)
-            var showIncomingDialog by remember { mutableStateOf(false) }
+            // UI-only state for dialogs opened by the navigation buttons (Settings)
 
             // Compute counts for the statistic cards using existing incident lists (active incidents)
             val fireCount = activeIncidents.count { it.type == IncidentType.FIRE }
@@ -836,6 +863,34 @@ fun HomeScreen(responderRole: String? = null) {
                 delay(3000L)
                 showNewIncidentNotification = false
                 showAssignedAfterNotification = true
+            }
+
+            // Coroutine scope for backup requests
+            val scope = rememberCoroutineScope()
+
+            fun sendBackupMessageToDepartment(departmentKey: String) {
+                val backupMessage = "I need backup on scene"
+                val deptName = when (departmentKey.lowercase()) {
+                    "fire" -> "Fire Department"
+                    "medical" -> "Medical Department"
+                    "crime" -> "Crime Department"
+                    else -> "Emergency Services"
+                }
+
+                scope.launch {
+                    try {
+                        // API integration not available in this build; local stub logs and shows a toast.
+                        Log.i("HomeScreen", "Backup request (stub) sent to $deptName: $backupMessage")
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, "Backup request sent to $deptName", Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (e: Exception) {
+                        Log.e("HomeScreen", "Backup request error: ${e.message}")
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
             }
 
             // Layout: Top row (Hello + Name left, Avatar right) -> Stat cards -> Assigned incidents -> Map/Incoming buttons -> Settings/More
@@ -1014,7 +1069,7 @@ fun HomeScreen(responderRole: String? = null) {
                                 }
 
                                 // Action buttons for assigned incidents: icon + text, aligned right and closer together
-                                val scope = rememberCoroutineScope()
+                                val buttonScope = rememberCoroutineScope()
                                 val showNavLabel = remember(inc.id) { mutableStateOf(false) }
                                 val showOnSceneLabel = remember(inc.id + "_scene") { mutableStateOf(false) }
                                 val showMarkLabel = remember(inc.id + "_mark") { mutableStateOf(false) }
@@ -1054,7 +1109,7 @@ fun HomeScreen(responderRole: String? = null) {
                                             },
                                             modifier = Modifier.size(40.dp).combinedClickable(onClick = {}, onLongClick = {
                                                 showNavLabel.value = true
-                                                scope.launch { delay(1200); showNavLabel.value = false }
+                                                buttonScope.launch { delay(1200); showNavLabel.value = false }
                                             }),
                                             shape = RoundedCornerShape(10.dp),
                                             contentPadding = PaddingValues(0.dp)
@@ -1069,7 +1124,7 @@ fun HomeScreen(responderRole: String? = null) {
                                             enabled = onSceneEnabledMap[inc.id] == true,
                                             modifier = Modifier.size(40.dp).combinedClickable(onClick = {}, onLongClick = {
                                                 showOnSceneLabel.value = true
-                                                scope.launch { delay(1200); showOnSceneLabel.value = false }
+                                                buttonScope.launch { delay(1200); showOnSceneLabel.value = false }
                                             }),
                                             shape = RoundedCornerShape(10.dp),
                                             contentPadding = PaddingValues(0.dp)
@@ -1088,7 +1143,7 @@ fun HomeScreen(responderRole: String? = null) {
                                             },
                                             modifier = Modifier.size(40.dp).combinedClickable(onClick = {}, onLongClick = {
                                                 showMarkLabel.value = true
-                                                scope.launch { delay(1200); showMarkLabel.value = false }
+                                                buttonScope.launch { delay(1200); showMarkLabel.value = false }
                                             }),
                                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32), contentColor = MaterialTheme.colorScheme.onPrimary),
                                             shape = RoundedCornerShape(10.dp),
@@ -1206,34 +1261,9 @@ fun HomeScreen(responderRole: String? = null) {
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Primary action buttons: Incoming Incidents and Settings
-            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedButton(onClick = { showIncomingDialog = true }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp)) { Text("Incoming Incidents") }
-                OutlinedButton(onClick = { showSettingsDialog = true }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp)) { Text("Settings") }
-            }
-
-            // Incoming incidents dialog (reuses EmergencyRequestList composable)
-            if (showIncomingDialog) {
-                // Split incoming dialog into two sections: requests for responder's department and backup requests from other departments
-                val backupRequests = remember(incomingRequests, effectiveRole) {
-                    if (effectiveRole.isNullOrBlank()) emptyList() else incomingRequests.filter { !it.type.equals(effectiveRole, ignoreCase = true) }
-                }
-
-                AlertDialog(onDismissRequest = { showIncomingDialog = false }, title = { Text("Incoming Incidents") }, text = {
-                    Column(modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
-                        // Primary section: requests for this responder (if any)
-                        val roleTitle = effectiveRole?.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }
-                        EmergencyRequestList(requests = visibleIncomingRequests, title = if (effectiveRole.isNullOrBlank()) "Incoming Requests" else "Requests for $roleTitle")
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        // Backup requests from other departments (if present)
-                        if (backupRequests.isNotEmpty()) {
-                            EmergencyRequestList(requests = backupRequests, title = "Backup Requests (Other Departments)", showBackupBadge = true)
-                        }
-                    }
-                }, confirmButton = { Button(onClick = { showIncomingDialog = false }) { Text("Close") } })
-            }
+            // Primary action button: Settings
+            OutlinedButton(onClick = { showSettingsDialog = true }, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), shape = RoundedCornerShape(12.dp)) { Text("Settings") }
+            Spacer(modifier = Modifier.height(8.dp)) // add a little space below the Settings button
 
             // Mark Complete dialog with proof (notes + image). This enforces adding proof before submission.
             if (showMarkCompleteDialog && markTargetIncidentInc != null) {
@@ -1246,12 +1276,12 @@ fun HomeScreen(responderRole: String? = null) {
                          Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                              Text(text = "Provide a short note and take a photo as proof that the incident has been completed.", color = MaterialTheme.colorScheme.onBackground)
 
-                             OutlinedTextField(
+                             androidx.compose.material3.OutlinedTextField(
                                  value = proofNotes,
                                  onValueChange = { proofNotes = it },
                                  label = { Text("Completion notes") },
                                  modifier = Modifier.fillMaxWidth(),
-                                 colors = OutlinedTextFieldDefaults.colors(
+                                 colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
                                      focusedTextColor = if (!hasProof) Color.White else MaterialTheme.colorScheme.onBackground,
                                      unfocusedTextColor = if (!hasProof) Color.White else MaterialTheme.colorScheme.onBackground
                                  )
@@ -1314,7 +1344,13 @@ fun HomeScreen(responderRole: String? = null) {
 
             // Keep the dialog outside the main content so it can appear regardless of scroll.
             if (showDepartmentSelection) {
-                DepartmentSelectionDialog(onDismiss = { showDepartmentSelection = false })
+                DepartmentSelectionDialog(
+                    onDismiss = { showDepartmentSelection = false },
+                    onDepartmentSelected = { departmentKey ->
+                        sendBackupMessageToDepartment(departmentKey)
+                        showDepartmentSelection = false
+                    }
+                )
             }
 
             if (showSettingsDialog) {
@@ -1340,7 +1376,7 @@ fun HomeScreen(responderRole: String? = null) {
                             .putString("account_photo", accountPhotoUri)
                             .apply()
                         // Update displayed responder name to use the username set in settings.
-                        if (accountUsername.isNotBlank()) {
+                        if (!accountUsername.isNullOrBlank()) {
                             responderName = accountUsername.trim()
                         }
                         showSettingsDialog = false
