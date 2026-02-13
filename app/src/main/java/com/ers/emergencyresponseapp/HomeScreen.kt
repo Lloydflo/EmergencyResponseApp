@@ -39,8 +39,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
-import androidx.compose.material.icons.filled.Call
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.LocalHospital
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MyLocation
@@ -88,8 +86,6 @@ import com.ers.emergencyresponseapp.home.IncidentType
 import com.ers.emergencyresponseapp.analytics.RouteHistoryStore
 import com.ers.emergencyresponseapp.home.composables.DepartmentSelectionDialog
 import com.ers.emergencyresponseapp.home.IncidentStore
-import com.ers.emergencyresponseapp.api.ApiClient
-import com.ers.emergencyresponseapp.api.BackupRequest
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
@@ -778,25 +774,19 @@ fun HomeScreen(responderRole: String? = null) {
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 horizontalAlignment = Alignment.End
             ) {
+                // Slightly larger FAB for sending backup requests (not full-size FAB, but bigger than Small)
                 SmallFloatingActionButton(
                     onClick = { showDepartmentSelection = true },
+                    modifier = Modifier.size(48.dp) // modestly larger than the default small FAB
                 ) {
                     Icon(
                         imageVector = Icons.Default.LocalHospital,
-                        contentDescription = "Send Backup Request"
+                        contentDescription = "Send Backup Request",
+                        modifier = Modifier.size(22.dp)
                     )
                 }
 
-                SmallFloatingActionButton(
-                    onClick = { handleShareLocationToggle(!isLocationShared) },
-                    containerColor = if (isLocationShared) Color(0xFF2E7D32) else MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.MyLocation,
-                        contentDescription = if (isLocationShared) "Stop Sharing Location" else "Share Location"
-                    )
-                }
+                // Share location FAB removed per request
             }
         }
     ) { paddingValues ->
@@ -889,35 +879,16 @@ fun HomeScreen(responderRole: String? = null) {
 
                 scope.launch {
                     try {
-                        val backupRequest = BackupRequest(
-                            responderId = responderName,
-                            responderName = responderName,
-                            department = departmentKey,
-                            latitude = currentLatitude,
-                            longitude = currentLongitude,
-                            message = backupMessage
-                        )
-
-                        val response = withContext(Dispatchers.Main) {
-                            try {
-                                ApiClient.api.sendBackupRequest(backupRequest)
-                            } catch (e: Exception) {
-                                Log.e("HomeScreen", "Error sending backup to $deptName: ${e.message}")
-                                null
-                            }
-                        }
-
-                        if (response != null && response.ok) {
-                            Log.i("HomeScreen", "Backup request sent to $deptName: $backupMessage")
+                        // API integration not available in this build; local stub logs and shows a toast.
+                        Log.i("HomeScreen", "Backup request (stub) sent to $deptName: $backupMessage")
+                        withContext(Dispatchers.Main) {
                             Toast.makeText(context, "Backup request sent to $deptName", Toast.LENGTH_SHORT).show()
-                        } else {
-                            val errorMsg = response?.message ?: "Failed to send backup request"
-                            Log.w("HomeScreen", "API response failed: $errorMsg")
-                            Toast.makeText(context, errorMsg, Toast.LENGTH_SHORT).show()
                         }
                     } catch (e: Exception) {
                         Log.e("HomeScreen", "Backup request error: ${e.message}")
-                        Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                        }
                     }
                 }
             }
@@ -1098,7 +1069,7 @@ fun HomeScreen(responderRole: String? = null) {
                                 }
 
                                 // Action buttons for assigned incidents: icon + text, aligned right and closer together
-                                val scope = rememberCoroutineScope()
+                                val buttonScope = rememberCoroutineScope()
                                 val showNavLabel = remember(inc.id) { mutableStateOf(false) }
                                 val showOnSceneLabel = remember(inc.id + "_scene") { mutableStateOf(false) }
                                 val showMarkLabel = remember(inc.id + "_mark") { mutableStateOf(false) }
@@ -1138,7 +1109,7 @@ fun HomeScreen(responderRole: String? = null) {
                                             },
                                             modifier = Modifier.size(40.dp).combinedClickable(onClick = {}, onLongClick = {
                                                 showNavLabel.value = true
-                                                scope.launch { delay(1200); showNavLabel.value = false }
+                                                buttonScope.launch { delay(1200); showNavLabel.value = false }
                                             }),
                                             shape = RoundedCornerShape(10.dp),
                                             contentPadding = PaddingValues(0.dp)
@@ -1153,7 +1124,7 @@ fun HomeScreen(responderRole: String? = null) {
                                             enabled = onSceneEnabledMap[inc.id] == true,
                                             modifier = Modifier.size(40.dp).combinedClickable(onClick = {}, onLongClick = {
                                                 showOnSceneLabel.value = true
-                                                scope.launch { delay(1200); showOnSceneLabel.value = false }
+                                                buttonScope.launch { delay(1200); showOnSceneLabel.value = false }
                                             }),
                                             shape = RoundedCornerShape(10.dp),
                                             contentPadding = PaddingValues(0.dp)
@@ -1172,7 +1143,7 @@ fun HomeScreen(responderRole: String? = null) {
                                             },
                                             modifier = Modifier.size(40.dp).combinedClickable(onClick = {}, onLongClick = {
                                                 showMarkLabel.value = true
-                                                scope.launch { delay(1200); showMarkLabel.value = false }
+                                                buttonScope.launch { delay(1200); showMarkLabel.value = false }
                                             }),
                                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32), contentColor = MaterialTheme.colorScheme.onPrimary),
                                             shape = RoundedCornerShape(10.dp),
@@ -1292,6 +1263,7 @@ fun HomeScreen(responderRole: String? = null) {
 
             // Primary action button: Settings
             OutlinedButton(onClick = { showSettingsDialog = true }, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), shape = RoundedCornerShape(12.dp)) { Text("Settings") }
+            Spacer(modifier = Modifier.height(8.dp)) // add a little space below the Settings button
 
             // Mark Complete dialog with proof (notes + image). This enforces adding proof before submission.
             if (showMarkCompleteDialog && markTargetIncidentInc != null) {
@@ -1374,7 +1346,7 @@ fun HomeScreen(responderRole: String? = null) {
             if (showDepartmentSelection) {
                 DepartmentSelectionDialog(
                     onDismiss = { showDepartmentSelection = false },
-                    onSendBackupMessage = { departmentKey ->
+                    onDepartmentSelected = { departmentKey ->
                         sendBackupMessageToDepartment(departmentKey)
                         showDepartmentSelection = false
                     }

@@ -20,12 +20,14 @@ import androidx.compose.material.icons.filled.LocalHospital
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.LocalPolice
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.Send
 import androidx.compose.ui.graphics.vector.ImageVector
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DepartmentSelectionDialog(
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onDepartmentSelected: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
     val departments = listOf(
@@ -36,7 +38,7 @@ fun DepartmentSelectionDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Select Department to Call", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground) },
+        title = { Text("Select Department to Send Backup Request", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground) },
         text = {
             LazyColumn(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -44,8 +46,8 @@ fun DepartmentSelectionDialog(
             ) {
                 items(departments) { agency ->
                     DepartmentCallCard(agency = agency) {
-                        val dialIntent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${agency.dialNumber}"))
-                        context.startActivity(dialIntent)
+                        // Trigger the backup request callback; HomeScreen handles sending the message to admin
+                        onDepartmentSelected(agency.key)
                     }
                 }
             }
@@ -101,8 +103,15 @@ private fun DepartmentCallCard(
             }
 
             // Ensure the call button has a reasonable minimum width so labels don't overlap
-            Button(onClick = onCall, modifier = Modifier.widthIn(min = 88.dp), colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary)) {
-                Text("Call")
+            // Change label to 'Send' to send a backup request instead of calling
+            Button(
+                onClick = onCall,
+                modifier = Modifier.widthIn(min = 96.dp).height(44.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary)
+            ) {
+                Icon(imageVector = Icons.Default.Send, contentDescription = "Send backup", modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Send")
             }
         }
     }
