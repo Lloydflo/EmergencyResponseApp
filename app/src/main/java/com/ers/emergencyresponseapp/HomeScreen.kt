@@ -88,6 +88,8 @@ import com.ers.emergencyresponseapp.home.IncidentType
 import com.ers.emergencyresponseapp.analytics.RouteHistoryStore
 import com.ers.emergencyresponseapp.home.composables.DepartmentSelectionDialog
 import com.ers.emergencyresponseapp.home.IncidentStore
+import com.ers.emergencyresponseapp.api.ApiClient
+import com.ers.emergencyresponseapp.api.BackupRequest
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
@@ -98,6 +100,8 @@ import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import java.io.File
 import java.io.FileOutputStream
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.combinedClickable
@@ -764,6 +768,7 @@ fun HomeScreen(responderRole: String? = null) {
         }
     }
 
+
     Scaffold(
         topBar = { /* header removed */ },
         floatingActionButtonPosition = FabPosition.End,
@@ -777,8 +782,8 @@ fun HomeScreen(responderRole: String? = null) {
                     onClick = { showDepartmentSelection = true },
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Call,
-                        contentDescription = "Call Command"
+                        imageVector = Icons.Default.LocalHospital,
+                        contentDescription = "Send Backup Request"
                     )
                 }
 
@@ -796,8 +801,7 @@ fun HomeScreen(responderRole: String? = null) {
         }
     ) { paddingValues ->
         Box(modifier = Modifier.fillMaxSize()) {
-            // UI-only state for dialogs opened by the navigation buttons (Incoming / Settings)
-            var showIncomingDialog by remember { mutableStateOf(false) }
+            // UI-only state for dialogs opened by the navigation buttons (Settings)
 
             // Compute counts for the statistic cards using existing incident lists (active incidents)
             val fireCount = activeIncidents.count { it.type == IncidentType.FIRE }
@@ -869,6 +873,53 @@ fun HomeScreen(responderRole: String? = null) {
                 delay(3000L)
                 showNewIncidentNotification = false
                 showAssignedAfterNotification = true
+            }
+
+            // Coroutine scope for backup requests
+            val scope = rememberCoroutineScope()
+
+            fun sendBackupMessageToDepartment(departmentKey: String) {
+                val backupMessage = "I need backup on scene"
+                val deptName = when (departmentKey.lowercase()) {
+                    "fire" -> "Fire Department"
+                    "medical" -> "Medical Department"
+                    "crime" -> "Crime Department"
+                    else -> "Emergency Services"
+                }
+
+                scope.launch {
+                    try {
+                        val backupRequest = BackupRequest(
+                            responderId = responderName,
+                            responderName = responderName,
+                            department = departmentKey,
+                            latitude = currentLatitude,
+                            longitude = currentLongitude,
+                            message = backupMessage
+                        )
+
+                        val response = withContext(Dispatchers.Main) {
+                            try {
+                                ApiClient.api.sendBackupRequest(backupRequest)
+                            } catch (e: Exception) {
+                                Log.e("HomeScreen", "Error sending backup to $deptName: ${e.message}")
+                                null
+                            }
+                        }
+
+                        if (response != null && response.ok) {
+                            Log.i("HomeScreen", "Backup request sent to $deptName: $backupMessage")
+                            Toast.makeText(context, "Backup request sent to $deptName", Toast.LENGTH_SHORT).show()
+                        } else {
+                            val errorMsg = response?.message ?: "Failed to send backup request"
+                            Log.w("HomeScreen", "API response failed: $errorMsg")
+                            Toast.makeText(context, errorMsg, Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (e: Exception) {
+                        Log.e("HomeScreen", "Backup request error: ${e.message}")
+                        Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                }
             }
 
             // Layout: Top row (Hello + Name left, Avatar right) -> Stat cards -> Assigned incidents -> Map/Incoming buttons -> Settings/More
@@ -1239,34 +1290,8 @@ fun HomeScreen(responderRole: String? = null) {
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Primary action buttons: Incoming Incidents and Settings
-            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedButton(onClick = { showIncomingDialog = true }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp)) { Text("Incoming Incidents") }
-                OutlinedButton(onClick = { showSettingsDialog = true }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp)) { Text("Settings") }
-            }
-
-            // Incoming incidents dialog (reuses EmergencyRequestList composable)
-            if (showIncomingDialog) {
-                // Split incoming dialog into two sections: requests for responder's department and backup requests from other departments
-                val backupRequests = remember(incomingRequests, effectiveRole) {
-                    if (effectiveRole.isNullOrBlank()) emptyList() else incomingRequests.filter { !it.type.equals(effectiveRole, ignoreCase = true) }
-                }
-
-                AlertDialog(onDismissRequest = { showIncomingDialog = false }, title = { Text("Incoming Incidents") }, text = {
-                    Column(modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
-                        // Primary section: requests for this responder (if any)
-                        val roleTitle = effectiveRole?.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }
-                        EmergencyRequestList(requests = visibleIncomingRequests, title = if (effectiveRole.isNullOrBlank()) "Incoming Requests" else "Requests for $roleTitle")
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        // Backup requests from other departments (if present)
-                        if (backupRequests.isNotEmpty()) {
-                            EmergencyRequestList(requests = backupRequests, title = "Backup Requests (Other Departments)", showBackupBadge = true)
-                        }
-                    }
-                }, confirmButton = { Button(onClick = { showIncomingDialog = false }) { Text("Close") } })
-            }
+            // Primary action button: Settings
+            OutlinedButton(onClick = { showSettingsDialog = true }, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), shape = RoundedCornerShape(12.dp)) { Text("Settings") }
 
             // Mark Complete dialog with proof (notes + image). This enforces adding proof before submission.
             if (showMarkCompleteDialog && markTargetIncidentInc != null) {
@@ -1347,7 +1372,13 @@ fun HomeScreen(responderRole: String? = null) {
 
             // Keep the dialog outside the main content so it can appear regardless of scroll.
             if (showDepartmentSelection) {
-                DepartmentSelectionDialog(onDismiss = { showDepartmentSelection = false })
+                DepartmentSelectionDialog(
+                    onDismiss = { showDepartmentSelection = false },
+                    onSendBackupMessage = { departmentKey ->
+                        sendBackupMessageToDepartment(departmentKey)
+                        showDepartmentSelection = false
+                    }
+                )
             }
 
             if (showSettingsDialog) {
