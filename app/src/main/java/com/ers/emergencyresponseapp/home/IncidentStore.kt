@@ -30,6 +30,43 @@ object IncidentStore {
 
     fun getCompletionNotes(incidentId: String): String? = notesMap[incidentId]
 
+    // Simple in-memory completion timestamp map: incidentId -> epochMillis
+    private val completionTimeMap = mutableMapOf<String, Long?>()
+
+    fun storeCompletionTime(incidentId: String, epochMillis: Long?) {
+        if (epochMillis == null) return
+        completionTimeMap[incidentId] = epochMillis
+    }
+
+    fun getCompletionTime(incidentId: String): Long? = completionTimeMap[incidentId]
+
+    // Review workflow maps
+    // When a responder marks done, we set the incident status to PENDING_REVIEW and record proof/notes/time.
+    // The responder then submits a review (their feedback) which moves the incident into SUBMITTED_REVIEW state.
+    private val submittedReviewMap = mutableMapOf<String, String?>()
+
+    fun submitReview(incidentId: String, text: String) {
+        submittedReviewMap[incidentId] = text
+        val idx = incidents.indexOfFirst { it.id == incidentId }
+        if (idx >= 0) {
+            incidents[idx] = incidents[idx].copy(status = IncidentStatus.SUBMITTED_REVIEW)
+        }
+    }
+
+    fun getSubmittedReview(incidentId: String): String? = submittedReviewMap[incidentId]
+
+    fun adminApproveReview(incidentId: String) {
+        // Admin approves -> mark RESOLVED
+        val idx = incidents.indexOfFirst { it.id == incidentId }
+        if (idx >= 0) {
+            incidents[idx] = incidents[idx].copy(status = IncidentStatus.RESOLVED)
+            // record completion timestamp
+            storeCompletionTime(incidentId, System.currentTimeMillis())
+            // clear submitted review entry as it's now processed
+            submittedReviewMap.remove(incidentId)
+        }
+    }
+
     fun updateStatus(id: String, newStatus: IncidentStatus) {
         val idx = incidents.indexOfFirst { it.id == id }
         if (idx >= 0) {
@@ -37,11 +74,11 @@ object IncidentStore {
         }
     }
 
-    fun markResolved(id: String, assignedTo: String? = null) {
+    fun markPendingReview(id: String, assignedTo: String? = null) {
         val idx = incidents.indexOfFirst { it.id == id }
         if (idx >= 0) {
             val current = incidents[idx]
-            incidents[idx] = current.copy(status = IncidentStatus.RESOLVED, assignedTo = assignedTo ?: current.assignedTo)
+            incidents[idx] = current.copy(status = IncidentStatus.PENDING_REVIEW, assignedTo = assignedTo ?: current.assignedTo)
         }
     }
 

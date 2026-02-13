@@ -40,7 +40,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Call
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.LocalHospital
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MyLocation
@@ -60,6 +59,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -208,31 +208,6 @@ private fun ResponderAvatar(
 }
 
 // --- Helper functions for HomeScreen (must be defined before use) ---
-private fun MutableList<EmergencyRequest>.evaluateAndAssignIfAvailable(
-    responderAvailable: () -> Boolean,
-    accept: (EmergencyRequest) -> Unit
-) {
-    if (!responderAvailable()) return
-    val order = listOf(EmergencyPriority.High, EmergencyPriority.Medium, EmergencyPriority.Low)
-    for (p in order) {
-        val candidate = this.firstOrNull { it.priority == p }
-        if (candidate != null) {
-            accept(candidate)
-            return
-        }
-    }
-}
-
-private fun acceptIncident(
-    incoming: MutableList<EmergencyRequest>,
-    incident: EmergencyRequest,
-    onAssigned: (EmergencyRequest) -> Unit
-) {
-    incoming.removeAll { it.id == incident.id }
-    val assigned = incident.copy(status = "Assigned")
-    onAssigned(assigned)
-}
-
 private fun demoFeedIncomingRequests(list: MutableList<EmergencyRequest>) {
     val types = listOf("Medical", "Fire", "Crime", "Disaster")
     val priorities = EmergencyPriority.entries
@@ -374,14 +349,13 @@ fun HomeScreen(responderRole: String? = null) {
 
     // Keep responderName in sync if the account username is changed in settings during runtime
     LaunchedEffect(accountUsername) {
-        if (!accountUsername.isNullOrBlank()) {
+        if (accountUsername.isNotBlank()) {
             responderName = accountUsername
         }
     }
 
-    // Online/offline and availability
-    var onlineStatus by remember { mutableStateOf(ResponderOnlineStatus.Online) }
-    var responderAvailable by remember { mutableStateOf(true) }
+    // Online/offline
+    val onlineStatus by remember { mutableStateOf(ResponderOnlineStatus.Online) }
     // Incoming requests and assigned incident
     val incomingRequests = remember { mutableStateListOf<EmergencyRequest>() }
 
@@ -456,19 +430,6 @@ fun HomeScreen(responderRole: String? = null) {
         Log.d("HomeScreen", "Loaded ${incidentsList.size} incidents from IncidentStore")
     }
 
-    fun calculateCounts() {
-        // simple counts for logging (kept lightweight)
-        var f = 0; var m = 0; var c = 0; var d = 0
-        for (inc in incidentsList) {
-            when (inc.type) {
-                IncidentType.FIRE -> f++
-                IncidentType.MEDICAL -> m++
-                IncidentType.CRIME -> c++
-                IncidentType.DISASTER -> d++
-            }
-        }
-        Log.d("HomeScreen", "Counts updated - Fire:$f Medical:$m Crime:$c Disaster:$d")
-    }
 
     // Return incidents that are not resolved and reported within the last hour
     fun filterActiveIncidents(list: List<Incident>): List<Incident> {
@@ -667,17 +628,23 @@ fun HomeScreen(responderRole: String? = null) {
         try {
             // Prefer the account username (settings) as the author of actions; fall back to responderName variable.
             val prefsName = prefs.getString("account_username", responderName)
-             IncidentStore.markResolved(incident.id, prefsName)
-             incidentsList = IncidentStore.incidents.toList()
-             refreshActiveIncidents()
-             if (lastNotifiedIncidentId == incident.id) {
-                 lastNotifiedIncidentId = null
-                 try { prefs.edit().remove("last_notified_incident_id").apply() } catch (_: Exception) { /* ignore */ }
-             }
-             if (lastAssignedIncidentId == incident.id) {
-                 lastAssignedIncidentId = null
-                 try { prefs.edit().remove("last_assigned_incident_id").apply() } catch (_: Exception) { /* ignore */ }
-             }
+            // Move the incident into PENDING_REVIEW so the responder can submit a review before admin approval
+            IncidentStore.markPendingReview(incident.id, prefsName)
+            // Store proof and notes (completion time will be stored when admin approves or reviewer submits)
+            try { IncidentStore.storeProof(incident.id, proofUri) } catch (_: Exception) { /* ignore */ }
+            try { IncidentStore.storeCompletionNotes(incident.id, notes) } catch (_: Exception) { /* ignore */ }
+            // Signal UI/navigation to open the Reviews screen so the responder can submit their review
+            try { prefs.edit().putBoolean("navigate_to_reviews", true).putString("last_pending_incident_id", incident.id).apply() } catch (_: Exception) { /* ignore */ }
+            incidentsList = IncidentStore.incidents.toList()
+            refreshActiveIncidents()
+            if (lastNotifiedIncidentId == incident.id) {
+                lastNotifiedIncidentId = null
+                try { prefs.edit().remove("last_notified_incident_id").apply() } catch (_: Exception) { /* ignore */ }
+            }
+            if (lastAssignedIncidentId == incident.id) {
+                lastAssignedIncidentId = null
+                try { prefs.edit().remove("last_assigned_incident_id").apply() } catch (_: Exception) { /* ignore */ }
+            }
             // Auto-assign the next available incident so a new assignment triggers a notification.
             val desiredType: IncidentType? = effectiveRole?.let { roleStr ->
                 when (roleStr.trim().lowercase()) {
@@ -1279,12 +1246,12 @@ fun HomeScreen(responderRole: String? = null) {
                          Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                              Text(text = "Provide a short note and take a photo as proof that the incident has been completed.", color = MaterialTheme.colorScheme.onBackground)
 
-                             androidx.compose.material3.OutlinedTextField(
+                             OutlinedTextField(
                                  value = proofNotes,
                                  onValueChange = { proofNotes = it },
                                  label = { Text("Completion notes") },
                                  modifier = Modifier.fillMaxWidth(),
-                                 colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                                 colors = OutlinedTextFieldDefaults.colors(
                                      focusedTextColor = if (!hasProof) Color.White else MaterialTheme.colorScheme.onBackground,
                                      unfocusedTextColor = if (!hasProof) Color.White else MaterialTheme.colorScheme.onBackground
                                  )
@@ -1373,7 +1340,7 @@ fun HomeScreen(responderRole: String? = null) {
                             .putString("account_photo", accountPhotoUri)
                             .apply()
                         // Update displayed responder name to use the username set in settings.
-                        if (!accountUsername.isNullOrBlank()) {
+                        if (accountUsername.isNotBlank()) {
                             responderName = accountUsername.trim()
                         }
                         showSettingsDialog = false
