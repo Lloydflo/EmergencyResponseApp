@@ -46,6 +46,19 @@ data class VerifyOtpResponse(
     val user: UserDto? = null
 )
 
+/** Request payload for POST /api/verify-otp */
+data class VerifyOtpRequest(
+    val email: String,
+    val otp: String
+)
+
+/** Response payload from POST /api/verify-otp */
+data class VerifyOtpResponse(
+    val success: Boolean,
+    val message: String,
+    val user: UserDto? = null
+)
+
 interface AuthApi {
     @POST("api/login")
     suspend fun login(@Body body: LoginRequest): LoginResponse
