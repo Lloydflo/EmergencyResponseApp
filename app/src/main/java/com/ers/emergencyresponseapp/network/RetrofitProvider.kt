@@ -1,14 +1,32 @@
 package com.ers.emergencyresponseapp.network
 
+import android.util.Log
+import okhttp3.OkHttpClient
+import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 
 object RetrofitProvider {
-    private const val BASE_URL = "http://192.168.1.7:3000/"
+    private const val BASE_URL = "https://hytographicallly-nondistorted-aurelia.ngrok-free.dev/"
+
+    private val httpLoggingInterceptor: HttpLoggingInterceptor by lazy {
+        HttpLoggingInterceptor { message ->
+            Log.d("RetrofitHttp", message)
+        }.apply {
+            level = HttpLoggingInterceptor.Level.BODY
+        }
+    }
+
+    private val okHttpClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .addInterceptor(httpLoggingInterceptor)
+            .build()
+    }
 
     val authApi: AuthApi by lazy {
         Retrofit.Builder()
             .baseUrl(BASE_URL)
+            .client(okHttpClient)
             .addConverterFactory(GsonConverterFactory.create())
             .build()
             .create(AuthApi::class.java)
