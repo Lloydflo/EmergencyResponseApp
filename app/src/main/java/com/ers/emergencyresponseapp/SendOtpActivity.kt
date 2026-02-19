@@ -70,15 +70,12 @@ class SendOtpActivity : ComponentActivity() {
 
                                 lifecycleScope.launch {
                                     try {
-                                        val response = RetrofitProvider.apiService.sendOtp(
+                                        val response = RetrofitProvider.authApi.sendOtp(
                                             SendOtpRequest(email = email.trim())
                                         )
-                                        val body = response.body()
-                                        val isSuccess = body?.success ?: response.isSuccessful
-                                        val serverMessage = body?.message ?: "HTTP ${response.code()}"
-                                        message = serverMessage
+                                        message = response.message
 
-                                        if (isSuccess) {
+                                        if (response.success) {
                                             Toast.makeText(
                                                 this@SendOtpActivity,
                                                 "OTP sent successfully",
@@ -87,7 +84,7 @@ class SendOtpActivity : ComponentActivity() {
                                         } else {
                                             Toast.makeText(
                                                 this@SendOtpActivity,
-                                                "Failed: $serverMessage",
+                                                "Failed: ${response.message}",
                                                 Toast.LENGTH_SHORT
                                             ).show()
                                         }

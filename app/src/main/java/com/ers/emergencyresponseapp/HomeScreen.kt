@@ -662,22 +662,33 @@ fun HomeScreen(responderRole: String? = null) {
         }
     }
 
-    // Mark an incident as done (RESOLVED) with notes and proof URI.
+    // Mark an incident as done (move to PENDING_REVIEW) with notes and proof URI.
     fun markIncidentDone(incident: Incident, notes: String, proofUri: String?) {
         try {
             // Prefer the account username (settings) as the author of actions; fall back to responderName variable.
             val prefsName = prefs.getString("account_username", responderName)
-             IncidentStore.markResolved(incident.id, prefsName)
-             incidentsList = IncidentStore.incidents.toList()
-             refreshActiveIncidents()
-             if (lastNotifiedIncidentId == incident.id) {
-                 lastNotifiedIncidentId = null
-                 try { prefs.edit().remove("last_notified_incident_id").apply() } catch (_: Exception) { /* ignore */ }
-             }
-             if (lastAssignedIncidentId == incident.id) {
-                 lastAssignedIncidentId = null
-                 try { prefs.edit().remove("last_assigned_incident_id").apply() } catch (_: Exception) { /* ignore */ }
-             }
+
+            // Move the incident into the pending review workflow instead of resolving immediately.
+            IncidentStore.markPendingReview(incident.id, prefsName)
+
+            // Persist proof, notes and completion timestamp in the IncidentStore supportive maps.
+            try { IncidentStore.storeProof(incident.id, proofUri) } catch (_: Exception) { /* ignore */ }
+            try { IncidentStore.storeCompletionNotes(incident.id, notes) } catch (_: Exception) { /* ignore */ }
+            try { IncidentStore.storeCompletionTime(incident.id, System.currentTimeMillis()) } catch (_: Exception) { /* ignore */ }
+
+            // Refresh local lists so UI updates.
+            incidentsList = IncidentStore.incidents.toList()
+            refreshActiveIncidents()
+
+            if (lastNotifiedIncidentId == incident.id) {
+                lastNotifiedIncidentId = null
+                try { prefs.edit().remove("last_notified_incident_id").apply() } catch (_: Exception) { /* ignore */ }
+            }
+            if (lastAssignedIncidentId == incident.id) {
+                lastAssignedIncidentId = null
+                try { prefs.edit().remove("last_assigned_incident_id").apply() } catch (_: Exception) { /* ignore */ }
+            }
+
             // Auto-assign the next available incident so a new assignment triggers a notification.
             val desiredType: IncidentType? = effectiveRole?.let { roleStr ->
                 when (roleStr.trim().lowercase()) {
@@ -690,7 +701,7 @@ fun HomeScreen(responderRole: String? = null) {
             val nextIncident = IncidentStore.incidents.firstOrNull { inc ->
                 val matchesType = desiredType?.let { inc.type == it } ?: true
                 val unassigned = inc.assignedTo.isNullOrBlank()
-                val notResolved = inc.status != IncidentStatus.RESOLVED
+                val notResolved = inc.status != IncidentStatus.RESOLVED && inc.status != IncidentStatus.PENDING_REVIEW && inc.status != IncidentStatus.SUBMITTED_REVIEW
                 matchesType && unassigned && notResolved
             }
             if (nextIncident != null) {
@@ -700,8 +711,8 @@ fun HomeScreen(responderRole: String? = null) {
                 lastAssignedIncidentId = nextIncident.id
                 try { prefs.edit().putString("last_assigned_incident_id", nextIncident.id).apply() } catch (_: Exception) { /* ignore */ }
             }
-            Toast.makeText(context, "Incident marked complete and proof sent", Toast.LENGTH_SHORT).show()
-            Log.i("HomeScreen", "Marked incident ${incident.id} resolved. Notes: ${notes}. Proof: ${proofUri}")
+            Toast.makeText(context, "Incident marked pending review and proof saved", Toast.LENGTH_SHORT).show()
+            Log.i("HomeScreen", "Marked incident ${incident.id} pending review. Notes: ${notes}. Proof: ${proofUri}")
         } catch (e: Exception) {
             Log.e("HomeScreen", "Failed to mark incident done: ${e.message}")
             Toast.makeText(context, "Failed to mark complete", Toast.LENGTH_SHORT).show()

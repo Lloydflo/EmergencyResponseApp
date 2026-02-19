@@ -37,7 +37,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -69,7 +68,8 @@ private data class ReviewableIncident(
     val type: String,
     val date: String,
     val status: ReviewStatus,
-    val proofUri: String? = null // optional image proof captured when marking done
+    val proofUri: String? = null, // optional image proof captured when marking done
+    val completionNotes: String? = null
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -125,7 +125,7 @@ private fun IncidentReviewList(selectedFilter: ReviewStatus) {
     // Obtain current responder name from SharedPreferences so we only show resolved incidents assigned to them
     val context = LocalContext.current
     val prefs = context.getSharedPreferences("ers_prefs", android.content.Context.MODE_PRIVATE)
-    val responderName = prefs.getString("responder_name", "Name") ?: "Name"
+    // Note: we build candidate names below; no single responderName variable required.
 
     // Dialog state for composing a review
     val showComposeDialog = remember { mutableStateOf(false) }
@@ -140,23 +140,49 @@ private fun IncidentReviewList(selectedFilter: ReviewStatus) {
     // State for image preview dialog (full screen)
     val showImageDialog = remember { mutableStateOf<String?>(null) }
 
-    // Simple in-memory storage of submitted reviews (for demo). Pair(incidentId, text) where id has no leading '#'
-    val submittedReviews = remember { mutableStateListOf<Pair<String,String>>() }
-
-    // Submit handler: record submission and show toast. We store the raw incident id without '#'.
+    // Submit handler: delegate to IncidentStore and show toast. This moves incident -> SUBMITTED_REVIEW.
     fun submitReview(incident: ReviewableIncident, text: String) {
         val plainId = incident.id.removePrefix("#")
-        submittedReviews.add(Pair(plainId, text))
-        Toast.makeText(context, "Review submitted", Toast.LENGTH_SHORT).show()
+        try {
+            IncidentStore.submitReview(plainId, text)
+            Toast.makeText(context, "Review submitted", Toast.LENGTH_SHORT).show()
+        } catch (_: Exception) {
+            Toast.makeText(context, "Failed to submit review", Toast.LENGTH_SHORT).show()
+        }
     }
 
-    // Derive the reviewable incidents dynamically from the shared IncidentStore and submittedReviews
+    // Build a set of possible names that may be stored as assignedTo (support username/full name/legacy key)
+    val candidateNames = listOfNotNull(
+        prefs.getString("account_username", null),
+        prefs.getString("responder_name", null),
+        prefs.getString("account_full_name", null)
+    ).map { it.trim().lowercase() }.toSet()
+
+    // Derive the reviewable incidents dynamically from the shared IncidentStore and submitted reviews
     val derivedIncidents = IncidentStore.incidents
-        .filter { it.status == IncidentStatus.RESOLVED && it.assignedTo == responderName }
+        .filter { inc ->
+            // include incidents that are in the review workflow and assigned to this responder
+            val assigned = inc.assignedTo?.trim()?.lowercase()
+            val matchesAssigned = if (candidateNames.isNotEmpty()) assigned != null && candidateNames.contains(assigned) else assigned != null
+            // include only PENDING_REVIEW, SUBMITTED_REVIEW, or RESOLVED (completed)
+            matchesAssigned && (inc.status == IncidentStatus.PENDING_REVIEW || inc.status == IncidentStatus.SUBMITTED_REVIEW || inc.status == IncidentStatus.RESOLVED)
+        }
         .map { inc ->
-            val isSubmitted = submittedReviews.any { it.first == inc.id }
             val proof = try { IncidentStore.getProofUri(inc.id) } catch (_: Exception) { null }
-            ReviewableIncident("#${inc.id}", inc.type.displayName, java.text.SimpleDateFormat("yyyy-MM-dd | HH:mm", java.util.Locale.getDefault()).format(inc.timeReported), if (isSubmitted) ReviewStatus.Submitted else ReviewStatus.Pending, proof)
+            val notes = try { IncidentStore.getCompletionNotes(inc.id) } catch (_: Exception) { null }
+            val submittedText = try { IncidentStore.getSubmittedReview(inc.id) } catch (_: Exception) { null }
+            val completionTs = try { IncidentStore.getCompletionTime(inc.id) } catch (_: Exception) { null }
+            val status = when (inc.status) {
+                IncidentStatus.PENDING_REVIEW -> ReviewStatus.Pending
+                IncidentStatus.SUBMITTED_REVIEW -> ReviewStatus.Submitted
+                IncidentStatus.RESOLVED -> if (completionTs != null) ReviewStatus.Completed else ReviewStatus.Submitted
+                else -> ReviewStatus.Pending
+            }
+            val dateStr = completionTs?.let { java.text.SimpleDateFormat("yyyy-MM-dd | HH:mm", java.util.Locale.getDefault()).format(java.util.Date(it)) }
+                ?: java.text.SimpleDateFormat("yyyy-MM-dd | HH:mm", java.util.Locale.getDefault()).format(inc.timeReported)
+            // For submitted status, prefer submittedText as details
+            val detailsNotes = submittedText ?: notes
+            ReviewableIncident("#${inc.id}", inc.type.displayName, dateStr, status, proof, detailsNotes)
         }
 
     // Keep some static submitted/completed examples after the pending ones
@@ -189,9 +215,15 @@ private fun IncidentReviewList(selectedFilter: ReviewStatus) {
                         }
                     }
                     Spacer(modifier = Modifier.height(12.dp))
-                    // Show date and proof thumbnail if available
+                    // Show date and proof thumbnail if available, and completion notes
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                        Text(text = "Date: ${incident.date}", style = MaterialTheme.typography.bodyMedium)
+                        Column {
+                            Text(text = "Date: ${incident.date}", style = MaterialTheme.typography.bodyMedium)
+                            incident.completionNotes?.let { notes ->
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(text = "Notes: $notes", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f))
+                            }
+                        }
                         incident.proofUri?.let { uriStr ->
                             val ctx = LocalContext.current
                             val bitmap = remember(uriStr) {
@@ -224,54 +256,54 @@ private fun IncidentReviewList(selectedFilter: ReviewStatus) {
                         } else {
                             // For Submitted/Completed show details popup (if we have stored details)
                             val plainId = incident.id.removePrefix("#")
-                            val found = submittedReviews.firstOrNull { it.first == plainId }?.second
-                            detailsText.value = found ?: "No review details available"
-                            detailsSelected.value = incident
-                            showDetailsDialog.value = true
-                        }
-                    }, modifier = Modifier.align(Alignment.End)) {
-                        Text(if (incident.status == ReviewStatus.Pending) "Write Review" else "View Details")
-                    }
-                }
-            }
-        }
-    }
+                            val found = IncidentStore.getSubmittedReview(plainId)
+                            detailsText.value = found ?: IncidentStore.getCompletionNotes(plainId) ?: "No review details available"
+                             detailsSelected.value = incident
+                             showDetailsDialog.value = true
+                         }
+                     }, modifier = Modifier.align(Alignment.End)) {
+                         Text(if (incident.status == ReviewStatus.Pending) "Write Review" else "View Details")
+                     }
+                 }
+             }
+         }
+     }
 
-    // Compose dialog: require non-empty reviewText before enabling Submit
-    if (showComposeDialog.value && composeSelected.value != null) {
-        AlertDialog(
-            onDismissRequest = { showComposeDialog.value = false; composeSelected.value = null },
-            title = { Text(text = "Write Review for ${composeSelected.value?.type}") },
-            text = {
-                Column {
-                    OutlinedTextField(
-                        value = reviewText.value,
-                        onValueChange = { reviewText.value = it },
-                        label = { Text("Your feedback") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    if (reviewText.value.isBlank()) {
-                        Spacer(modifier = Modifier.size(6.dp))
-                        Text(text = "Please enter feedback before submitting.", color = Color(0xFFD32F2F), fontWeight = FontWeight.SemiBold)
-                    }
-                }
-            },
-            confirmButton = {
-                Button(onClick = {
-                    val inc = composeSelected.value
-                    if (inc != null && reviewText.value.isNotBlank()) {
-                        submitReview(inc, reviewText.value)
-                    }
-                    reviewText.value = ""
-                    composeSelected.value = null
-                    showComposeDialog.value = false
-                }, enabled = reviewText.value.isNotBlank()) { Text("Submit") }
-            },
-            dismissButton = {
-                Button(onClick = { showComposeDialog.value = false; composeSelected.value = null }) { Text("Cancel") }
-            }
-        )
-    }
+     // Compose dialog: require non-empty reviewText before enabling Submit
+     if (showComposeDialog.value && composeSelected.value != null) {
+         AlertDialog(
+             onDismissRequest = { showComposeDialog.value = false; composeSelected.value = null },
+             title = { Text(text = "Write Review for ${composeSelected.value?.type}") },
+             text = {
+                 Column {
+                     OutlinedTextField(
+                         value = reviewText.value,
+                         onValueChange = { reviewText.value = it },
+                         label = { Text("Your feedback") },
+                         modifier = Modifier.fillMaxWidth()
+                     )
+                     if (reviewText.value.isBlank()) {
+                         Spacer(modifier = Modifier.size(6.dp))
+                         Text(text = "Please enter feedback before submitting.", color = Color(0xFFD32F2F), fontWeight = FontWeight.SemiBold)
+                     }
+                 }
+             },
+             confirmButton = {
+                 Button(onClick = {
+                      val inc = composeSelected.value
+                      if (inc != null && reviewText.value.isNotBlank()) {
+                         submitReview(inc, reviewText.value)
+                      }
+                      reviewText.value = ""
+                      composeSelected.value = null
+                      showComposeDialog.value = false
+                  }, enabled = reviewText.value.isNotBlank()) { Text("Submit") }
+             },
+             dismissButton = {
+                 Button(onClick = { showComposeDialog.value = false; composeSelected.value = null }) { Text("Cancel") }
+             }
+         )
+     }
 
     // Details dialog for submitted reviews
     if (showDetailsDialog.value && detailsSelected.value != null) {

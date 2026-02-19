@@ -28,13 +28,11 @@ class LoginApiViewModel : ViewModel() {
         viewModelScope.launch {
             _uiState.value = LoginApiUiState(loading = true)
             try {
-                val response = RetrofitProvider.apiService.login(LoginRequest(email = email.trim()))
-                val body = response.body()
-
+                val response = RetrofitProvider.authApi.login(LoginRequest(email = email.trim()))
                 _uiState.value = LoginApiUiState(
                     loading = false,
-                    success = body?.success ?: response.isSuccessful,
-                    message = body?.message ?: ("HTTP ${response.code()}")
+                    success = response.success,
+                    message = response.message
                 )
             } catch (e: Exception) {
                 _uiState.value = LoginApiUiState(

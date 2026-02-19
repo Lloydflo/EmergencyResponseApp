@@ -113,12 +113,25 @@ class MainActivity : ComponentActivity() {
 
                                 // Home route (no role) and home route accepting an optional role segment
                                 composable("home") {
-                                    AnimatedHomeScreen(responderRole = null)
-                                }
-                                composable("home/{role}") { backStackEntry ->
-                                    val roleArg = backStackEntry.arguments?.getString("role")
-                                    AnimatedHomeScreen(responderRole = roleArg?.takeIf { it.isNotBlank() })
-                                }
+                                     AnimatedHomeScreen(responderRole = null)
+                                 }
+                                 composable("home/{role}") { backStackEntry ->
+                                     val roleArg = backStackEntry.arguments?.getString("role")
+                                     AnimatedHomeScreen(responderRole = roleArg?.takeIf { it.isNotBlank() })
+                                     // Check for navigation trigger from HomeScreen (mark-done flow)
+                                     val innerContext = LocalContext.current
+                                     val innerPrefs = innerContext.getSharedPreferences("ers_prefs", Context.MODE_PRIVATE)
+                                     LaunchedEffect(Unit) {
+                                         if (innerPrefs.getBoolean("navigate_to_reviews", false)) {
+                                             // clear flag and navigate
+                                             innerPrefs.edit().putBoolean("navigate_to_reviews", false).apply()
+                                             navController.navigate("reviews_feedback") {
+                                                 popUpTo(navController.graph.startDestinationId)
+                                                 launchSingleTop = true
+                                             }
+                                         }
+                                     }
+                                 }
 
                                 // Coordination portal screen (accessible from bottom navigation)
                                 composable("coordination_portal") {
