@@ -13,30 +13,24 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 
-/**
- * Example usage: call Retrofit POST /api/login from UI through a ViewModel.
- */
 @Composable
 fun LoginApiExampleScreen(
     modifier: Modifier = Modifier,
     viewModel: LoginApiViewModel = viewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    val email = remember { mutableStateOf("") }
 
     Column(
         modifier = modifier.padding(16.dp),
         verticalArrangement = Arrangement.Center
     ) {
         OutlinedTextField(
-            value = email.value,
-            onValueChange = { email.value = it },
+            value = uiState.email,
+            onValueChange = viewModel::onEmailChanged,
             label = { Text("Email") },
             modifier = Modifier.fillMaxWidth()
         )
@@ -44,10 +38,27 @@ fun LoginApiExampleScreen(
         Spacer(modifier = Modifier.height(12.dp))
 
         Button(
-            onClick = { viewModel.loginWithEmail(email.value) },
+            onClick = viewModel::sendOtp,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("Login via Retrofit")
+            Text("Send OTP via Retrofit")
+        }
+
+        if (uiState.otpSent) {
+            Spacer(modifier = Modifier.height(12.dp))
+            OutlinedTextField(
+                value = uiState.otp,
+                onValueChange = viewModel::onOtpChanged,
+                label = { Text("OTP") },
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Button(
+                onClick = { viewModel.verifyOtp {} },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Verify OTP")
+            }
         }
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -55,8 +66,8 @@ fun LoginApiExampleScreen(
         if (uiState.loading) {
             CircularProgressIndicator()
         } else {
-            Text("Success: ${uiState.success ?: "-"}")
             Text("Message: ${uiState.message ?: "-"}")
+            Text("Error: ${uiState.error ?: "-"}")
         }
     }
 }
