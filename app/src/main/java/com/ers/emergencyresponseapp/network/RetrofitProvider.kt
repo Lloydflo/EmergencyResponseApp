@@ -26,6 +26,17 @@ object RetrofitProvider {
             .addInterceptor(bodyLogger)
             .build()
     }
+    private const val BASE_URL = "http://192.168.1.7:3000/"
+
+    private val loggingClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                val request = chain.request()
+                Log.d("RetrofitProvider", "Request URL: ${request.method} ${request.url}")
+                chain.proceed(request)
+            }
+            .build()
+    }
 
     val authApi: AuthApi by lazy {
         Retrofit.Builder()
