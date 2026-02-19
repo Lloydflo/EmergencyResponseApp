@@ -26,24 +26,6 @@ app.get('/health/db', async (req, res) => {
   }
 });
 
-app.get('/test/insert', async (req, res) => {
-  try {
-    const email = `test_${Date.now()}@mail.com`;
-    const otp = '123456';
-
-    await pool.query(
-      'INSERT INTO users (email, otp) VALUES (?, ?)',
-      [email, otp]
-    );
-
-    res.json({ ok: true, inserted: { email, otp } });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message || String(e) });
-  }
-});
-
-
-
 // mount auth routes under /api
 app.use('/api', authRouter);
 
