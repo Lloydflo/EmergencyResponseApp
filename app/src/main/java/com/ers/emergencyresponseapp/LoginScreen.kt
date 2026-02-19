@@ -44,29 +44,11 @@ import java.net.URL
  * - POST {base}/verify_otp.php { email, otp_code }
  *
  * Base URL logic:
- * - Emulator: http://10.0.2.2:8080
- * - Real device: http://{backend_host from strings.xml}
+ * - Uses the configured backend base URL from strings.xml
  */
 
 private fun getBackendBase(context: Context): String {
-    val fingerprint = android.os.Build.FINGERPRINT ?: ""
-    val model = android.os.Build.MODEL ?: ""
-    val manufacturer = android.os.Build.MANUFACTURER ?: ""
-    val brand = android.os.Build.BRAND ?: ""
-    val device = android.os.Build.DEVICE ?: ""
-    val product = android.os.Build.PRODUCT ?: ""
-
-    val isEmulator = fingerprint.contains("generic", ignoreCase = true)
-            || fingerprint.contains("emulator", ignoreCase = true)
-            || model.contains("google_sdk", ignoreCase = true)
-            || model.contains("Emulator", ignoreCase = true)
-            || model.contains("Android SDK built for", ignoreCase = true)
-            || manufacturer.contains("Genymotion", ignoreCase = true)
-            || (brand.startsWith("generic") && device.startsWith("generic"))
-            || product.contains("sdk", ignoreCase = true)
-
-    val host = if (isEmulator) "10.0.2.2:8080" else context.getString(R.string.backend_host)
-    return if (host.startsWith("http")) host else "http://$host"
+    return context.getString(R.string.backend_base_url).trimEnd('/')
 }
 
 private fun safeParseJsonObject(raw: String): JSONObject? {
