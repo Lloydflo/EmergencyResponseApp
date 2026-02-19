@@ -7,7 +7,7 @@ import retrofit2.converter.gson.GsonConverterFactory
 import java.util.concurrent.TimeUnit
 
 // Must not include /api; endpoints already include api/... path.
-private const val BASE_URL = "http://192.168.1.7:3000/"
+private const val BASE_URL = "https://hytographicallly-nondistorted-aurelia.ngrok-free.dev/"
 
 object Network {
     // Create the Retrofit ApiService using the BASE_URL constant
