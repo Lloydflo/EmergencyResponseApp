@@ -39,6 +39,6 @@
     <string name="close">Close</string>
 
     <!-- Backend configuration -->
-    <string name="backend_base_url">http://192.168.1.7:3000</string>
+    <string name="backend_base_url">https://hytographicallly-nondistorted-aurelia.ngrok-free.dev</string>
 
 </resources>
