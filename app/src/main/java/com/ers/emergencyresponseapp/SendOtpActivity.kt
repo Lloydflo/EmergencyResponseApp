@@ -29,7 +29,7 @@ import com.ers.emergencyresponseapp.network.SendOtpRequest
 import kotlinx.coroutines.launch
 
 /**
- * Activity example: sends POST http://192.168.1.7:3000/api/send-otp using Retrofit.
+ * Activity example: sends POST https://hytographicallly-nondistorted-aurelia.ngrok-free.dev/api/send-otp using Retrofit.
  */
 class SendOtpActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
