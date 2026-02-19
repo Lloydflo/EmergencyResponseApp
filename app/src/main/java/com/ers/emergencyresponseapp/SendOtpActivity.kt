@@ -1,6 +1,7 @@
 package com.ers.emergencyresponseapp
 
 import android.os.Bundle
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -27,6 +28,7 @@ import androidx.lifecycle.lifecycleScope
 import com.ers.emergencyresponseapp.network.RetrofitProvider
 import com.ers.emergencyresponseapp.network.SendOtpRequest
 import kotlinx.coroutines.launch
+import retrofit2.HttpException
 
 /**
  * Activity example: sends POST https://hytographicallly-nondistorted-aurelia.ngrok-free.dev/api/send-otp using Retrofit.
@@ -88,7 +90,17 @@ class SendOtpActivity : ComponentActivity() {
                                                 Toast.LENGTH_SHORT
                                             ).show()
                                         }
+                                    } catch (e: HttpException) {
+                                        val errorBody = e.response()?.errorBody()?.string().orEmpty()
+                                        Log.e("SendOtpActivity", "sendOtp failed: code=${e.code()} body=$errorBody", e)
+                                        message = "Request failed (${e.code()}): ${if (errorBody.isNotBlank()) errorBody else (e.message ?: "Unknown error")}" 
+                                        Toast.makeText(
+                                            this@SendOtpActivity,
+                                            message,
+                                            Toast.LENGTH_SHORT
+                                        ).show()
                                     } catch (e: Exception) {
+                                        Log.e("SendOtpActivity", "sendOtp exception", e)
                                         message = "Request failed: ${e.message ?: "Unknown error"}"
                                         Toast.makeText(
                                             this@SendOtpActivity,

@@ -29,7 +29,21 @@ data class SendOtpRequest(
 /** Response payload from POST /api/send-otp */
 data class SendOtpResponse(
     val success: Boolean,
-    val message: String
+    val message: String,
+    val otp: String? = null
+)
+
+/** Request payload for POST /api/verify-otp */
+data class VerifyOtpRequest(
+    val email: String,
+    val otp: String
+)
+
+/** Response payload from POST /api/verify-otp */
+data class VerifyOtpResponse(
+    val success: Boolean,
+    val message: String,
+    val user: UserDto? = null
 )
 
 /** Request payload for POST /api/verify-otp */
