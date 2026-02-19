@@ -7,26 +7,21 @@ import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 
 object RetrofitProvider {
-    // Must not include /api; endpoints already include api/... path.
     private const val BASE_URL = "https://hytographicallly-nondistorted-aurelia.ngrok-free.dev/"
 
-    private val loggingClient: OkHttpClient by lazy {
-        val bodyLogger = HttpLoggingInterceptor { message ->
-            Log.d("RetrofitBody", message)
+    private val httpLoggingInterceptor: HttpLoggingInterceptor by lazy {
+        HttpLoggingInterceptor { message ->
+            Log.d("RetrofitHttp", message)
         }.apply {
             level = HttpLoggingInterceptor.Level.BODY
         }
+    }
 
+    private val okHttpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
-            .addInterceptor { chain ->
-                val request = chain.request()
-                Log.d("RetrofitProvider", "Request URL: ${request.method} ${request.url}")
-                chain.proceed(request)
-            }
-            .addInterceptor(bodyLogger)
+            .addInterceptor(httpLoggingInterceptor)
             .build()
     }
-    private const val BASE_URL = "http://192.168.1.7:3000/"
 
     private val loggingClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
@@ -60,7 +55,7 @@ object RetrofitProvider {
     private val retrofit: Retrofit by lazy {
         Retrofit.Builder()
             .baseUrl(BASE_URL)
-            .client(loggingClient)
+            .client(okHttpClient)
             .addConverterFactory(GsonConverterFactory.create())
             .build()
     }
