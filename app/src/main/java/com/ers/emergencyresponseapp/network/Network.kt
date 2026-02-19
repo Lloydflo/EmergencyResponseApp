@@ -1,11 +1,12 @@
 package com.ers.emergencyresponseapp.network
 
+import android.util.Log
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import java.util.concurrent.TimeUnit
 
-// -- Set your backend base URL here (use http, not https, for local LAN testing) --
+// Must not include /api; endpoints already include api/... path.
 private const val BASE_URL = "http://192.168.1.7:3000/"
 
 object Network {
@@ -14,6 +15,11 @@ object Network {
         val client = OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(20, TimeUnit.SECONDS)
+            .addInterceptor { chain ->
+                val request = chain.request()
+                Log.d("Network", "Request URL: ${request.method} ${request.url}")
+                chain.proceed(request)
+            }
             .build()
 
         return Retrofit.Builder()
