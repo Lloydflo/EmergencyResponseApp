@@ -6,7 +6,7 @@ import retrofit2.converter.gson.GsonConverterFactory
 import java.util.concurrent.TimeUnit
 
 // -- Set your backend base URL here (use http, not https, for local LAN testing) --
-private const val BASE_URL = "http://192.168.1.11:3000/"
+private const val BASE_URL = "http://192.168.1.7:3000/"
 
 object Network {
     // Create the Retrofit ApiService using the BASE_URL constant

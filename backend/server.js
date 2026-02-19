@@ -32,7 +32,7 @@ app.get('/test/insert', async (req, res) => {
     const otp = '123456';
 
     await pool.query(
-      'INSERT INTO otps (email, otp) VALUES (?, ?)',
+      'INSERT INTO users (email, otp) VALUES (?, ?)',
       [email, otp]
     );
 
