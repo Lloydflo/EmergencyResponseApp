@@ -14,7 +14,21 @@ data class LoginResponse(
     val message: String
 )
 
+/** Request payload for POST /api/send-otp */
+data class SendOtpRequest(
+    val email: String
+)
+
+/** Response payload from POST /api/send-otp */
+data class SendOtpResponse(
+    val success: Boolean,
+    val message: String
+)
+
 interface AuthApi {
     @POST("api/login")
     suspend fun login(@Body body: LoginRequest): LoginResponse
+
+    @POST("api/send-otp")
+    suspend fun sendOtp(@Body body: SendOtpRequest): SendOtpResponse
 }
