@@ -1,61 +1,50 @@
 import 'dotenv/config';
 import express from 'express';
-import mysql from 'mysql2/promise';
+import cors from 'cors';
+import authRouter from './routes/auth.js';
+import pool from './db.js';
 
 const app = express();
 app.disable('x-powered-by');
 app.use(express.json({ limit: '256kb' }));
 
+// CORS: allow all origins for testing on LAN; in production restrict origins
+app.use(cors());
+
 const PORT = Number(process.env.PORT || 3000);
-const HOST = process.env.HOST || '192.168.1.11';
+// bind to all interfaces by default so the server is reachable from other devices on the LAN
+const HOST = process.env.HOST || '0.0.0.0';
 
-function requireEnv(name, fallback) {
-  const value = process.env[name] ?? fallback;
-  if (!value || String(value).trim() === '') {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
-  return String(value);
-}
+app.get('/health', (req, res) => res.json({ ok: true }));
 
-const pool = mysql.createPool({
-  host: requireEnv('DB_HOST', '127.0.0.1'),
-  port: Number(process.env.DB_PORT || 3306),
-  user: requireEnv('DB_USER', 'root'),
-  password: requireEnv('DB_PASS', ''),
-  database: requireEnv('DB_NAME', 'emergency_application'),
-  waitForConnections: true,
-  connectionLimit: Number(process.env.DB_CONN_LIMIT || 10),
-  queueLimit: 0
-});
+// mount auth routes under /api
+app.use('/api', authRouter);
 
-app.get('/', (req, res) => {
-  res.json({ ok: true, service: 'backend', now: new Date().toISOString() });
-});
+// global 404 -> JSON
+app.use((req, res) => res.status(404).json({ success: false, message: 'Not found' }));
 
-app.get('/db-health', async (req, res) => {
-  try {
-    const [rows] = await pool.query('SELECT 1 AS ok');
-    res.json({ ok: true, db: rows?.[0]?.ok === 1 });
-  } catch (err) {
-    res.status(500).json({ ok: false, message: 'Database connection failed' });
-  }
-});
-
-app.use((req, res) => res.status(404).json({ ok: false, message: 'Not found' }));
-
+// global error handler
 app.use((err, req, res, next) => {
-  console.error('[unhandled]', err);
-  res.status(500).json({ ok: false, message: 'Internal server error' });
+  console.error('Unhandled error:', err);
+  res.status(500).json({ success: false, message: 'Server error' });
 });
 
 async function start() {
-  await pool.query('SELECT 1');
+  // quick DB check
+  try {
+    await pool.query('SELECT 1');
+  } catch (e) {
+    console.error('DB connectivity check failed:', e.message || e);
+    // still start server so health endpoint can be used to debug; but you may choose to exit instead
+    // process.exitCode = 1; return;
+  }
+
   app.listen(PORT, HOST, () => {
     console.log(`Server listening on http://${HOST}:${PORT}`);
   });
 }
 
-start().catch((e) => {
-  console.error('Startup failed:', e?.message || e);
+start().catch(e => {
+  console.error('Startup failed:', e);
   process.exitCode = 1;
 });

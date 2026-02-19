@@ -29,7 +29,7 @@ $DB_HOST = env('DB_HOST', '127.0.0.1');
 $DB_PORT = (int) env('DB_PORT', '3306');
 $DB_NAME = env('DB_NAME', 'emergency_application');
 $DB_USER = env('DB_USER', 'root');
-$DB_PASS = env('DB_PASS', 'password123');
+$DB_PASS = env('DB_PASS', '');
 
 mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
 
