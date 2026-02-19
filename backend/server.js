@@ -7,7 +7,7 @@ app.disable('x-powered-by');
 app.use(express.json({ limit: '256kb' }));
 
 const PORT = Number(process.env.PORT || 3000);
-const HOST = process.env.HOST || '192.168.1.11';
+const HOST = process.env.HOST || '192.168.1.7';
 
 function requireEnv(name, fallback) {
   const value = process.env[name] ?? fallback;
