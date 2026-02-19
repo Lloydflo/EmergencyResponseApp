@@ -17,6 +17,33 @@ const HOST = process.env.HOST || '0.0.0.0';
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 
+app.get('/health/db', async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT 1 AS ok');
+    res.json({ ok: true, db: rows[0] });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
+app.get('/test/insert', async (req, res) => {
+  try {
+    const email = `test_${Date.now()}@mail.com`;
+    const otp = '123456';
+
+    await pool.query(
+      'INSERT INTO otps (email, otp) VALUES (?, ?)',
+      [email, otp]
+    );
+
+    res.json({ ok: true, inserted: { email, otp } });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
+
+
 // mount auth routes under /api
 app.use('/api', authRouter);
 
