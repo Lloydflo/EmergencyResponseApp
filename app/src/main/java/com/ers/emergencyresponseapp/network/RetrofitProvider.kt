@@ -1,7 +1,6 @@
 package com.ers.emergencyresponseapp.network
 
 import android.util.Log
-import com.ers.emergencyresponseapp.BuildConfig
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
@@ -14,11 +13,7 @@ object RetrofitProvider {
         HttpLoggingInterceptor { message ->
             Log.d("RetrofitHttp", message)
         }.apply {
-            level = if (BuildConfig.DEBUG) {
-                HttpLoggingInterceptor.Level.BODY
-            } else {
-                HttpLoggingInterceptor.Level.NONE
-            }
+            level = HttpLoggingInterceptor.Level.BODY
         }
     }
 
@@ -42,4 +37,5 @@ object RetrofitProvider {
     }
 
     val authApi: AuthApi by lazy { retrofit.create(AuthApi::class.java) }
+    val apiService: ApiService by lazy { retrofit.create(ApiService::class.java) }
 }
