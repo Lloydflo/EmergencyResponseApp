@@ -26,7 +26,7 @@ object RetrofitProvider {
             .addInterceptor(bodyLogger)
             .build()
     }
-    private const val BASE_URL = "https://hyetographically-nondistorted-aurelia.ngrok-free.dev -> http://localhost:3000"
+    private const val BASE_URL = "http://192.168.1.7:3000/"
 
     private val loggingClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
