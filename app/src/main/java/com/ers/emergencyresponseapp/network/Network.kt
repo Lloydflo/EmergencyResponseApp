@@ -11,15 +11,14 @@ import java.util.concurrent.TimeUnit
 private const val BASE_URL = "https://hytographicallly-nondistorted-aurelia.ngrok-free.dev/"
 
 object Network {
-    // Create the Retrofit ApiService using the BASE_URL constant
-    fun create(): ApiService {
-        val bodyLogger = HttpLoggingInterceptor { message ->
-            Log.d("NetworkBody", message)
-        }.apply {
+    private val httpLoggingInterceptor: HttpLoggingInterceptor by lazy {
+        HttpLoggingInterceptor().apply {
             level = HttpLoggingInterceptor.Level.BODY
         }
+    }
 
-        val client = OkHttpClient.Builder()
+    private val okHttpClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(20, TimeUnit.SECONDS)
             .addInterceptor { chain ->
@@ -27,14 +26,17 @@ object Network {
                 Log.d("Network", "Request URL: ${request.method} ${request.url}")
                 chain.proceed(request)
             }
-            .addInterceptor(bodyLogger)
+            .addInterceptor(httpLoggingInterceptor)
             .build()
+    }
 
-        return Retrofit.Builder()
+    private val retrofit: Retrofit by lazy {
+        Retrofit.Builder()
             .baseUrl(BASE_URL)
-            .client(client)
+            .client(okHttpClient)
             .addConverterFactory(GsonConverterFactory.create())
             .build()
-            .create(ApiService::class.java)
     }
+
+    fun create(): ApiService = retrofit.create(ApiService::class.java)
 }

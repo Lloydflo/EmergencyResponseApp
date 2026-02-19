@@ -19,30 +19,6 @@ object RetrofitProvider {
 
     private val okHttpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
-            .addInterceptor(httpLoggingInterceptor)
-            .build()
-    }
-
-    private val loggingClient: OkHttpClient by lazy {
-        OkHttpClient.Builder()
-            .addInterceptor { chain ->
-                val request = chain.request()
-                Log.d("RetrofitProvider", "Request URL: ${request.method} ${request.url}")
-                chain.proceed(request)
-            }
-            .build()
-    }
-
-    private val httpLoggingInterceptor: HttpLoggingInterceptor by lazy {
-        HttpLoggingInterceptor { message ->
-            Log.d("RetrofitHttp", message)
-        }.apply {
-            level = HttpLoggingInterceptor.Level.BODY
-        }
-    }
-
-    private val okHttpClient: OkHttpClient by lazy {
-        OkHttpClient.Builder()
             .addInterceptor { chain ->
                 val request = chain.request()
                 Log.d("RetrofitProvider", "Request URL: ${request.method} ${request.url}")
