@@ -19,4 +19,8 @@ interface ApiService {
     @Headers("Content-Type: application/json")
     @POST("api/send-otp")
     suspend fun sendOtp(@Body req: SendOtpRequest): Response<SendOtpResponse>
+
+    @Headers("Content-Type: application/json")
+    @POST("api/verify-otp")
+    suspend fun verifyOtp(@Body req: VerifyOtpRequest): Response<VerifyOtpResponse>
 }
