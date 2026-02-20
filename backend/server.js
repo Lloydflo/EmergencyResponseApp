@@ -1,51 +1,34 @@
-import 'dotenv/config';
-import express from 'express';
-import cors from 'cors';
-import authRouter from './routes/auth.js';
-import pool from './db.js';
+import "dotenv/config";
+import express from "express";
+import cors from "cors";
+import authRouter from "./routes/auth.js";
+import { initDb } from "./init_db.js";
 
 const app = express();
-app.disable('x-powered-by');
-app.use(express.json({ limit: '256kb' }));
-
-// CORS: allow all origins for testing on LAN; in production restrict origins
+app.disable("x-powered-by");
+app.use(express.json({ limit: "256kb" }));
 app.use(cors());
 
 const PORT = Number(process.env.PORT || 3000);
-// bind to all interfaces by default so the server is reachable from other devices on the LAN
-const HOST = process.env.HOST || '0.0.0.0';
+const HOST = process.env.HOST || "0.0.0.0";
 
-app.get('/health', (req, res) => res.json({ ok: true }));
+app.get("/health", (req, res) => res.json({ ok: true }));
 
-app.get('/health/db', async (req, res) => {
-  try {
-    const [rows] = await pool.query('SELECT 1 AS ok');
-    res.json({ ok: true, db: rows[0] });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message || String(e) });
-  }
-});
+app.use("/api", authRouter);
 
-// mount auth routes under /api
-app.use('/api', authRouter);
+app.use((req, res) => res.status(404).json({ success: false, message: "Not found" }));
 
-// global 404 -> JSON
-app.use((req, res) => res.status(404).json({ success: false, message: 'Not found' }));
-
-// global error handler
 app.use((err, req, res, next) => {
-  console.error('Unhandled error:', err);
-  res.status(500).json({ success: false, message: 'Server error' });
+  console.error("Unhandled error:", err);
+  res.status(500).json({ success: false, message: "Server error" });
 });
 
 async function start() {
-  // quick DB check
+  // init sqlite tables
   try {
-    await pool.query('SELECT 1');
+    await initDb();
   } catch (e) {
-    console.error('DB connectivity check failed:', e.message || e);
-    // still start server so health endpoint can be used to debug; but you may choose to exit instead
-    // process.exitCode = 1; return;
+    console.error("SQLite init failed:", e?.message || e);
   }
 
   app.listen(PORT, HOST, () => {
@@ -53,7 +36,7 @@ async function start() {
   });
 }
 
-start().catch(e => {
-  console.error('Startup failed:', e);
+start().catch((e) => {
+  console.error("Startup failed:", e);
   process.exitCode = 1;
 });
