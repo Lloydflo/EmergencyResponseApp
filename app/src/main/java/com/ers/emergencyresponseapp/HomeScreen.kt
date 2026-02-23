@@ -8,7 +8,6 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.location.Location
-import android.location.LocationManager
 import android.os.Build
 import android.provider.Settings
 import android.provider.MediaStore
@@ -753,25 +752,7 @@ fun HomeScreen(responderRole: String? = null) {
         return ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
     }
 
-    fun isDeviceLocationEnabled(): Boolean {
-        val lm = context.getSystemService(android.content.Context.LOCATION_SERVICE) as? LocationManager ?: return false
-        return lm.isProviderEnabled(LocationManager.GPS_PROVIDER) || lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
-    }
-
     var showAlwaysLocationNotice by remember { mutableStateOf(false) }
-    var isLocationMonitoringEnabled by remember { mutableStateOf(prefs.getBoolean(locationMonitoringEnabledKey, false)) }
-
-    val locationSettingsLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult(),
-        onResult = {
-            if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED && isDeviceLocationEnabled()) {
-                isLocationShared = true
-                isLocationMonitoringEnabled = true
-                prefs.edit().putBoolean(locationMonitoringEnabledKey, true).apply()
-                startLocationUpdates()
-            }
-        }
-    )
 
     val backgroundLocationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
@@ -805,25 +786,13 @@ fun HomeScreen(responderRole: String? = null) {
         }
     })
 
+    var hasRequestedLocationPermission by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
-        val hasFinePermission = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        val hasRequested = prefs.getBoolean(locationPermissionRequestedKey, false)
-
-        if (hasFinePermission) {
-            if (!isDeviceLocationEnabled()) {
-                Toast.makeText(context, "Please turn on Location for real-time monitoring", Toast.LENGTH_LONG).show()
-                locationSettingsLauncher.launch(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
-            }
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
             isLocationShared = true
-            isLocationMonitoringEnabled = true
-            prefs.edit().putBoolean(locationMonitoringEnabledKey, true).apply()
             startLocationUpdates()
-            showAlwaysLocationNotice = !hasAlwaysLocationPermission()
-        } else if (!hasRequested) {
-            prefs.edit().putBoolean(locationPermissionRequestedKey, true).apply()
-            locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
-        } else if (isLocationMonitoringEnabled) {
-            // User is logged in and had monitoring enabled before; keep pushing to settings until granted.
+        } else if (!hasRequestedLocationPermission) {
+            hasRequestedLocationPermission = true
             locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
         }
     }
@@ -1520,9 +1489,6 @@ fun HomeScreen(responderRole: String? = null) {
                          isLocationShared = false
                          stopLocationUpdates()
                          fusedLocationClient.removeLocationUpdates(onSceneLocationCallback)
-                         showAlwaysLocationNotice = false
-                         isLocationMonitoringEnabled = false
-                         prefs.edit().putBoolean(locationPermissionRequestedKey, false).putBoolean(locationMonitoringEnabledKey, false).apply()
                          prefs.edit().clear().apply()
                          context.getSharedPreferences("user_prefs", android.content.Context.MODE_PRIVATE).edit().clear().apply()
                          Toast.makeText(context, "Logged out", Toast.LENGTH_SHORT).show()
