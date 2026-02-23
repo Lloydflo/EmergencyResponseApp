@@ -8,6 +8,8 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.location.Location
+import android.os.Build
+import android.provider.Settings
 import android.provider.MediaStore
 import android.util.Log
 import android.widget.Toast
@@ -743,11 +745,31 @@ fun HomeScreen(responderRole: String? = null) {
         currentLongitude = null
     }
 
+    fun hasAlwaysLocationPermission(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return true
+        return ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
+    }
+
+    var showAlwaysLocationNotice by remember { mutableStateOf(false) }
+
+    val backgroundLocationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+        onResult = { isGranted: Boolean ->
+            if (isGranted) {
+                showAlwaysLocationNotice = false
+                Toast.makeText(context, "Always-on location enabled", Toast.LENGTH_SHORT).show()
+            } else {
+                showAlwaysLocationNotice = true
+                Toast.makeText(context, "Please enable 'Allow all the time' in App settings", Toast.LENGTH_LONG).show()
+            }
+        }
+    )
 
     val locationPermissionLauncher = rememberLauncherForActivityResult(contract = ActivityResultContracts.RequestPermission(), onResult = { isGranted: Boolean ->
         if (isGranted) {
             isLocationShared = true
             startLocationUpdates()
+            showAlwaysLocationNotice = !hasAlwaysLocationPermission()
         } else {
             isLocationShared = false
             Toast.makeText(context, "Location permission denied", Toast.LENGTH_SHORT).show()
@@ -785,6 +807,7 @@ fun HomeScreen(responderRole: String? = null) {
             if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
                 isLocationShared = true
                 startLocationUpdates()
+                showAlwaysLocationNotice = !hasAlwaysLocationPermission()
             } else {
                 locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
             }
@@ -820,8 +843,48 @@ fun HomeScreen(responderRole: String? = null) {
             }
         }
     ) { paddingValues ->
-        Box(modifier = Modifier.fillMaxSize()) {
+        Box(modifier = Modifier.fillMaxSize().padding(paddingValues)) {
             // UI-only state for dialogs opened by the navigation buttons (Settings)
+            if (showAlwaysLocationNotice) {
+                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth(0.96f)
+                            .padding(vertical = 8.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                text = "Allow location all the time",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "For faster dispatch and safer tracking, set location access to 'Allow all the time'.",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton(onClick = { showAlwaysLocationNotice = false }) {
+                                    Text("Later")
+                                }
+                                Button(onClick = {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                        val intent = Intent(
+                                            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                            Uri.fromParts("package", context.packageName, null)
+                                        )
+                                        context.startActivity(intent)
+                                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                        backgroundLocationPermissionLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                                    }
+                                }) {
+                                    Text("Open settings")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             // Compute counts for the statistic cards using existing incident lists (active incidents)
             val fireCount = activeIncidents.count { it.type == IncidentType.FIRE }
@@ -927,7 +990,7 @@ fun HomeScreen(responderRole: String? = null) {
             Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(paddingValues)
+                .padding(top = if (showAlwaysLocationNotice) 132.dp else 0.dp)
                 .verticalScroll(rememberScrollState())
         ) {
             // Purple header with subtle gradient and rounded bottom
