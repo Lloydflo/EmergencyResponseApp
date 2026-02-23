@@ -351,6 +351,8 @@ fun HomeScreen(responderRole: String? = null) {
 
     // Persist responder/account fields in SharedPreferences so they survive app restarts
     val prefs = context.getSharedPreferences("ers_prefs", android.content.Context.MODE_PRIVATE)
+    val locationPermissionRequestedKey = "location_permission_requested"
+    val locationMonitoringEnabledKey = "location_monitoring_enabled"
 
     // Account settings state
     var accountFullName by remember { mutableStateOf(prefs.getString("account_full_name", "") ?: "") }
@@ -766,11 +768,19 @@ fun HomeScreen(responderRole: String? = null) {
 
     val locationPermissionLauncher = rememberLauncherForActivityResult(contract = ActivityResultContracts.RequestPermission(), onResult = { isGranted: Boolean ->
         if (isGranted) {
+            if (!isDeviceLocationEnabled()) {
+                Toast.makeText(context, "Turn on Location to start live monitoring", Toast.LENGTH_LONG).show()
+                locationSettingsLauncher.launch(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+            }
             isLocationShared = true
+            isLocationMonitoringEnabled = true
+            prefs.edit().putBoolean(locationMonitoringEnabledKey, true).apply()
             startLocationUpdates()
             showAlwaysLocationNotice = !hasAlwaysLocationPermission()
         } else {
             isLocationShared = false
+            isLocationMonitoringEnabled = false
+            prefs.edit().putBoolean(locationMonitoringEnabledKey, false).apply()
             Toast.makeText(context, "Location permission denied", Toast.LENGTH_SHORT).show()
         }
     })
