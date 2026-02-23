@@ -109,6 +109,19 @@ import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentHeight
+import android.content.Context
+import android.location.LocationManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+
+private fun isDeviceLocationEnabled(context: Context): Boolean {
+    val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+    return lm.isProviderEnabled(LocationManager.GPS_PROVIDER) ||
+            lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+}
 
 // --- Simple types used for incoming emergency requests (local, UI-only) ---
 private enum class ResponderOnlineStatus { Online, Offline }
@@ -342,7 +355,14 @@ private fun EmergencyRequestList(requests: List<EmergencyRequest>, title: String
 @Composable
 fun HomeScreen(responderRole: String? = null) {
     val context = LocalContext.current
+    var isLocationMonitoringEnabled by remember { mutableStateOf(false) }
 
+    val locationSettingsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        // kapag bumalik from settings, i-check ulit
+        isLocationMonitoringEnabled = isDeviceLocationEnabled(context)
+    }
     // Prefer the stored registration department as the authoritative responder role so
     // the Home screen always filters to the user's department even if navigation route lacks it.
     val storedPrefs = context.getSharedPreferences("user_prefs", android.content.Context.MODE_PRIVATE)
@@ -768,7 +788,7 @@ fun HomeScreen(responderRole: String? = null) {
 
     val locationPermissionLauncher = rememberLauncherForActivityResult(contract = ActivityResultContracts.RequestPermission(), onResult = { isGranted: Boolean ->
         if (isGranted) {
-            if (!isDeviceLocationEnabled()) {
+            if (isDeviceLocationEnabled(context)) {
                 Toast.makeText(context, "Turn on Location to start live monitoring", Toast.LENGTH_LONG).show()
                 locationSettingsLauncher.launch(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
             }
