@@ -8,6 +8,9 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.location.Location
+import android.location.LocationManager
+import android.os.Build
+import android.provider.Settings
 import android.provider.MediaStore
 import android.util.Log
 import android.widget.Toast
@@ -59,6 +62,7 @@ import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -349,6 +353,8 @@ fun HomeScreen(responderRole: String? = null) {
 
     // Persist responder/account fields in SharedPreferences so they survive app restarts
     val prefs = context.getSharedPreferences("ers_prefs", android.content.Context.MODE_PRIVATE)
+    val locationPermissionRequestedKey = "location_permission_requested"
+    val locationMonitoringEnabledKey = "location_monitoring_enabled"
 
     // Account settings state
     var accountFullName by remember { mutableStateOf(prefs.getString("account_full_name", "") ?: "") }
@@ -742,16 +748,92 @@ fun HomeScreen(responderRole: String? = null) {
         currentLongitude = null
     }
 
+    fun hasAlwaysLocationPermission(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return true
+        return ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
+    }
+
+    fun isDeviceLocationEnabled(): Boolean {
+        val lm = context.getSystemService(android.content.Context.LOCATION_SERVICE) as? LocationManager ?: return false
+        return lm.isProviderEnabled(LocationManager.GPS_PROVIDER) || lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+    }
+
+    var showAlwaysLocationNotice by remember { mutableStateOf(false) }
+    var isLocationMonitoringEnabled by remember { mutableStateOf(prefs.getBoolean(locationMonitoringEnabledKey, false)) }
+
+    val locationSettingsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult(),
+        onResult = {
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED && isDeviceLocationEnabled()) {
+                isLocationShared = true
+                isLocationMonitoringEnabled = true
+                prefs.edit().putBoolean(locationMonitoringEnabledKey, true).apply()
+                startLocationUpdates()
+            }
+        }
+    )
+
+    val backgroundLocationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+        onResult = { isGranted: Boolean ->
+            if (isGranted) {
+                showAlwaysLocationNotice = false
+                Toast.makeText(context, "Always-on location enabled", Toast.LENGTH_SHORT).show()
+            } else {
+                showAlwaysLocationNotice = true
+                Toast.makeText(context, "Please enable 'Allow all the time' in App settings", Toast.LENGTH_LONG).show()
+            }
+        }
+    )
 
     val locationPermissionLauncher = rememberLauncherForActivityResult(contract = ActivityResultContracts.RequestPermission(), onResult = { isGranted: Boolean ->
         if (isGranted) {
+            if (!isDeviceLocationEnabled()) {
+                Toast.makeText(context, "Turn on Location to start live monitoring", Toast.LENGTH_LONG).show()
+                locationSettingsLauncher.launch(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+            }
             isLocationShared = true
+            isLocationMonitoringEnabled = true
+            prefs.edit().putBoolean(locationMonitoringEnabledKey, true).apply()
             startLocationUpdates()
+            showAlwaysLocationNotice = !hasAlwaysLocationPermission()
         } else {
             isLocationShared = false
+            isLocationMonitoringEnabled = false
+            prefs.edit().putBoolean(locationMonitoringEnabledKey, false).apply()
             Toast.makeText(context, "Location permission denied", Toast.LENGTH_SHORT).show()
         }
     })
+
+    LaunchedEffect(Unit) {
+        val hasFinePermission = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val hasRequested = prefs.getBoolean(locationPermissionRequestedKey, false)
+
+        if (hasFinePermission) {
+            if (!isDeviceLocationEnabled()) {
+                Toast.makeText(context, "Please turn on Location for real-time monitoring", Toast.LENGTH_LONG).show()
+                locationSettingsLauncher.launch(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+            }
+            isLocationShared = true
+            isLocationMonitoringEnabled = true
+            prefs.edit().putBoolean(locationMonitoringEnabledKey, true).apply()
+            startLocationUpdates()
+            showAlwaysLocationNotice = !hasAlwaysLocationPermission()
+        } else if (!hasRequested) {
+            prefs.edit().putBoolean(locationPermissionRequestedKey, true).apply()
+            locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+        } else if (isLocationMonitoringEnabled) {
+            // User is logged in and had monitoring enabled before; keep pushing to settings until granted.
+            locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            fusedLocationClient.removeLocationUpdates(locationCallback)
+            fusedLocationClient.removeLocationUpdates(onSceneLocationCallback)
+        }
+    }
 
     val onScenePermissionLauncher = rememberLauncherForActivityResult(contract = ActivityResultContracts.RequestPermission(), onResult = { isGranted: Boolean ->
         if (isGranted) {
@@ -766,6 +848,7 @@ fun HomeScreen(responderRole: String? = null) {
             if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
                 isLocationShared = true
                 startLocationUpdates()
+                showAlwaysLocationNotice = !hasAlwaysLocationPermission()
             } else {
                 locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
             }
@@ -801,8 +884,48 @@ fun HomeScreen(responderRole: String? = null) {
             }
         }
     ) { paddingValues ->
-        Box(modifier = Modifier.fillMaxSize()) {
+        Box(modifier = Modifier.fillMaxSize().padding(paddingValues)) {
             // UI-only state for dialogs opened by the navigation buttons (Settings)
+            if (showAlwaysLocationNotice) {
+                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth(0.96f)
+                            .padding(vertical = 8.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                text = "Allow location all the time",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "For faster dispatch and safer tracking, set location access to 'Allow all the time'.",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton(onClick = { showAlwaysLocationNotice = false }) {
+                                    Text("Later")
+                                }
+                                Button(onClick = {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                        val intent = Intent(
+                                            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                            Uri.fromParts("package", context.packageName, null)
+                                        )
+                                        context.startActivity(intent)
+                                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                        backgroundLocationPermissionLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                                    }
+                                }) {
+                                    Text("Open settings")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             // Compute counts for the statistic cards using existing incident lists (active incidents)
             val fireCount = activeIncidents.count { it.type == IncidentType.FIRE }
@@ -908,7 +1031,7 @@ fun HomeScreen(responderRole: String? = null) {
             Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(paddingValues)
+                .padding(top = if (showAlwaysLocationNotice) 132.dp else 0.dp)
                 .verticalScroll(rememberScrollState())
         ) {
             // Purple header with subtle gradient and rounded bottom
@@ -1394,6 +1517,12 @@ fun HomeScreen(responderRole: String? = null) {
                      },
                      onBack = { showSettingsDialog = false },
                      onLogout = {
+                         isLocationShared = false
+                         stopLocationUpdates()
+                         fusedLocationClient.removeLocationUpdates(onSceneLocationCallback)
+                         showAlwaysLocationNotice = false
+                         isLocationMonitoringEnabled = false
+                         prefs.edit().putBoolean(locationPermissionRequestedKey, false).putBoolean(locationMonitoringEnabledKey, false).apply()
                          prefs.edit().clear().apply()
                          context.getSharedPreferences("user_prefs", android.content.Context.MODE_PRIVATE).edit().clear().apply()
                          Toast.makeText(context, "Logged out", Toast.LENGTH_SHORT).show()
