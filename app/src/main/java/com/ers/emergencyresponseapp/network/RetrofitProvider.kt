@@ -7,7 +7,7 @@ import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 
 object RetrofitProvider {
-    private const val BASE_URL = "https://hytographicallly-nondistorted-aurelia.ngrok-free.dev/"
+    private const val BASE_URL = "https://emergency-response.alertaraqc.com/"
 
     private val httpLoggingInterceptor: HttpLoggingInterceptor by lazy {
         HttpLoggingInterceptor { message ->
@@ -37,5 +37,5 @@ object RetrofitProvider {
     }
 
     val authApi: AuthApi by lazy { retrofit.create(AuthApi::class.java) }
-    val apiService: ApiService by lazy { retrofit.create(ApiService::class.java) }
+    val incidentsApi: IncidentsApi by lazy { retrofit.create(IncidentsApi::class.java) }
 }

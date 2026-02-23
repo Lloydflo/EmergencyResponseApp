@@ -2,6 +2,19 @@ package com.ers.emergencyresponseapp.data
 
 import android.util.Log
 import kotlinx.coroutines.delay
+import com.ers.emergencyresponseapp.network.AssignedIncidentsRequest
+import com.ers.emergencyresponseapp.network.IncidentDto
+import com.ers.emergencyresponseapp.network.RetrofitProvider
+
+class IncidentRepository {
+    suspend fun getAssignedIncidents(department: String): List<IncidentDto> {
+        val res = RetrofitProvider.incidentsApi.getAssignedIncidents(
+            AssignedIncidentsRequest(department = department.lowercase())
+        )
+        if (!res.success) throw IllegalStateException(res.message ?: "Failed to load incidents")
+        return res.incidents
+    }
+}
 
 /**
  * Lightweight incident repository stub. Replace with real Firebase/REST implementation.

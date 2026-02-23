@@ -3,6 +3,17 @@ package com.ers.emergencyresponseapp.network
 import retrofit2.http.Field
 import retrofit2.http.FormUrlEncoded
 import retrofit2.http.POST
+import retrofit2.http.Body
+
+
+data class AssignedIncidentsRequest(val department: String)
+data class AssignedIncidentsResponse(
+    val success: Boolean,
+    val message: String? = null,
+    val incidents: List<IncidentDto> = emptyList()
+)
+
+// adjust fields to match your incidents table columns
 
 interface AuthApi {
 
@@ -28,4 +39,9 @@ interface AuthApi {
     suspend fun getAssignedIncidents(
         @Field("email") email: String
     ): IncidentsResponse
+}
+
+interface IncidentsApi {
+    @POST("api/Incidents/get-assigned-incidents.php")
+    suspend fun getAssignedIncidents(@Body body: AssignedIncidentsRequest): AssignedIncidentsResponse
 }
