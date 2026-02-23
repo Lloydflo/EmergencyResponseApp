@@ -781,7 +781,6 @@ fun HomeScreen(responderRole: String? = null) {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
             isLocationShared = true
             startLocationUpdates()
-            showAlwaysLocationNotice = !hasAlwaysLocationPermission()
         } else if (!hasRequestedLocationPermission) {
             hasRequestedLocationPermission = true
             locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
@@ -1480,7 +1479,6 @@ fun HomeScreen(responderRole: String? = null) {
                          isLocationShared = false
                          stopLocationUpdates()
                          fusedLocationClient.removeLocationUpdates(onSceneLocationCallback)
-                         showAlwaysLocationNotice = false
                          prefs.edit().clear().apply()
                          context.getSharedPreferences("user_prefs", android.content.Context.MODE_PRIVATE).edit().clear().apply()
                          Toast.makeText(context, "Logged out", Toast.LENGTH_SHORT).show()
