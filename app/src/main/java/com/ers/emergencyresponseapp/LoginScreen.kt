@@ -83,9 +83,9 @@ fun LoginScreen(
                     enabled = !uiState.loading,
                     onClick = {
                         viewModel.verifyOtp { email ->
-                            context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
+                            context.getSharedPreferences("auth", Context.MODE_PRIVATE)
                                 .edit()
-                                .putString("user_email", email)
+                                .putString("email", email)
                                 .putBoolean("user_verified", true)
                                 .apply()
                             onLoggedIn(email)

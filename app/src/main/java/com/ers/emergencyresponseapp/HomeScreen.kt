@@ -6,8 +6,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.net.Uri
 import android.location.Location
+import android.net.Uri
 import android.provider.MediaStore
 import android.util.Log
 import android.widget.Toast
@@ -20,29 +20,36 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.LocalHospital
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MyLocation
-import androidx.compose.material.icons.filled.Done
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -54,17 +61,18 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -79,34 +87,28 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
+import com.ers.emergencyresponseapp.analytics.RouteHistoryStore
 import com.ers.emergencyresponseapp.home.Incident
 import com.ers.emergencyresponseapp.home.IncidentPriority
 import com.ers.emergencyresponseapp.home.IncidentStatus
-import com.ers.emergencyresponseapp.home.IncidentType
-import com.ers.emergencyresponseapp.analytics.RouteHistoryStore
-import com.ers.emergencyresponseapp.home.composables.DepartmentSelectionDialog
 import com.ers.emergencyresponseapp.home.IncidentStore
+import com.ers.emergencyresponseapp.home.IncidentType
+import com.ers.emergencyresponseapp.home.composables.DepartmentSelectionDialog
+import com.ers.emergencyresponseapp.network.RetrofitProvider
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
-import java.util.Locale
-import androidx.compose.material3.AlertDialog
-import androidx.core.content.ContextCompat
-import androidx.core.net.toUri
-import java.io.File
-import java.io.FileOutputStream
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.wrapContentHeight
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
+import java.util.Date
+import java.util.Locale
 
 // --- Simple types used for incoming emergency requests (local, UI-only) ---
 private enum class ResponderOnlineStatus { Online, Offline }
@@ -115,6 +117,7 @@ private enum class EmergencyPriority(val color: Color) {
     Medium(Color(0xFFFFA000)),
     Low(Color(0xFF388E3C))
 }
+
 private data class EmergencyRequest(
     val id: Int,
     val type: String,
@@ -166,6 +169,7 @@ private fun ResponderAvatar(
                     contentScale = ContentScale.Crop
                 )
             }
+
             imageUri != null -> {
                 val bitmap = remember(imageUri) {
                     try {
@@ -178,7 +182,9 @@ private fun ResponderAvatar(
                                 BitmapFactory.decodeStream(stream)
                             }
                         }
-                    } catch (_: Exception) { null }
+                    } catch (_: Exception) {
+                        null
+                    }
                 }
                 if (bitmap != null) {
                     Image(
@@ -188,23 +194,36 @@ private fun ResponderAvatar(
                         contentScale = ContentScale.Crop
                     )
                 } else {
-                    Icon(imageVector = Icons.Default.AccountCircle, contentDescription = contentDescription, modifier = Modifier.fillMaxSize())
+                    Icon(
+                        imageVector = Icons.Default.AccountCircle,
+                        contentDescription = contentDescription,
+                        modifier = Modifier.fillMaxSize()
+                    )
                 }
             }
-            else -> Icon(imageVector = Icons.Default.AccountCircle, contentDescription = contentDescription, modifier = Modifier.fillMaxSize())
-         }
 
-         val dotColor = if (status == ResponderOnlineStatus.Online) Color(0xFF98EE9C) else Color.Gray
-         Box(
-             modifier = Modifier
-                 .size(10.dp)
-                 .align(Alignment.BottomEnd)
-                 .padding(2.dp)
-                 .clip(CircleShape)
-                 .background(dotColor)
-                 .border(width = 2.dp, color = MaterialTheme.colorScheme.surface, shape = CircleShape)
-         )
-     }
+            else -> Icon(
+                imageVector = Icons.Default.AccountCircle,
+                contentDescription = contentDescription,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+
+        val dotColor = if (status == ResponderOnlineStatus.Online) Color(0xFF98EE9C) else Color.Gray
+        Box(
+            modifier = Modifier
+                .size(10.dp)
+                .align(Alignment.BottomEnd)
+                .padding(2.dp)
+                .clip(CircleShape)
+                .background(dotColor)
+                .border(
+                    width = 2.dp,
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = CircleShape
+                )
+        )
+    }
 }
 
 // --- Helper functions for HomeScreen (must be defined before use) ---
@@ -245,16 +264,76 @@ private fun demoFeedIncomingRequests(list: MutableList<EmergencyRequest>) {
         val type = types[random.nextInt(types.size)]
         val priority = priorities[random.nextInt(priorities.size)]
         val distance = "${randomInt(1..20)} km"
-        val timestamp = "${randomInt(1..12)}:${randomInt(0..59).toString().padStart(2, '0')} ${if (random.nextBoolean()) "AM" else "PM"}"
+        val timestamp = "${randomInt(1..12)}:${
+            randomInt(0..59).toString().padStart(2, '0')
+        } ${if (random.nextBoolean()) "AM" else "PM"}"
         val lat = random.nextDouble() * 180.0 - 90.0
         val lng = random.nextDouble() * 360.0 - 180.0
         val address = "Random ${type} ${id} St"
 
-        list.add(EmergencyRequest(id, type, distance, timestamp, priority, lat, lng, address, "Description for ${type.lowercase()} incident #$id"))
+        list.add(
+            EmergencyRequest(
+                id,
+                type,
+                distance,
+                timestamp,
+                priority,
+                lat,
+                lng,
+                address,
+                "Description for ${type.lowercase()} incident #$id"
+            )
+        )
     }
 }
 
-private fun openMapPin(context: android.content.Context, lat: Double?, lng: Double?, address: String?) {
+private fun departmentToIncidentType(dept: String?): IncidentType? {
+    return when (dept?.trim()?.lowercase()) {
+        "fire" -> IncidentType.FIRE
+        "medical" -> IncidentType.MEDICAL
+        "police", "crime", "traffic" -> IncidentType.CRIME // Option A: traffic -> police
+        else -> null
+    }
+}
+
+private fun mapApiTypeToIncidentType(apiType: String?): IncidentType {
+    return when (apiType?.trim()?.lowercase()) {
+        "fire" -> IncidentType.FIRE
+        "medical" -> IncidentType.MEDICAL
+        "police", "crime", "traffic" -> IncidentType.CRIME
+        "disaster" -> IncidentType.DISASTER
+        else -> IncidentType.CRIME
+    }
+}
+
+private fun mapApiPriorityToIncidentPriority(p: String?): IncidentPriority {
+    return when (p?.trim()?.lowercase()) {
+        "high" -> IncidentPriority.HIGH
+        "medium" -> IncidentPriority.MEDIUM
+        "low" -> IncidentPriority.LOW
+        else -> IncidentPriority.MEDIUM
+    }
+}
+
+private fun mapApiStatusToIncidentStatus(s: String?): IncidentStatus {
+    return when (s?.trim()?.lowercase()) {
+        "resolved" -> IncidentStatus.RESOLVED
+        "on_scene", "on scene" -> IncidentStatus.ON_SCENE
+
+        // ✅ lahat ng hindi pa tapos, gawin nating default "active"
+        // Palitan mo to kung may mas bagay na status sa enum mo like REPORTED/ASSIGNED
+        "pending", "assigned", "enroute" -> IncidentStatus.ON_SCENE
+
+        else -> IncidentStatus.ON_SCENE
+    }
+}
+
+private fun openMapPin(
+    context: android.content.Context,
+    lat: Double?,
+    lng: Double?,
+    address: String?
+) {
     try {
         val primaryUri = when {
             !address.isNullOrBlank() -> ("geo:0,0?q=${Uri.encode(address)}").toUri()
@@ -263,16 +342,24 @@ private fun openMapPin(context: android.content.Context, lat: Double?, lng: Doub
         }
 
         if (primaryUri != null) {
-            val mapIntent = Intent(Intent.ACTION_VIEW, primaryUri).apply { setPackage("com.google.android.apps.maps") }
+            val mapIntent = Intent(
+                Intent.ACTION_VIEW,
+                primaryUri
+            ).apply { setPackage("com.google.android.apps.maps") }
             val resolveInfo = context.packageManager.resolveActivity(mapIntent, 0)
-            if (resolveInfo != null) { context.startActivity(mapIntent); return }
+            if (resolveInfo != null) {
+                context.startActivity(mapIntent); return
+            }
 
             val fallbackIntent = Intent(Intent.ACTION_VIEW, primaryUri)
             val fallbackResolve = context.packageManager.resolveActivity(fallbackIntent, 0)
-            if (fallbackResolve != null) { context.startActivity(fallbackIntent); return }
+            if (fallbackResolve != null) {
+                context.startActivity(fallbackIntent); return
+            }
         }
 
-        Toast.makeText(context, "No map application available to view location", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, "No map application available to view location", Toast.LENGTH_SHORT)
+            .show()
     } catch (e: Exception) {
         Log.d("HomeScreen", "Error opening map pin: ${e.message}")
         Toast.makeText(context, "Unable to open map", Toast.LENGTH_SHORT).show()
@@ -282,23 +369,56 @@ private fun openMapPin(context: android.content.Context, lat: Double?, lng: Doub
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun EmergencyRequestCard(request: EmergencyRequest, showBackupBadge: Boolean = false) {
-    Card(modifier = Modifier.fillMaxWidth(), elevation = CardDefaults.cardElevation(4.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(4.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
         Column(modifier = Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.LocalHospital, contentDescription = request.type, tint = MaterialTheme.colorScheme.primary)
+                Icon(
+                    Icons.Default.LocalHospital,
+                    contentDescription = request.type,
+                    tint = MaterialTheme.colorScheme.primary
+                )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(text = request.type, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+                Text(
+                    text = request.type,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
                 Spacer(modifier = Modifier.weight(1f))
                 if (showBackupBadge) {
-                    Box(modifier = Modifier.background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.08f), RoundedCornerShape(8.dp)).padding(horizontal = 8.dp, vertical = 4.dp)) {
-                        Text(text = "Backup", color = MaterialTheme.colorScheme.secondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    Box(
+                        modifier = Modifier.background(
+                            MaterialTheme.colorScheme.secondary.copy(
+                                alpha = 0.08f
+                            ), RoundedCornerShape(8.dp)
+                        ).padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = "Backup",
+                            color = MaterialTheme.colorScheme.secondary,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                 }
-                Badge(containerColor = request.priority.color) { Text(request.priority.name, color = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp), fontSize = 12.sp) }
+                Badge(containerColor = request.priority.color) {
+                    Text(
+                        request.priority.name,
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        fontSize = 12.sp
+                    )
+                }
             }
             Spacer(modifier = Modifier.height(6.dp))
-            Text(text = "${request.distance} • ${request.timestamp}", color = MaterialTheme.colorScheme.onSurface)
+            Text(
+                text = "${request.distance} • ${request.timestamp}",
+                color = MaterialTheme.colorScheme.onSurface
+            )
             if (showBackupBadge) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
@@ -318,7 +438,10 @@ private fun EmergencyRequestCard(request: EmergencyRequest, showBackupBadge: Boo
 
                 if (!showBackupBadge) {
                     Spacer(modifier = Modifier.width(8.dp))
-                    OutlinedButton(onClick = { /* accept */ }, modifier = Modifier.height(36.dp)) { Text("Accept") }
+                    OutlinedButton(
+                        onClick = { /* accept */ },
+                        modifier = Modifier.height(36.dp)
+                    ) { Text("Accept") }
                 }
             }
         }
@@ -326,11 +449,22 @@ private fun EmergencyRequestCard(request: EmergencyRequest, showBackupBadge: Boo
 }
 
 @Composable
-private fun EmergencyRequestList(requests: List<EmergencyRequest>, title: String = "Incoming Emergency Requests", showBackupBadge: Boolean = false) {
+private fun EmergencyRequestList(
+    requests: List<EmergencyRequest>,
+    title: String = "Incoming Emergency Requests",
+    showBackupBadge: Boolean = false
+) {
     Column(Modifier.padding(top = 8.dp)) {
-        Text(text = title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = 16.dp))
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleLarge,
+            modifier = Modifier.padding(horizontal = 16.dp)
+        )
         Spacer(Modifier.height(8.dp))
-        LazyColumn(modifier = Modifier.padding(horizontal = 16.dp).heightIn(max = 300.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        LazyColumn(
+            modifier = Modifier.padding(horizontal = 16.dp).heightIn(max = 300.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
             items(requests) { req -> EmergencyRequestCard(req, showBackupBadge = showBackupBadge) }
         }
     }
@@ -343,34 +477,54 @@ fun HomeScreen(responderRole: String? = null) {
 
     // Prefer the stored registration department as the authoritative responder role so
     // the Home screen always filters to the user's department even if navigation route lacks it.
-    val storedPrefs = context.getSharedPreferences("user_prefs", android.content.Context.MODE_PRIVATE)
+    val storedPrefs =
+        context.getSharedPreferences("user_prefs", android.content.Context.MODE_PRIVATE)
     val storedDepartment = storedPrefs.getString("department", null)
     val effectiveRole = storedDepartment?.lowercase() ?: responderRole?.takeIf { it.isNotBlank() }
 
     // Persist responder/account fields in SharedPreferences so they survive app restarts
-    val prefs = context.getSharedPreferences("ers_prefs", android.content.Context.MODE_PRIVATE)
-
+    val prefs = context.getSharedPreferences("auth", android.content.Context.MODE_PRIVATE)
+    val email = prefs.getString("email", null) ?: return
     // Account settings state
-    var accountFullName by remember { mutableStateOf(prefs.getString("account_full_name", "") ?: "") }
-    var accountUsername by remember { mutableStateOf(prefs.getString("account_username", "") ?: "") }
+    var accountFullName by remember {
+        mutableStateOf(
+            prefs.getString("account_full_name", "") ?: ""
+        )
+    }
+    var accountUsername by remember {
+        mutableStateOf(
+            prefs.getString("account_username", "") ?: ""
+        )
+    }
     var accountEmail by remember { mutableStateOf(prefs.getString("account_email", "") ?: "") }
     var accountPhotoUri by remember { mutableStateOf(prefs.getString("account_photo", null)) }
     var isDarkMode by remember { mutableStateOf(prefs.getBoolean("dark_mode", false)) }
 
-    val pickProfilePhotoLauncher = rememberLauncherForActivityResult(contract = ActivityResultContracts.GetContent()) { uri: Uri? ->
-        if (uri != null) {
-            val storedUri = saveUriToAppStorage(context, uri) ?: uri.toString()
-            accountPhotoUri = storedUri
-            // Persist immediately so the avatar survives app background/restore.
-            try { prefs.edit().putString("account_photo", accountPhotoUri).apply() } catch (_: Exception) { /* ignore */ }
+    val pickProfilePhotoLauncher =
+        rememberLauncherForActivityResult(contract = ActivityResultContracts.GetContent()) { uri: Uri? ->
+            if (uri != null) {
+                val storedUri = saveUriToAppStorage(context, uri) ?: uri.toString()
+                accountPhotoUri = storedUri
+                // Persist immediately so the avatar survives app background/restore.
+                try {
+                    prefs.edit().putString("account_photo", accountPhotoUri).apply()
+                } catch (_: Exception) { /* ignore */
+                }
+            }
         }
-    }
 
     // Basic responder identity & avatar
     val responderImageUri = accountPhotoUri
     val responderDrawableRes by remember { mutableStateOf<Int?>(null) }
     // Show the account username (from settings) as the displayed responder name.
-    var responderName by remember { mutableStateOf(prefs.getString("account_username", prefs.getString("responder_name", "Name") ?: "Name") ?: "Name") }
+    var responderName by remember {
+        mutableStateOf(
+            prefs.getString(
+                "account_username",
+                prefs.getString("responder_name", "Name") ?: "Name"
+            ) ?: "Name"
+        )
+    }
 
     // Keep responderName in sync if the account username is changed in settings during runtime
     LaunchedEffect(accountUsername) {
@@ -423,7 +577,13 @@ fun HomeScreen(responderRole: String? = null) {
         return try {
             val cacheDir = ctx.cacheDir
             val file = File(cacheDir, "proof_${System.currentTimeMillis()}.jpg")
-            FileOutputStream(file).use { out -> bitmap.compress(Bitmap.CompressFormat.JPEG, 80, out) }
+            FileOutputStream(file).use { out ->
+                bitmap.compress(
+                    Bitmap.CompressFormat.JPEG,
+                    80,
+                    out
+                )
+            }
             Uri.fromFile(file).toString()
         } catch (e: Exception) {
             Log.e("HomeScreen", "Failed to save bitmap: ${e.message}")
@@ -432,22 +592,28 @@ fun HomeScreen(responderRole: String? = null) {
     }
 
     // Camera capture launcher (returns small Bitmap in extras). We save it to cache and store a file:// URI string.
-    val takePictureLauncher = rememberLauncherForActivityResult(contract = ActivityResultContracts.StartActivityForResult()) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            val bmp = run {
-                @Suppress("DEPRECATION")
-                result.data?.extras?.get("data") as? Bitmap
-            }
-            if (bmp != null) {
-                val savedUri = saveBitmapToCache(bmp, context)
-                if (savedUri != null) selectedProofUri = savedUri
+    val takePictureLauncher =
+        rememberLauncherForActivityResult(contract = ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode == Activity.RESULT_OK) {
+                val bmp = run {
+                    @Suppress("DEPRECATION")
+                    result.data?.extras?.get("data") as? Bitmap
+                }
+                if (bmp != null) {
+                    val savedUri = saveBitmapToCache(bmp, context)
+                    if (savedUri != null) selectedProofUri = savedUri
+                }
             }
         }
-    }
 
     // Existing incidents list (kept for the IncidentTypeSummary and ActiveIncidents composable)
     var incidentsList by remember { mutableStateOf(listOf<Incident>()) }
     var activeIncidents by remember { mutableStateOf(listOf<Incident>()) }
+
+    // ✅ Assigned incidents from API (server-based)
+    var assignedApiList by remember { mutableStateOf<List<Incident>>(emptyList()) }
+    var assignedApiLoading by remember { mutableStateOf(false) }
+    var assignedApiError by remember { mutableStateOf<String?>(null) }
 
     // Helper functions for incidents (small mocked data)
     fun loadIncidents() {
@@ -456,9 +622,13 @@ fun HomeScreen(responderRole: String? = null) {
         Log.d("HomeScreen", "Loaded ${incidentsList.size} incidents from IncidentStore")
     }
 
+
     fun calculateCounts() {
         // simple counts for logging (kept lightweight)
-        var f = 0; var m = 0; var c = 0; var d = 0
+        var f = 0;
+        var m = 0;
+        var c = 0;
+        var d = 0
         for (inc in incidentsList) {
             when (inc.type) {
                 IncidentType.FIRE -> f++
@@ -477,10 +647,55 @@ fun HomeScreen(responderRole: String? = null) {
         return list.filter { it.status != IncidentStatus.RESOLVED && (now - it.timeReported.time) <= oneHourMillis }
     }
 
-    fun refreshActiveIncidents() { activeIncidents = filterActiveIncidents(incidentsList) }
+    fun refreshActiveIncidents() {
+        activeIncidents = filterActiveIncidents(incidentsList)
+    }
 
     // Periodically refresh active incidents so items older than 1 hour are removed automatically
     LaunchedEffect(Unit) {
+
+        // ✅ Fetch assigned incidents from API by department (server source of truth)
+        try {
+            val dept = effectiveRole?.trim()?.lowercase().orEmpty()
+
+            if (dept.isNotBlank()) {
+                assignedApiLoading = true
+                assignedApiError = null
+
+                val res = withContext(Dispatchers.IO) {
+                    // NOTE: make sure AuthApi has getAssignedIncidents endpoint
+                    RetrofitProvider.authApi.getAssignedIncidents(email)
+                }
+
+                if (res.success) {
+                    // Convert IncidentDto -> your Incident model
+                    assignedApiList = res.incidents.map { dto ->
+                        Incident(
+                            id = dto.id.toString(),
+                            type = mapApiTypeToIncidentType(dto.type),
+                            priority = mapApiPriorityToIncidentPriority(dto.priority),
+                            status = mapApiStatusToIncidentStatus(dto.status),
+                            description = dto.description ?: "",
+                            location = dto.location_address ?: "",
+                            latitude = dto.latitude,
+                            longitude = dto.longitude,
+                            timeReported = Date()
+                        )
+                    }
+                } else {
+                    assignedApiError = res.message
+                    assignedApiList = emptyList()
+                }
+            } else {
+                assignedApiError = "No department found"
+            }
+        } catch (e: Exception) {
+            assignedApiError = e.message ?: "Network error"
+            assignedApiList = emptyList()
+        } finally {
+            assignedApiLoading = false
+        }
+
         // Initial load so Assigned/Active/Incoming lists have data on first render
         loadIncidents()
         fun persistAssigned(incId: String?) {
@@ -490,7 +705,8 @@ fun HomeScreen(responderRole: String? = null) {
                 if (incId == null) editor.remove("last_assigned_incident_id")
                 else editor.putString("last_assigned_incident_id", incId)
                 editor.apply()
-            } catch (_: Exception) { /* ignore */ }
+            } catch (_: Exception) { /* ignore */
+            }
         }
 
         val savedAssigned = lastAssignedIncidentId?.let { id ->
@@ -564,7 +780,11 @@ fun HomeScreen(responderRole: String? = null) {
 
     @Suppress("DEPRECATION")
     fun startLocationUpdates() {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+        if (ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
             return
         }
 
@@ -584,7 +804,8 @@ fun HomeScreen(responderRole: String? = null) {
         // Prefer coordinates if available (more accurate), otherwise fall back to address query
         try {
             // Persist the last navigation target so it can be resumed later.
-            val lastNavPrefs = context.getSharedPreferences("nav_prefs", android.content.Context.MODE_PRIVATE)
+            val lastNavPrefs =
+                context.getSharedPreferences("nav_prefs", android.content.Context.MODE_PRIVATE)
             if (lat != null && lng != null) {
                 lastNavPrefs.edit()
                     .putString("last_nav_lat", lat.toString())
@@ -608,47 +829,66 @@ fun HomeScreen(responderRole: String? = null) {
             val resolvedAddr = address ?: savedAddr
 
             if (resolvedLat != null && resolvedLng != null) {
-                 // Use Google Maps navigation to coordinates
+                // Use Google Maps navigation to coordinates
                 val gmmIntentUri = ("google.navigation:q=$resolvedLat,$resolvedLng").toUri()
-                 val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri).apply { setPackage("com.google.android.apps.maps") }
-                 val resolveInfo = context.packageManager.resolveActivity(mapIntent, 0)
-                 if (resolveInfo != null) {
-                     context.startActivity(mapIntent)
-                     return
-                 } else {
-                     // Fallback to geo URI with label
-                     val geoUri = ("geo:$resolvedLat,$resolvedLng?q=$resolvedLat,$resolvedLng(${Uri.encode(resolvedAddr ?: "Incident")})").toUri()
-                     val geoIntent = Intent(Intent.ACTION_VIEW, geoUri)
-                     val fallbackResolve = context.packageManager.resolveActivity(geoIntent, 0)
-                     if (fallbackResolve != null) { context.startActivity(geoIntent); return }
-                 }
-             }
+                val mapIntent = Intent(
+                    Intent.ACTION_VIEW,
+                    gmmIntentUri
+                ).apply { setPackage("com.google.android.apps.maps") }
+                val resolveInfo = context.packageManager.resolveActivity(mapIntent, 0)
+                if (resolveInfo != null) {
+                    context.startActivity(mapIntent)
+                    return
+                } else {
+                    // Fallback to geo URI with label
+                    val geoUri = ("geo:$resolvedLat,$resolvedLng?q=$resolvedLat,$resolvedLng(${
+                        Uri.encode(resolvedAddr ?: "Incident")
+                    })").toUri()
+                    val geoIntent = Intent(Intent.ACTION_VIEW, geoUri)
+                    val fallbackResolve = context.packageManager.resolveActivity(geoIntent, 0)
+                    if (fallbackResolve != null) {
+                        context.startActivity(geoIntent); return
+                    }
+                }
+            }
 
-             // If coordinates not available or failed, fall back to address-based navigation
+            // If coordinates not available or failed, fall back to address-based navigation
             if (!resolvedAddr.isNullOrBlank()) {
                 val gmmIntentUri = ("google.navigation:q=${Uri.encode(resolvedAddr)}").toUri()
-                 val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri).apply { setPackage("com.google.android.apps.maps") }
-                 val resolveInfo = context.packageManager.resolveActivity(mapIntent, 0)
-                 if (resolveInfo != null) { context.startActivity(mapIntent); return } else {
-                    val geoIntent = Intent(Intent.ACTION_VIEW, ("geo:0,0?q=${Uri.encode(resolvedAddr)}").toUri())
-                     val fallbackResolve = context.packageManager.resolveActivity(geoIntent, 0)
-                     if (fallbackResolve != null) { context.startActivity(geoIntent); return }
-                 }
-             }
+                val mapIntent = Intent(
+                    Intent.ACTION_VIEW,
+                    gmmIntentUri
+                ).apply { setPackage("com.google.android.apps.maps") }
+                val resolveInfo = context.packageManager.resolveActivity(mapIntent, 0)
+                if (resolveInfo != null) {
+                    context.startActivity(mapIntent); return
+                } else {
+                    val geoIntent = Intent(
+                        Intent.ACTION_VIEW,
+                        ("geo:0,0?q=${Uri.encode(resolvedAddr)}").toUri()
+                    )
+                    val fallbackResolve = context.packageManager.resolveActivity(geoIntent, 0)
+                    if (fallbackResolve != null) {
+                        context.startActivity(geoIntent); return
+                    }
+                }
+            }
 
-             // Nothing available
-             Toast.makeText(context, "No location available for navigation", Toast.LENGTH_SHORT).show()
-         } catch (e: Exception) {
-             Toast.makeText(context, "Unable to open navigation", Toast.LENGTH_SHORT).show()
-             Log.d("HomeScreen", "Error launching navigation: ${e.message}")
-         }
-     }
+            // Nothing available
+            Toast.makeText(context, "No location available for navigation", Toast.LENGTH_SHORT)
+                .show()
+        } catch (e: Exception) {
+            Toast.makeText(context, "Unable to open navigation", Toast.LENGTH_SHORT).show()
+            Log.d("HomeScreen", "Error launching navigation: ${e.message}")
+        }
+    }
 
     // Report that responder is on scene for an Incident (updates local UI state and notifies admin placeholder)
     fun sendOnSceneReport(incident: Incident) {
         try {
             // update the incident status to ON_SCENE if not already
-            val updated = incidentsList.map { if (it.id == incident.id) it.copy(status = IncidentStatus.ON_SCENE) else it }
+            val updated =
+                incidentsList.map { if (it.id == incident.id) it.copy(status = IncidentStatus.ON_SCENE) else it }
             incidentsList = updated
             refreshActiveIncidents()
             RouteHistoryStore.completeRoute(context, incident.id)
@@ -672,9 +912,18 @@ fun HomeScreen(responderRole: String? = null) {
             IncidentStore.markPendingReview(incident.id, prefsName)
 
             // Persist proof, notes and completion timestamp in the IncidentStore supportive maps.
-            try { IncidentStore.storeProof(incident.id, proofUri) } catch (_: Exception) { /* ignore */ }
-            try { IncidentStore.storeCompletionNotes(incident.id, notes) } catch (_: Exception) { /* ignore */ }
-            try { IncidentStore.storeCompletionTime(incident.id, System.currentTimeMillis()) } catch (_: Exception) { /* ignore */ }
+            try {
+                IncidentStore.storeProof(incident.id, proofUri)
+            } catch (_: Exception) { /* ignore */
+            }
+            try {
+                IncidentStore.storeCompletionNotes(incident.id, notes)
+            } catch (_: Exception) { /* ignore */
+            }
+            try {
+                IncidentStore.storeCompletionTime(incident.id, System.currentTimeMillis())
+            } catch (_: Exception) { /* ignore */
+            }
 
             // Refresh local lists so UI updates.
             incidentsList = IncidentStore.incidents.toList()
@@ -682,11 +931,17 @@ fun HomeScreen(responderRole: String? = null) {
 
             if (lastNotifiedIncidentId == incident.id) {
                 lastNotifiedIncidentId = null
-                try { prefs.edit().remove("last_notified_incident_id").apply() } catch (_: Exception) { /* ignore */ }
+                try {
+                    prefs.edit().remove("last_notified_incident_id").apply()
+                } catch (_: Exception) { /* ignore */
+                }
             }
             if (lastAssignedIncidentId == incident.id) {
                 lastAssignedIncidentId = null
-                try { prefs.edit().remove("last_assigned_incident_id").apply() } catch (_: Exception) { /* ignore */ }
+                try {
+                    prefs.edit().remove("last_assigned_incident_id").apply()
+                } catch (_: Exception) { /* ignore */
+                }
             }
 
             // Auto-assign the next available incident so a new assignment triggers a notification.
@@ -701,7 +956,8 @@ fun HomeScreen(responderRole: String? = null) {
             val nextIncident = IncidentStore.incidents.firstOrNull { inc ->
                 val matchesType = desiredType?.let { inc.type == it } ?: true
                 val unassigned = inc.assignedTo.isNullOrBlank()
-                val notResolved = inc.status != IncidentStatus.RESOLVED && inc.status != IncidentStatus.PENDING_REVIEW && inc.status != IncidentStatus.SUBMITTED_REVIEW
+                val notResolved =
+                    inc.status != IncidentStatus.RESOLVED && inc.status != IncidentStatus.PENDING_REVIEW && inc.status != IncidentStatus.SUBMITTED_REVIEW
                 matchesType && unassigned && notResolved
             }
             if (nextIncident != null) {
@@ -709,10 +965,20 @@ fun HomeScreen(responderRole: String? = null) {
                 incidentsList = IncidentStore.incidents.toList()
                 refreshActiveIncidents()
                 lastAssignedIncidentId = nextIncident.id
-                try { prefs.edit().putString("last_assigned_incident_id", nextIncident.id).apply() } catch (_: Exception) { /* ignore */ }
+                try {
+                    prefs.edit().putString("last_assigned_incident_id", nextIncident.id).apply()
+                } catch (_: Exception) { /* ignore */
+                }
             }
-            Toast.makeText(context, "Incident marked pending review and proof saved", Toast.LENGTH_SHORT).show()
-            Log.i("HomeScreen", "Marked incident ${incident.id} pending review. Notes: ${notes}. Proof: ${proofUri}")
+            Toast.makeText(
+                context,
+                "Incident marked pending review and proof saved",
+                Toast.LENGTH_SHORT
+            ).show()
+            Log.i(
+                "HomeScreen",
+                "Marked incident ${incident.id} pending review. Notes: ${notes}. Proof: ${proofUri}"
+            )
         } catch (e: Exception) {
             Log.e("HomeScreen", "Failed to mark incident done: ${e.message}")
             Toast.makeText(context, "Failed to mark complete", Toast.LENGTH_SHORT).show()
@@ -721,7 +987,11 @@ fun HomeScreen(responderRole: String? = null) {
 
     @Suppress("DEPRECATION")
     fun startOnSceneTracking() {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+        if (ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
             return
         }
 
@@ -743,27 +1013,35 @@ fun HomeScreen(responderRole: String? = null) {
     }
 
 
-    val locationPermissionLauncher = rememberLauncherForActivityResult(contract = ActivityResultContracts.RequestPermission(), onResult = { isGranted: Boolean ->
-        if (isGranted) {
-            isLocationShared = true
-            startLocationUpdates()
-        } else {
-            isLocationShared = false
-            Toast.makeText(context, "Location permission denied", Toast.LENGTH_SHORT).show()
-        }
-    })
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+        onResult = { isGranted: Boolean ->
+            if (isGranted) {
+                isLocationShared = true
+                startLocationUpdates()
+            } else {
+                isLocationShared = false
+                Toast.makeText(context, "Location permission denied", Toast.LENGTH_SHORT).show()
+            }
+        })
 
-    val onScenePermissionLauncher = rememberLauncherForActivityResult(contract = ActivityResultContracts.RequestPermission(), onResult = { isGranted: Boolean ->
-        if (isGranted) {
-            startOnSceneTracking()
-        } else {
-            Toast.makeText(context, "Location permission denied", Toast.LENGTH_SHORT).show()
-        }
-    })
+    val onScenePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+        onResult = { isGranted: Boolean ->
+            if (isGranted) {
+                startOnSceneTracking()
+            } else {
+                Toast.makeText(context, "Location permission denied", Toast.LENGTH_SHORT).show()
+            }
+        })
 
     val handleShareLocationToggle: (Boolean) -> Unit = { enable ->
         if (enable) {
-            if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+            if (ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.ACCESS_FINE_LOCATION
+                ) == PackageManager.PERMISSION_GRANTED
+            ) {
                 isLocationShared = true
                 startLocationUpdates()
             } else {
@@ -828,12 +1106,12 @@ fun HomeScreen(responderRole: String? = null) {
                     val matchesType = desiredType?.let { savedAssigned.type == it } ?: true
                     if (matchesType) return@run listOf(savedAssigned)
                 }
-                 val filtered = source.filter { inc ->
-                     val matchesType = desiredType?.let { inc.type == it } ?: true
-                     val notResolved = inc.status != IncidentStatus.RESOLVED
-                     val assignedToMe = inc.assignedTo == responderName
-                     matchesType && notResolved && assignedToMe
-                 }
+                val filtered = source.filter { inc ->
+                    val matchesType = desiredType?.let { inc.type == it } ?: true
+                    val notResolved = inc.status != IncidentStatus.RESOLVED
+                    val assignedToMe = inc.assignedTo == responderName
+                    matchesType && notResolved && assignedToMe
+                }
 
                 fun prioRank(p: IncidentPriority) = when (p) {
                     IncidentPriority.HIGH -> 3
@@ -847,10 +1125,9 @@ fun HomeScreen(responderRole: String? = null) {
             }
 
             val assignedListForRole = if (showAssignedAfterNotification) {
-                assignedCandidateForRole
-            } else {
-                emptyList()
-            }
+                assignedApiList.take(1) // show 1 lang like before
+            } else emptyList()
+
 
             // Ensure On Scene starts disabled for any newly displayed assignment.
             assignedListForRole.firstOrNull()?.id?.let { id ->
@@ -860,12 +1137,14 @@ fun HomeScreen(responderRole: String? = null) {
             }
 
             // Notify before showing the newly assigned incident.
-            LaunchedEffect(assignedCandidateForRole.firstOrNull()?.id) {
-                val inc = assignedCandidateForRole.firstOrNull() ?: return@LaunchedEffect
-                if (lastNotifiedIncidentId == inc.id) return@LaunchedEffect
+            LaunchedEffect(assignedApiList.firstOrNull()?.id) {
+                val inc = assignedApiList.firstOrNull() ?: return@LaunchedEffect
 
                 lastNotifiedIncidentId = inc.id
-                try { prefs.edit().putString("last_notified_incident_id", inc.id).apply() } catch (_: Exception) { /* ignore */ }
+                try {
+                    prefs.edit().putString("last_notified_incident_id", inc.id).apply()
+                } catch (_: Exception) { /* ignore */
+                }
                 val loc = inc.location.ifBlank { "Unknown location" }
                 newIncidentMessage = "New ${inc.type.displayName} incident assigned: $loc"
                 showAssignedAfterNotification = false
@@ -891,14 +1170,22 @@ fun HomeScreen(responderRole: String? = null) {
                 scope.launch {
                     try {
                         // API integration not available in this build; local stub logs and shows a toast.
-                        Log.i("HomeScreen", "Backup request (stub) sent to $deptName: $backupMessage")
+                        Log.i(
+                            "HomeScreen",
+                            "Backup request (stub) sent to $deptName: $backupMessage"
+                        )
                         withContext(Dispatchers.Main) {
-                            Toast.makeText(context, "Backup request sent to $deptName", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(
+                                context,
+                                "Backup request sent to $deptName",
+                                Toast.LENGTH_SHORT
+                            ).show()
                         }
                     } catch (e: Exception) {
                         Log.e("HomeScreen", "Backup request error: ${e.message}")
                         withContext(Dispatchers.Main) {
-                            Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT)
+                                .show()
                         }
                     }
                 }
@@ -906,452 +1193,819 @@ fun HomeScreen(responderRole: String? = null) {
 
             // Layout: Top row (Hello + Name left, Avatar right) -> Stat cards -> Assigned incidents -> Map/Incoming buttons -> Settings/More
             Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-                .verticalScroll(rememberScrollState())
-        ) {
-            // Purple header with subtle gradient and rounded bottom
-            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .height(160.dp)
+                    .fillMaxSize()
+                    .padding(paddingValues)
+                    .verticalScroll(rememberScrollState())
             ) {
+                // Purple header with subtle gradient and rounded bottom
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(140.dp)
-                        .background(brush = androidx.compose.ui.graphics.Brush.verticalGradient(listOf(MaterialTheme.colorScheme.primary, MaterialTheme.colorScheme.secondary)), shape = RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp))
+                        .height(160.dp)
                 ) {
-                    // increase top padding so name/profile sit lower and have more breathing room
-                    Row(modifier = Modifier.fillMaxSize().padding(start = 16.dp, end = 16.dp, top = 36.dp, bottom = 16.dp), verticalAlignment = Alignment.Top) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(text = "Hello", color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.9f), fontSize = 14.sp)
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                // Make the name wrap its content and add a small end padding so the edit icon sits closer
-                                Text(text = responderName.ifBlank { "Responder" }, color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.Bold, fontSize = 22.sp)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(140.dp)
+                            .background(
+                                brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                                    listOf(
+                                        MaterialTheme.colorScheme.primary,
+                                        MaterialTheme.colorScheme.secondary
+                                    )
+                                ),
+                                shape = RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp)
+                            )
+                    ) {
+                        // increase top padding so name/profile sit lower and have more breathing room
+                        Row(
+                            modifier = Modifier.fillMaxSize()
+                                .padding(start = 16.dp, end = 16.dp, top = 36.dp, bottom = 16.dp),
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Hello",
+                                    color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.9f),
+                                    fontSize = 14.sp
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    // Make the name wrap its content and add a small end padding so the edit icon sits closer
+                                    Text(
+                                        text = responderName.ifBlank { "Responder" },
+                                        color = MaterialTheme.colorScheme.onPrimary,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 22.sp
+                                    )
 
-                             }
-                         }
-
-                        // Circular profile portrait with themed background ring
-                        Box(modifier = Modifier.size(64.dp)) {
-                            ResponderAvatar(modifier = Modifier.fillMaxSize().clip(CircleShape).border(2.dp, MaterialTheme.colorScheme.background, CircleShape), imageUri = responderImageUri, drawableRes = responderDrawableRes, status = if (onlineStatus == ResponderOnlineStatus.Online) ResponderOnlineStatus.Online else ResponderOnlineStatus.Offline)
-                        }
-                    }
-                }
-
-                // Put the stat cards overlapping the header slightly — negative offset lifts them over the purple area
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .align(Alignment.BottomCenter)
-                        .padding(start = 12.dp, end = 12.dp)
-                        // reduce overlap so the cards are clear of the name/profile area
-                        .offset(y = (42).dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Card(modifier = Modifier.weight(1f), elevation = CardDefaults.cardElevation(6.dp), shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                        // add extra top padding so the number isn't visually tight against the card top
-                        Column(modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 20.dp, bottom = 14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(text = fireCount.toString(), fontWeight = FontWeight.Bold, fontSize = 20.sp, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(text = "Fire Today", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
-                        }
-                    }
-                    Card(modifier = Modifier.weight(1f), elevation = CardDefaults.cardElevation(6.dp), shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                        Column(modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 20.dp, bottom = 14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(text = medicalCount.toString(), fontWeight = FontWeight.Bold, fontSize = 20.sp, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(text = "Medical Today", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
-                        }
-                    }
-                    Card(modifier = Modifier.weight(1f), elevation = CardDefaults.cardElevation(6.dp), shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                        Column(modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 20.dp, bottom = 14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(text = crimeCount.toString(), fontWeight = FontWeight.Bold, fontSize = 20.sp, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(text = "Crime Today", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
-                        }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(55.dp))
-
-            // Assigned Incidents (card-based list)
-            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(text = "Assigned Incidents", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-
-
-                if (assignedListForRole.isEmpty()) {
-                    Card(modifier = Modifier.fillMaxWidth(), elevation = CardDefaults.cardElevation(2.dp), shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Text(text = "No assigned incidents", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
-                        }
-                    }
-                } else {
-                    for (inc in assignedListForRole) {
-                        Card(modifier = Modifier.fillMaxWidth(), elevation = CardDefaults.cardElevation(4.dp), shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                            // Map priority to a visible color (High=red, Medium=orange, Low=yellow)
-                            val priorityColor = when (inc.priority) {
-                                IncidentPriority.HIGH -> Color(0xFFD32F2F)
-                                IncidentPriority.MEDIUM -> Color(0xFFFFA000)
-                                IncidentPriority.LOW -> Color(0xFFFFEB3B)
+                                }
                             }
 
-                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                // Header row: type icon + details (type, location, time & status) + priority badge
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    // Type icon: circular badge with initial (F/M/C) to avoid relying on external icon vectors
-                                    val typeInitial = when (inc.type) {
-                                        IncidentType.FIRE -> "F"
-                                        IncidentType.MEDICAL -> "M"
-                                        IncidentType.CRIME -> "C"
-                                        else -> "?"
-                                    }
-                                    Box(
-                                        modifier = Modifier
-                                            .size(40.dp)
-                                            .clip(CircleShape)
-                                            .background(priorityColor.copy(alpha = 0.12f)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(text = typeInitial, fontWeight = FontWeight.Bold, color = priorityColor)
-                                    }
+                            // Circular profile portrait with themed background ring
+                            Box(modifier = Modifier.size(64.dp)) {
+                                ResponderAvatar(
+                                    modifier = Modifier.fillMaxSize().clip(CircleShape).border(
+                                        2.dp,
+                                        MaterialTheme.colorScheme.background,
+                                        CircleShape
+                                    ),
+                                    imageUri = responderImageUri,
+                                    drawableRes = responderDrawableRes,
+                                    status = if (onlineStatus == ResponderOnlineStatus.Online) ResponderOnlineStatus.Online else ResponderOnlineStatus.Offline
+                                )
+                            }
+                        }
+                    }
 
-                                    Spacer(modifier = Modifier.width(12.dp))
+                    // Put the stat cards overlapping the header slightly — negative offset lifts them over the purple area
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .align(Alignment.BottomCenter)
+                            .padding(start = 12.dp, end = 12.dp)
+                            // reduce overlap so the cards are clear of the name/profile area
+                            .offset(y = (42).dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Card(
+                            modifier = Modifier.weight(1f),
+                            elevation = CardDefaults.cardElevation(6.dp),
+                            shape = RoundedCornerShape(18.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                        ) {
+                            // add extra top padding so the number isn't visually tight against the card top
+                            Column(
+                                modifier = Modifier.padding(
+                                    start = 12.dp,
+                                    end = 12.dp,
+                                    top = 20.dp,
+                                    bottom = 14.dp
+                                ), horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    text = fireCount.toString(),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 20.sp,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    text = "Fire Today",
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                        Card(
+                            modifier = Modifier.weight(1f),
+                            elevation = CardDefaults.cardElevation(6.dp),
+                            shape = RoundedCornerShape(18.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(
+                                    start = 12.dp,
+                                    end = 12.dp,
+                                    top = 20.dp,
+                                    bottom = 14.dp
+                                ), horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    text = medicalCount.toString(),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 20.sp,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    text = "Medical Today",
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                        Card(
+                            modifier = Modifier.weight(1f),
+                            elevation = CardDefaults.cardElevation(6.dp),
+                            shape = RoundedCornerShape(18.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(
+                                    start = 12.dp,
+                                    end = 12.dp,
+                                    top = 20.dp,
+                                    bottom = 14.dp
+                                ), horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    text = crimeCount.toString(),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 20.sp,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    text = "Crime Today",
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+                }
 
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        // Top line: incident type + small dot + time reported
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text(text = inc.type.displayName, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurface)
+                Spacer(modifier = Modifier.height(55.dp))
 
-                                            Spacer(modifier = Modifier.width(8.dp))
+                // Assigned Incidents (card-based list)
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "Assigned Incidents",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
 
-                                            // time label (relative if recent, otherwise hh:mm AM/PM)
-                                            val timeLabel = run {
-                                                try {
-                                                    val now = System.currentTimeMillis()
-                                                    val then = inc.timeReported.time
-                                                    val diffMin = ((now - then) / 60000).toInt()
-                                                    when {
-                                                        diffMin < 1 -> "just now"
-                                                        diffMin < 60 -> "${diffMin}m ago"
-                                                        diffMin < 1440 -> {
-                                                            val hours = diffMin / 60
-                                                            "${hours}h ago"
-                                                        }
-                                                        else -> java.text.SimpleDateFormat("h:mm a", Locale.getDefault()).format(inc.timeReported)
-                                                    }
-                                                } catch (_: Exception) { "" }
-                                            }
+                    if (assignedApiLoading) {
+                        Text(
+                            "Loading from server...",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                        )
+                    }
+                    assignedApiError?.let {
+                        Text(
+                            "Server: $it",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
 
-                                            Text(text = timeLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                    if (assignedListForRole.isEmpty()) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            elevation = CardDefaults.cardElevation(2.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Text(
+                                    text = "No assigned incidents",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    } else {
+                        for (inc in assignedListForRole) {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                elevation = CardDefaults.cardElevation(4.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                            ) {
+                                // Map priority to a visible color (High=red, Medium=orange, Low=yellow)
+                                val priorityColor = when (inc.priority) {
+                                    IncidentPriority.HIGH -> Color(0xFFD32F2F)
+                                    IncidentPriority.MEDIUM -> Color(0xFFFFA000)
+                                    IncidentPriority.LOW -> Color(0xFFFFEB3B)
+                                }
 
-                                            Spacer(modifier = Modifier.width(8.dp))
-
-                                            // status chip
-                                            Box(modifier = Modifier.background(Color(0xFFEFEFEF), RoundedCornerShape(8.dp)).padding(horizontal = 8.dp, vertical = 4.dp)) {
-                                                Text(text = inc.status.displayName, color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp)
-                                            }
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    // Header row: type icon + details (type, location, time & status) + priority badge
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        // Type icon: circular badge with initial (F/M/C) to avoid relying on external icon vectors
+                                        val typeInitial = when (inc.type) {
+                                            IncidentType.FIRE -> "F"
+                                            IncidentType.MEDICAL -> "M"
+                                            IncidentType.CRIME -> "C"
+                                            else -> "?"
+                                        }
+                                        Box(
+                                            modifier = Modifier
+                                                .size(40.dp)
+                                                .clip(CircleShape)
+                                                .background(priorityColor.copy(alpha = 0.12f)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = typeInitial,
+                                                fontWeight = FontWeight.Bold,
+                                                color = priorityColor
+                                            )
                                         }
 
-                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Spacer(modifier = Modifier.width(12.dp))
 
-                                        // Location (exact / nearest landmark)
-                                        Text(text = inc.location.ifBlank { "Unknown location" }, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    }
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            // Top line: incident type + small dot + time reported
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(
+                                                    text = inc.type.displayName,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    fontSize = 15.sp,
+                                                    color = MaterialTheme.colorScheme.onSurface
+                                                )
 
-                                    // Priority badge with colored border / subtle background
-                                    Box(
-                                        modifier = Modifier
-                                            .border(2.dp, priorityColor, RoundedCornerShape(8.dp))
-                                            .background(priorityColor.copy(alpha = 0.06f), RoundedCornerShape(8.dp))
-                                            .padding(horizontal = 10.dp, vertical = 6.dp)
-                                    ) {
-                                        Text(text = inc.priority.name.uppercase(), color = priorityColor, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                                    }
-                                }
+                                                Spacer(modifier = Modifier.width(8.dp))
 
-                                // Visible details / single-line summary
-                                inc.description.takeIf { it.isNotBlank() }?.let { desc ->
-                                    Text(text = desc, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                }
+                                                // time label (relative if recent, otherwise hh:mm AM/PM)
+                                                val timeLabel = run {
+                                                    try {
+                                                        val now = System.currentTimeMillis()
+                                                        val then = inc.timeReported.time
+                                                        val diffMin = ((now - then) / 60000).toInt()
+                                                        when {
+                                                            diffMin < 1 -> "just now"
+                                                            diffMin < 60 -> "${diffMin}m ago"
+                                                            diffMin < 1440 -> {
+                                                                val hours = diffMin / 60
+                                                                "${hours}h ago"
+                                                            }
 
-                                // Action buttons for assigned incidents: icon + text, aligned right and closer together
-                                val buttonScope = rememberCoroutineScope()
-                                val showNavLabel = remember(inc.id) { mutableStateOf(false) }
-                                val showOnSceneLabel = remember(inc.id + "_scene") { mutableStateOf(false) }
-                                val showMarkLabel = remember(inc.id + "_mark") { mutableStateOf(false) }
+                                                            else -> java.text.SimpleDateFormat(
+                                                                "h:mm a",
+                                                                Locale.getDefault()
+                                                            ).format(inc.timeReported)
+                                                        }
+                                                    } catch (_: Exception) {
+                                                        ""
+                                                    }
+                                                }
 
-                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        // Navigate icon-only button
-                                        OutlinedButton(
-                                            onClick = {
-                                                val navPrefs = context.getSharedPreferences("nav_prefs", android.content.Context.MODE_PRIVATE)
-                                                navPrefs.edit().putString("last_nav_incident_id", inc.id).apply()
-                                                onSceneEnabledMap[inc.id] = false
-                                                navDestinationIncidentId = inc.id
-                                                navDestinationLat = inc.latitude
-                                                navDestinationLng = inc.longitude
+                                                Text(
+                                                    text = timeLabel,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurface.copy(
+                                                        alpha = 0.7f
+                                                    )
+                                                )
 
-                                                if (currentLatitude != null && currentLongitude != null && inc.latitude != null && inc.longitude != null) {
-                                                    RouteHistoryStore.startRoute(
-                                                        context = context,
-                                                        incidentId = inc.id,
-                                                        startLat = currentLatitude ?: 0.0,
-                                                        startLng = currentLongitude ?: 0.0,
-                                                        destLat = inc.latitude,
-                                                        destLng = inc.longitude
+                                                Spacer(modifier = Modifier.width(8.dp))
+
+                                                // status chip
+                                                Box(
+                                                    modifier = Modifier.background(
+                                                        Color(0xFFEFEFEF),
+                                                        RoundedCornerShape(8.dp)
+                                                    ).padding(horizontal = 8.dp, vertical = 4.dp)
+                                                ) {
+                                                    Text(
+                                                        text = inc.status.displayName,
+                                                        color = MaterialTheme.colorScheme.onSurface,
+                                                        fontSize = 12.sp
                                                     )
                                                 }
-
-                                                if (navDestinationLat != null && navDestinationLng != null) {
-                                                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-                                                        startOnSceneTracking()
-                                                    } else {
-                                                        onScenePermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
-                                                    }
-                                                }
-
-                                                navigateToLocation(inc.latitude, inc.longitude, inc.location)
-                                            },
-                                            modifier = Modifier.size(40.dp).combinedClickable(onClick = {}, onLongClick = {
-                                                showNavLabel.value = true
-                                                buttonScope.launch { delay(1200); showNavLabel.value = false }
-                                            }),
-                                            shape = RoundedCornerShape(10.dp),
-                                            contentPadding = PaddingValues(0.dp)
-                                        ) {
-                                            Icon(Icons.Default.LocationOn, contentDescription = "Navigate", tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(20.dp))
-                                        }
-                                        if (showNavLabel.value) Text(text = "Navigate", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, modifier = Modifier.align(Alignment.CenterVertically))
-
-                                        // On Scene icon-only button
-                                        OutlinedButton(
-                                            onClick = { sendOnSceneReport(inc) },
-                                            enabled = onSceneEnabledMap[inc.id] == true,
-                                            modifier = Modifier.size(40.dp).combinedClickable(onClick = {}, onLongClick = {
-                                                showOnSceneLabel.value = true
-                                                buttonScope.launch { delay(1200); showOnSceneLabel.value = false }
-                                            }),
-                                            shape = RoundedCornerShape(10.dp),
-                                            contentPadding = PaddingValues(0.dp)
-                                        ) {
-                                            Icon(Icons.Default.MyLocation, contentDescription = "On Scene", tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(20.dp))
-                                        }
-                                        if (showOnSceneLabel.value) Text(text = "On Scene", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, modifier = Modifier.align(Alignment.CenterVertically))
-
-                                        // Mark Complete icon-only button (primary)
-                                        Button(
-                                            onClick = {
-                                                markTargetIncidentInc = inc
-                                                proofNotes = ""
-                                                selectedProofUri = null
-                                                showMarkCompleteDialog = true
-                                            },
-                                            modifier = Modifier.size(40.dp).combinedClickable(onClick = {}, onLongClick = {
-                                                showMarkLabel.value = true
-                                                buttonScope.launch { delay(1200); showMarkLabel.value = false }
-                                            }),
-                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32), contentColor = MaterialTheme.colorScheme.onPrimary),
-                                            shape = RoundedCornerShape(10.dp),
-                                            contentPadding = PaddingValues(0.dp)
-                                        ) {
-                                            Icon(Icons.Default.Done, contentDescription = "Mark Complete", modifier = Modifier.size(20.dp))
-                                        }
-                                        if (showMarkLabel.value) Text(text = "Mark", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, modifier = Modifier.align(Alignment.CenterVertically))
-                                    }
-                                }
-                             }
-                         }
-                     }
-                 }
-             }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Active Incidents (shows currently ongoing incidents: Fire, Medical, Crime)
-            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(text = "Active Incidents", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-
-                // Show all active incidents here (no responderRole filtering) so responders can see incidents across departments
-                // Exclude DISASTER incidents from the active incidents list per request
-                val activeListVisible = remember(activeIncidents) { activeIncidents.filter { it.type != IncidentType.DISASTER } }
-
-                if (activeListVisible.isEmpty()) {
-                    Card(modifier = Modifier.fillMaxWidth(), elevation = CardDefaults.cardElevation(2.dp), shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Text(text = "No active incidents", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
-                        }
-                    }
-                } else {
-                    for (inc in activeListVisible) {
-                        Card(modifier = Modifier.fillMaxWidth(), elevation = CardDefaults.cardElevation(defaultElevation = 2.dp), shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                    // Incident type icon / label
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(text = inc.type.displayName, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(text = inc.location.ifBlank { "Unknown location" }, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
-                                    }
-
-                                    // Priority badge on the right
-                                    val priorityColor = when (inc.priority) {
-                                        IncidentPriority.HIGH -> Color(0xFFD32F2F)
-                                        IncidentPriority.MEDIUM -> Color(0xFFFFA000)
-                                        IncidentPriority.LOW -> Color(0xFFFFEB3B)
-                                    }
-                                    Box(modifier = Modifier
-                                        .border(2.dp, priorityColor, RoundedCornerShape(8.dp))
-                                        .padding(horizontal = 8.dp, vertical = 4.dp)) {
-                                        Text(text = inc.priority.name, color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
-                                    }
-                                }
-
-                                Spacer(modifier = Modifier.height(8.dp))
-
-                                // Description / time / status
-                                Text(text = inc.description, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f), maxLines = 2, overflow = TextOverflow.Ellipsis)
-
-                                // Show time reported and duration since reported (if recent)
-                                val now = System.currentTimeMillis()
-                                val reportedTime = inc.timeReported.time
-                                val diffMillis = now - reportedTime
-                                val showDuration = diffMillis in 0..(60L * 60L * 1000L) // within 1 hour
-
-                                // Time reported (relative or absolute)
-                                val timeReportedText = run {
-                                    try {
-                                        val diffMin = (diffMillis / 60000).toInt()
-                                        when {
-                                            diffMin < 1 -> "just now"
-                                            diffMin < 60 -> "${diffMin}m ago"
-                                            diffMin < 1440 -> {
-                                                val hours = diffMin / 60
-                                                "${hours}h ago"
                                             }
-                                            else -> java.text.SimpleDateFormat("h:mm a", Locale.getDefault()).format(inc.timeReported)
+
+                                            Spacer(modifier = Modifier.height(6.dp))
+
+                                            // Location (exact / nearest landmark)
+                                            Text(
+                                                text = inc.location.ifBlank { "Unknown location" },
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = MaterialTheme.colorScheme.onSurface.copy(
+                                                    alpha = 0.7f
+                                                ),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
                                         }
-                                    } catch (_: Exception) { "" }
+
+                                        // Priority badge with colored border / subtle background
+                                        Box(
+                                            modifier = Modifier
+                                                .border(
+                                                    2.dp,
+                                                    priorityColor,
+                                                    RoundedCornerShape(8.dp)
+                                                )
+                                                .background(
+                                                    priorityColor.copy(alpha = 0.06f),
+                                                    RoundedCornerShape(8.dp)
+                                                )
+                                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                                        ) {
+                                            Text(
+                                                text = inc.priority.name.uppercase(),
+                                                color = priorityColor,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        }
+                                    }
+
+                                    // Visible details / single-line summary
+                                    inc.description.takeIf { it.isNotBlank() }?.let { desc ->
+                                        Text(
+                                            text = desc,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+
+                                    // Action buttons for assigned incidents: icon + text, aligned right and closer together
+                                    val buttonScope = rememberCoroutineScope()
+                                    val showNavLabel = remember(inc.id) { mutableStateOf(false) }
+                                    val showOnSceneLabel =
+                                        remember(inc.id + "_scene") { mutableStateOf(false) }
+                                    val showMarkLabel =
+                                        remember(inc.id + "_mark") { mutableStateOf(false) }
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.End
+                                    ) {
+                                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                            // Navigate icon-only button
+                                            OutlinedButton(
+                                                onClick = {
+                                                    val navPrefs = context.getSharedPreferences(
+                                                        "nav_prefs",
+                                                        android.content.Context.MODE_PRIVATE
+                                                    )
+                                                    navPrefs.edit()
+                                                        .putString("last_nav_incident_id", inc.id)
+                                                        .apply()
+                                                    onSceneEnabledMap[inc.id] = false
+                                                    navDestinationIncidentId = inc.id
+                                                    navDestinationLat = inc.latitude
+                                                    navDestinationLng = inc.longitude
+
+                                                    if (currentLatitude != null && currentLongitude != null && inc.latitude != null && inc.longitude != null) {
+                                                        RouteHistoryStore.startRoute(
+                                                            context = context,
+                                                            incidentId = inc.id,
+                                                            startLat = currentLatitude ?: 0.0,
+                                                            startLng = currentLongitude ?: 0.0,
+                                                            destLat = inc.latitude,
+                                                            destLng = inc.longitude
+                                                        )
+                                                    }
+
+                                                    if (navDestinationLat != null && navDestinationLng != null) {
+                                                        if (ContextCompat.checkSelfPermission(
+                                                                context,
+                                                                Manifest.permission.ACCESS_FINE_LOCATION
+                                                            ) == PackageManager.PERMISSION_GRANTED
+                                                        ) {
+                                                            startOnSceneTracking()
+                                                        } else {
+                                                            onScenePermissionLauncher.launch(
+                                                                Manifest.permission.ACCESS_FINE_LOCATION
+                                                            )
+                                                        }
+                                                    }
+
+                                                    navigateToLocation(
+                                                        inc.latitude,
+                                                        inc.longitude,
+                                                        inc.location
+                                                    )
+                                                },
+                                                modifier = Modifier.size(40.dp)
+                                                    .combinedClickable(onClick = {}, onLongClick = {
+                                                        showNavLabel.value = true
+                                                        buttonScope.launch {
+                                                            delay(1200); showNavLabel.value = false
+                                                        }
+                                                    }),
+                                                shape = RoundedCornerShape(10.dp),
+                                                contentPadding = PaddingValues(0.dp)
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.LocationOn,
+                                                    contentDescription = "Navigate",
+                                                    tint = MaterialTheme.colorScheme.onSurface,
+                                                    modifier = Modifier.size(20.dp)
+                                                )
+                                            }
+                                            if (showNavLabel.value) Text(
+                                                text = "Navigate",
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                fontSize = 12.sp,
+                                                modifier = Modifier.align(Alignment.CenterVertically)
+                                            )
+
+                                            // On Scene icon-only button
+                                            OutlinedButton(
+                                                onClick = { sendOnSceneReport(inc) },
+                                                enabled = onSceneEnabledMap[inc.id] == true,
+                                                modifier = Modifier.size(40.dp)
+                                                    .combinedClickable(onClick = {}, onLongClick = {
+                                                        showOnSceneLabel.value = true
+                                                        buttonScope.launch {
+                                                            delay(1200); showOnSceneLabel.value =
+                                                            false
+                                                        }
+                                                    }),
+                                                shape = RoundedCornerShape(10.dp),
+                                                contentPadding = PaddingValues(0.dp)
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.MyLocation,
+                                                    contentDescription = "On Scene",
+                                                    tint = MaterialTheme.colorScheme.onSurface,
+                                                    modifier = Modifier.size(20.dp)
+                                                )
+                                            }
+                                            if (showOnSceneLabel.value) Text(
+                                                text = "On Scene",
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                fontSize = 12.sp,
+                                                modifier = Modifier.align(Alignment.CenterVertically)
+                                            )
+
+                                            // Mark Complete icon-only button (primary)
+                                            Button(
+                                                onClick = {
+                                                    markTargetIncidentInc = inc
+                                                    proofNotes = ""
+                                                    selectedProofUri = null
+                                                    showMarkCompleteDialog = true
+                                                },
+                                                modifier = Modifier.size(40.dp)
+                                                    .combinedClickable(onClick = {}, onLongClick = {
+                                                        showMarkLabel.value = true
+                                                        buttonScope.launch {
+                                                            delay(1200); showMarkLabel.value = false
+                                                        }
+                                                    }),
+                                                colors = ButtonDefaults.buttonColors(
+                                                    containerColor = Color(
+                                                        0xFF2E7D32
+                                                    ),
+                                                    contentColor = MaterialTheme.colorScheme.onPrimary
+                                                ),
+                                                shape = RoundedCornerShape(10.dp),
+                                                contentPadding = PaddingValues(0.dp)
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.Done,
+                                                    contentDescription = "Mark Complete",
+                                                    modifier = Modifier.size(20.dp)
+                                                )
+                                            }
+                                            if (showMarkLabel.value) Text(
+                                                text = "Mark",
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                fontSize = 12.sp,
+                                                modifier = Modifier.align(Alignment.CenterVertically)
+                                            )
+                                        }
+                                    }
                                 }
-
-                                // Duration since reported (if within 1 hour)
-                                val durationText = if (showDuration) {
-                                    val seconds = (diffMillis / 1000).toInt() % 60
-                                    val minutes = (diffMillis / (1000 * 60)).toInt() % 60
-                                    val hours = (diffMillis / (1000 * 60 * 60)).toInt()
-
-                                    // Format as "1h 23m" or "45m 30s" etc.
-                                    buildString {
-                                        if (hours > 0) append("${hours}h ")
-                                        if (minutes > 0) append("${minutes}m ")
-                                        append("${seconds}s")
-                                    }.trim()
-                                } else ""
-
-                                // Combine time reported and duration in a single text element
-                                Text(
-                                    text = "Reported: $timeReportedText${if (durationText.isNotBlank()) " ($durationText)" else ""}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                                    modifier = Modifier.padding(top = 4.dp)
-                                )
-
-                                // Buttons intentionally removed for Active Incidents to keep this list read-only (details and priority remain visible)
                             }
                         }
-
-                        Spacer(modifier = Modifier.height(8.dp))
                     }
                 }
-            }
 
-            Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
-            // Primary action button: Settings
-            OutlinedButton(onClick = { showSettingsDialog = true }, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), shape = RoundedCornerShape(12.dp)) { Text("Settings") }
-            Spacer(modifier = Modifier.height(8.dp)) // add a little space below the Settings button
+                // Active Incidents (shows currently ongoing incidents: Fire, Medical, Crime)
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "Active Incidents",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
 
-            // Mark Complete dialog with proof (notes + image). This enforces adding proof before submission.
-            if (showMarkCompleteDialog && markTargetIncidentInc != null) {
-                val hasProof = selectedProofUri != null
-                val hasTwoWords = proofNotes.trim().split(Regex("\\s+")).filter { it.isNotBlank() }.size >= 2
-                 AlertDialog(
-                     onDismissRequest = { showMarkCompleteDialog = false; markTargetIncidentInc = null },
-                     title = { Text(text = "Mark Incident Complete", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground) },
-                     text = {
-                         Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                             Text(text = "Provide a short note and take a photo as proof that the incident has been completed.", color = MaterialTheme.colorScheme.onBackground)
+                    // Show all active incidents here (no responderRole filtering) so responders can see incidents across departments
+                    // Exclude DISASTER incidents from the active incidents list per request
+                    val activeListVisible =
+                        remember(activeIncidents) { activeIncidents.filter { it.type != IncidentType.DISASTER } }
 
-                             androidx.compose.material3.OutlinedTextField(
-                                 value = proofNotes,
-                                 onValueChange = { proofNotes = it },
-                                 label = { Text("Completion notes") },
-                                 modifier = Modifier.fillMaxWidth(),
-                                 colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
-                                     focusedTextColor = if (!hasProof) Color.White else MaterialTheme.colorScheme.onBackground,
-                                     unfocusedTextColor = if (!hasProof) Color.White else MaterialTheme.colorScheme.onBackground
-                                 )
-                             )
+                    if (activeListVisible.isEmpty()) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            elevation = CardDefaults.cardElevation(2.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Text(
+                                    text = "No active incidents",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    } else {
+                        for (inc in activeListVisible) {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        // Incident type icon / label
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = inc.type.displayName,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                text = inc.location.ifBlank { "Unknown location" },
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
 
-                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                // Camera capture button (use primary container so label contrasts)
-                                Button(onClick = {
-                                    // Launch camera intent (returns small Bitmap in extras)
-                                    val cameraIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
-                                    takePictureLauncher.launch(cameraIntent)
-                                }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary)) {
-                                    Text("Take Photo")
+                                        // Priority badge on the right
+                                        val priorityColor = when (inc.priority) {
+                                            IncidentPriority.HIGH -> Color(0xFFD32F2F)
+                                            IncidentPriority.MEDIUM -> Color(0xFFFFA000)
+                                            IncidentPriority.LOW -> Color(0xFFFFEB3B)
+                                        }
+                                        Box(
+                                            modifier = Modifier
+                                                .border(
+                                                    2.dp,
+                                                    priorityColor,
+                                                    RoundedCornerShape(8.dp)
+                                                )
+                                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                                        ) {
+                                            Text(
+                                                text = inc.priority.name,
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                fontWeight = FontWeight.SemiBold,
+                                                fontSize = 12.sp
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(8.dp))
+
+                                    // Description / time / status
+                                    Text(
+                                        text = inc.description,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+
+                                    // Show time reported and duration since reported (if recent)
+                                    val now = System.currentTimeMillis()
+                                    val reportedTime = inc.timeReported.time
+                                    val diffMillis = now - reportedTime
+                                    val showDuration =
+                                        diffMillis in 0..(60L * 60L * 1000L) // within 1 hour
+
+                                    // Time reported (relative or absolute)
+                                    val timeReportedText = run {
+                                        try {
+                                            val diffMin = (diffMillis / 60000).toInt()
+                                            when {
+                                                diffMin < 1 -> "just now"
+                                                diffMin < 60 -> "${diffMin}m ago"
+                                                diffMin < 1440 -> {
+                                                    val hours = diffMin / 60
+                                                    "${hours}h ago"
+                                                }
+
+                                                else -> java.text.SimpleDateFormat(
+                                                    "h:mm a",
+                                                    Locale.getDefault()
+                                                ).format(inc.timeReported)
+                                            }
+                                        } catch (_: Exception) {
+                                            ""
+                                        }
+                                    }
+
+                                    // Duration since reported (if within 1 hour)
+                                    val durationText = if (showDuration) {
+                                        val seconds = (diffMillis / 1000).toInt() % 60
+                                        val minutes = (diffMillis / (1000 * 60)).toInt() % 60
+                                        val hours = (diffMillis / (1000 * 60 * 60)).toInt()
+
+                                        // Format as "1h 23m" or "45m 30s" etc.
+                                        buildString {
+                                            if (hours > 0) append("${hours}h ")
+                                            if (minutes > 0) append("${minutes}m ")
+                                            append("${seconds}s")
+                                        }.trim()
+                                    } else ""
+
+                                    // Combine time reported and duration in a single text element
+                                    Text(
+                                        text = "Reported: $timeReportedText${if (durationText.isNotBlank()) " ($durationText)" else ""}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                                        modifier = Modifier.padding(top = 4.dp)
+                                    )
+
+                                    // Buttons intentionally removed for Active Incidents to keep this list read-only (details and priority remain visible)
                                 }
-                                selectedProofUri?.let { uriStr ->
-                                     // simple preview: support both content:// and file:// URIs
-                                     val bitmap = try {
-                                         if (uriStr.startsWith("file://")) {
-                                             val path = Uri.parse(uriStr).path
-                                             if (path != null) BitmapFactory.decodeFile(path) else null
-                                         } else {
-                                             val uri = Uri.parse(uriStr)
-                                             context.contentResolver.openInputStream(uri)?.use { stream -> BitmapFactory.decodeStream(stream) }
-                                         }
-                                     } catch (_: Exception) { null }
+                            }
 
-                                     if (bitmap != null) {
-                                         Image(bitmap = bitmap.asImageBitmap(), contentDescription = "Proof image", modifier = Modifier.size(64.dp))
-                                     } else {
-                                         Text(text = "Selected: ${uriStr.substringAfterLast('/')}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onBackground)
-                                     }
-                                 }
-                             }
-                         }
-                     },
-                     confirmButton = {
-                         Button(
-                             onClick = {
-                                 val inc = markTargetIncidentInc
-                                 if (inc != null) {
-                                     markIncidentDone(inc, proofNotes, selectedProofUri)
-                                     showMarkCompleteDialog = false
-                                     markTargetIncidentInc = null
-                                     proofNotes = ""
-                                     selectedProofUri = null
-                                 }
-                             },
-                             enabled = hasTwoWords && hasProof,
-                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary)
-                         ) { Text("Submit") }
-                     },
-                     dismissButton = {
-                        androidx.compose.material3.TextButton(onClick = { showMarkCompleteDialog = false; markTargetIncidentInc = null }) { Text("Cancel", color = MaterialTheme.colorScheme.onBackground) }
-                     }
-                 )
-             }
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                    }
+                }
 
-            // End of main scrollable content column.
-        }
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Primary action button: Settings
+                OutlinedButton(
+                    onClick = { showSettingsDialog = true },
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                    shape = RoundedCornerShape(12.dp)
+                ) { Text("Settings") }
+                Spacer(modifier = Modifier.height(8.dp)) // add a little space below the Settings button
+
+                // Mark Complete dialog with proof (notes + image). This enforces adding proof before submission.
+                if (showMarkCompleteDialog && markTargetIncidentInc != null) {
+                    val hasProof = selectedProofUri != null
+                    val hasTwoWords =
+                        proofNotes.trim().split(Regex("\\s+")).filter { it.isNotBlank() }.size >= 2
+                    AlertDialog(
+                        onDismissRequest = {
+                            showMarkCompleteDialog = false; markTargetIncidentInc = null
+                        },
+                        title = {
+                            Text(
+                                text = "Mark Incident Complete",
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                        },
+                        text = {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = "Provide a short note and take a photo as proof that the incident has been completed.",
+                                    color = MaterialTheme.colorScheme.onBackground
+                                )
+
+                                androidx.compose.material3.OutlinedTextField(
+                                    value = proofNotes,
+                                    onValueChange = { proofNotes = it },
+                                    label = { Text("Completion notes") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                                        focusedTextColor = if (!hasProof) Color.White else MaterialTheme.colorScheme.onBackground,
+                                        unfocusedTextColor = if (!hasProof) Color.White else MaterialTheme.colorScheme.onBackground
+                                    )
+                                )
+
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    // Camera capture button (use primary container so label contrasts)
+                                    Button(
+                                        onClick = {
+                                            // Launch camera intent (returns small Bitmap in extras)
+                                            val cameraIntent =
+                                                Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+                                            takePictureLauncher.launch(cameraIntent)
+                                        },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = MaterialTheme.colorScheme.primary,
+                                            contentColor = MaterialTheme.colorScheme.onPrimary
+                                        )
+                                    ) {
+                                        Text("Take Photo")
+                                    }
+                                    selectedProofUri?.let { uriStr ->
+                                        // simple preview: support both content:// and file:// URIs
+                                        val bitmap = try {
+                                            if (uriStr.startsWith("file://")) {
+                                                val path = Uri.parse(uriStr).path
+                                                if (path != null) BitmapFactory.decodeFile(path) else null
+                                            } else {
+                                                val uri = Uri.parse(uriStr)
+                                                context.contentResolver.openInputStream(uri)
+                                                    ?.use { stream ->
+                                                        BitmapFactory.decodeStream(stream)
+                                                    }
+                                            }
+                                        } catch (_: Exception) {
+                                            null
+                                        }
+
+                                        if (bitmap != null) {
+                                            Image(
+                                                bitmap = bitmap.asImageBitmap(),
+                                                contentDescription = "Proof image",
+                                                modifier = Modifier.size(64.dp)
+                                            )
+                                        } else {
+                                            Text(
+                                                text = "Selected: ${uriStr.substringAfterLast('/')}",
+                                                fontSize = 12.sp,
+                                                color = MaterialTheme.colorScheme.onBackground
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    val inc = markTargetIncidentInc
+                                    if (inc != null) {
+                                        markIncidentDone(inc, proofNotes, selectedProofUri)
+                                        showMarkCompleteDialog = false
+                                        markTargetIncidentInc = null
+                                        proofNotes = ""
+                                        selectedProofUri = null
+                                    }
+                                },
+                                enabled = hasTwoWords && hasProof,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary
+                                )
+                            ) { Text("Submit") }
+                        },
+                        dismissButton = {
+                            androidx.compose.material3.TextButton(onClick = {
+                                showMarkCompleteDialog = false; markTargetIncidentInc = null
+                            }) { Text("Cancel", color = MaterialTheme.colorScheme.onBackground) }
+                        }
+                    )
+                }
+
+                // End of main scrollable content column.
+            }
 
             // Keep the dialog outside the main content so it can appear regardless of scroll.
             if (showDepartmentSelection) {
@@ -1391,16 +2045,19 @@ fun HomeScreen(responderRole: String? = null) {
                             responderName = accountUsername.trim()
                         }
                         showSettingsDialog = false
-                     },
-                     onBack = { showSettingsDialog = false },
-                     onLogout = {
-                         prefs.edit().clear().apply()
-                         context.getSharedPreferences("user_prefs", android.content.Context.MODE_PRIVATE).edit().clear().apply()
-                         Toast.makeText(context, "Logged out", Toast.LENGTH_SHORT).show()
-                         showSettingsDialog = false
-                     }
-                 )
-             }
+                    },
+                    onBack = { showSettingsDialog = false },
+                    onLogout = {
+                        prefs.edit().clear().apply()
+                        context.getSharedPreferences(
+                            "user_prefs",
+                            android.content.Context.MODE_PRIVATE
+                        ).edit().clear().apply()
+                        Toast.makeText(context, "Logged out", Toast.LENGTH_SHORT).show()
+                        showSettingsDialog = false
+                    }
+                )
+            }
 
             // New incident notification popup (overlay at top)
             Box(
@@ -1489,8 +2146,14 @@ private fun AccountSettingsDialog(
         onDismissRequest = onBack,
         title = { Text("Account Settings", fontWeight = FontWeight.SemiBold) },
         text = {
-            Column(modifier = Modifier.fillMaxWidth().wrapContentHeight(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                modifier = Modifier.fillMaxWidth().wrapContentHeight(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
                     ResponderAvatar(
                         modifier = Modifier.size(64.dp),
                         imageUri = photoUri,
@@ -1498,7 +2161,10 @@ private fun AccountSettingsDialog(
                         status = ResponderOnlineStatus.Offline,
                         contentDescription = "Profile photo"
                     )
-                    OutlinedButton(onClick = onPickPhoto, modifier = Modifier.widthIn(min = 120.dp)) {
+                    OutlinedButton(
+                        onClick = onPickPhoto,
+                        modifier = Modifier.widthIn(min = 120.dp)
+                    ) {
                         Text("Add Photo")
                     }
                 }
@@ -1536,7 +2202,10 @@ private fun AccountSettingsDialog(
 
                 androidx.compose.material3.HorizontalDivider()
                 Text("Account Actions", fontWeight = FontWeight.SemiBold)
-                OutlinedButton(onClick = onLogout, colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)) {
+                OutlinedButton(
+                    onClick = onLogout,
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) {
                     Text("Logout")
                 }
             }

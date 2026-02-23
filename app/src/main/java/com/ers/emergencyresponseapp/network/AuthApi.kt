@@ -1,59 +1,31 @@
 package com.ers.emergencyresponseapp.network
 
-import retrofit2.http.Body
+import retrofit2.http.Field
+import retrofit2.http.FormUrlEncoded
 import retrofit2.http.POST
-
-data class UserDto(
-    val id: Int,
-    val name: String?,
-    val email: String
-)
-
-/** Request payload for POST /api/login */
-data class LoginRequest(
-    val email: String
-)
-
-/** Response payload from POST /api/login */
-data class LoginResponse(
-    val success: Boolean,
-    val message: String,
-    val user: UserDto? = null
-)
-
-/** Request payload for POST /api/send-otp */
-data class SendOtpRequest(
-    val email: String
-)
-
-/** Response payload from POST /api/send-otp */
-data class SendOtpResponse(
-    val success: Boolean,
-    val message: String,
-    val otp: String? = null
-)
-
-/** Request payload for POST /api/verify-otp */
-data class VerifyOtpRequest(
-    val email: String,
-    val otp: String
-)
-
-/** Response payload from POST /api/verify-otp */
-data class VerifyOtpResponse(
-    val success: Boolean,
-    val message: String,
-    val user: UserDto? = null
-)
 
 interface AuthApi {
 
-    @POST("api/login")
-    suspend fun login(@Body body: LoginRequest): LoginResponse
+    @FormUrlEncoded
+    @POST("api/send-otp.php")
+    suspend fun sendOtp(@Field("email") email: String): SendOtpResponse
 
-    @POST("api/send-otp")
-    suspend fun sendOtp(@Body body: SendOtpRequest): SendOtpResponse
+    @FormUrlEncoded
+    @POST("api/verify-otp.php")
+    suspend fun verifyOtp(
+        @Field("email") email: String,
+        @Field("otp") otp: String
+    ): VerifyOtpResponse
 
-    @POST("api/verify-otp")
-    suspend fun verifyOtp(@Body body: VerifyOtpRequest): VerifyOtpResponse
+    @FormUrlEncoded
+    @POST("api/login.php")
+    suspend fun login(
+        @Field("email") email: String
+    ): LoginResponse
+
+    @FormUrlEncoded
+    @POST("api/Incidents/get-assigned-incidents.php")
+    suspend fun getAssignedIncidents(
+        @Field("email") email: String
+    ): IncidentsResponse
 }

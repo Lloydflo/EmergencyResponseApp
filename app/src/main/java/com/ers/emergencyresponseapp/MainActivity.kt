@@ -37,6 +37,11 @@ import androidx.navigation.compose.rememberNavController
 import com.ers.emergencyresponseapp.ui.theme.EmergencyResponseAppTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import android.util.Log
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import com.ers.emergencyresponseapp.network.RetrofitProvider
+
 
 // If you have a BottomNavItem sealed class in the project, reuse it; otherwise declare a lightweight version here.
 sealed class NavItem(val route: String, val title: String, val icon: ImageVector) {
@@ -49,6 +54,7 @@ sealed class NavItem(val route: String, val title: String, val icon: ImageVector
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Log.e("APP_START", "MainActivity onCreate - started")
         setContent {
             val context = LocalContext.current
             val prefs = context.getSharedPreferences("ers_prefs", Context.MODE_PRIVATE)
@@ -188,6 +194,17 @@ fun EmergencyResponseScreen(
     onProceed: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
+
+    LaunchedEffect(Unit) {
+        Log.d("API_TEST", "App opened")
+
+
+        try {
+
+        } catch (e: Exception) {
+            Log.e("API_TEST", "ERROR: ${e.message}", e)
+        }
+    }
 
     // Encouraging quotes to rotate
     val quotes = listOf(

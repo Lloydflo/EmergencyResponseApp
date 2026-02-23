@@ -26,7 +26,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
 import com.ers.emergencyresponseapp.network.RetrofitProvider
-import com.ers.emergencyresponseapp.network.SendOtpRequest
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
 
@@ -72,9 +71,7 @@ class SendOtpActivity : ComponentActivity() {
 
                                 lifecycleScope.launch {
                                     try {
-                                        val response = RetrofitProvider.authApi.sendOtp(
-                                            SendOtpRequest(email = email.trim())
-                                        )
+                                        val response = RetrofitProvider.authApi.sendOtp(email)
                                         message = response.message
 
                                         if (response.success) {
