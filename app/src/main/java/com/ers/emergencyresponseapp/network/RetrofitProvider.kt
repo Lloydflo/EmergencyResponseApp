@@ -1,14 +1,13 @@
 package com.ers.emergencyresponseapp.network
 
 import android.util.Log
+import com.ers.emergencyresponseapp.BuildConfig
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 
 object RetrofitProvider {
-    private const val BASE_URL = "https://hytographicallly-nondistorted-aurelia.ngrok-free.dev/"
-
     private val httpLoggingInterceptor: HttpLoggingInterceptor by lazy {
         HttpLoggingInterceptor { message ->
             Log.d("RetrofitHttp", message)
@@ -30,7 +29,7 @@ object RetrofitProvider {
 
     private val retrofit: Retrofit by lazy {
         Retrofit.Builder()
-            .baseUrl(BASE_URL)
+            .baseUrl(BuildConfig.BASE_URL)
             .client(okHttpClient)
             .addConverterFactory(GsonConverterFactory.create())
             .build()
