@@ -59,6 +59,7 @@ import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -753,6 +754,24 @@ fun HomeScreen(responderRole: String? = null) {
         }
     })
 
+    var hasRequestedLocationPermission by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+            isLocationShared = true
+            startLocationUpdates()
+        } else if (!hasRequestedLocationPermission) {
+            hasRequestedLocationPermission = true
+            locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            fusedLocationClient.removeLocationUpdates(locationCallback)
+            fusedLocationClient.removeLocationUpdates(onSceneLocationCallback)
+        }
+    }
+
     val onScenePermissionLauncher = rememberLauncherForActivityResult(contract = ActivityResultContracts.RequestPermission(), onResult = { isGranted: Boolean ->
         if (isGranted) {
             startOnSceneTracking()
@@ -1394,6 +1413,9 @@ fun HomeScreen(responderRole: String? = null) {
                      },
                      onBack = { showSettingsDialog = false },
                      onLogout = {
+                         isLocationShared = false
+                         stopLocationUpdates()
+                         fusedLocationClient.removeLocationUpdates(onSceneLocationCallback)
                          prefs.edit().clear().apply()
                          context.getSharedPreferences("user_prefs", android.content.Context.MODE_PRIVATE).edit().clear().apply()
                          Toast.makeText(context, "Logged out", Toast.LENGTH_SHORT).show()
