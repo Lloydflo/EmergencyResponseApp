@@ -58,6 +58,16 @@ class MainActivity : ComponentActivity() {
         setContent {
             val context = LocalContext.current
             val prefs = context.getSharedPreferences("ers_prefs", Context.MODE_PRIVATE)
+            val authPrefs = context.getSharedPreferences("auth", Context.MODE_PRIVATE)
+            val isLoggedIn = authPrefs.getBoolean("user_verified", false)
+
+// Optional: kung gusto mo direct home/{department} agad
+            val userPrefs = context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
+            val dept = userPrefs.getString("department", null)?.lowercase()
+            val homeRoute = if (!dept.isNullOrBlank()) "home/$dept" else "home"
+
+// ✅ start destination
+            val startDestination = if (isLoggedIn) homeRoute else "entry"
             var isDarkMode by remember { mutableStateOf(prefs.getBoolean("dark_mode", false)) }
 
             DisposableEffect(prefs) {
@@ -96,7 +106,7 @@ class MainActivity : ComponentActivity() {
                          }
                      ) { innerPadding ->
                          Box(modifier = Modifier.padding(innerPadding)) {
-                            NavHost(navController = navController, startDestination = "entry") {
+                             NavHost(navController = navController, startDestination = startDestination) {
                                 composable("entry") {
                                     // Single Proceed button navigates to the login flow
                                     EmergencyResponseScreen(onProceed = {
@@ -110,35 +120,59 @@ class MainActivity : ComponentActivity() {
                                 // Login flow (email + OTP) -> navigate to home on success
                                 composable("login") {
                                     LoginScreen(onLoggedIn = { _email: String ->
-                                        navController.navigate("home") {
-                                            popUpTo(navController.graph.startDestinationId)
+                                        navController.navigate(homeRoute) {
+                                            popUpTo("entry") { inclusive = true }   // remove entry
+                                            popUpTo("login") { inclusive = true }   // remove login
                                             launchSingleTop = true
                                         }
                                     })
                                 }
 
                                 // Home route (no role) and home route accepting an optional role segment
-                                composable("home") {
-                                     AnimatedHomeScreen(responderRole = null)
+                                 composable("home") {
+                                     AnimatedHomeScreen(
+                                         responderRole = null,
+                                         onLogout = {
+                                             authPrefs.edit().clear().apply()
+                                             context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE).edit().clear().apply()
+
+                                             navController.navigate("entry") {
+                                                 popUpTo(0) { inclusive = true } // wipe everything
+                                                 launchSingleTop = true
+                                             }
+                                         }
+                                     )
                                  }
                                  composable("home/{role}") { backStackEntry ->
                                      val roleArg = backStackEntry.arguments?.getString("role")
-                                     AnimatedHomeScreen(responderRole = roleArg?.takeIf { it.isNotBlank() })
-                                     // Check for navigation trigger from HomeScreen (mark-done flow)
+
+                                     // ✅ declare inner prefs here (para walang duplicate/undefined)
                                      val innerContext = LocalContext.current
                                      val innerPrefs = innerContext.getSharedPreferences("ers_prefs", Context.MODE_PRIVATE)
+
+                                     AnimatedHomeScreen(
+                                         responderRole = roleArg?.takeIf { it.isNotBlank() },
+                                         onLogout = {
+                                             // clear BOTH auth + user prefs
+                                             innerContext.getSharedPreferences("auth", Context.MODE_PRIVATE).edit().clear().apply()
+                                             innerContext.getSharedPreferences("user_prefs", Context.MODE_PRIVATE).edit().clear().apply()
+
+                                             navController.navigate("entry") {
+                                                 popUpTo(0) { inclusive = true }
+                                                 launchSingleTop = true
+                                             }
+                                         }
+                                     )
+
                                      LaunchedEffect(Unit) {
                                          if (innerPrefs.getBoolean("navigate_to_reviews", false)) {
-                                             // clear flag and navigate
                                              innerPrefs.edit().putBoolean("navigate_to_reviews", false).apply()
                                              navController.navigate("reviews_feedback") {
-                                                 popUpTo(navController.graph.startDestinationId)
                                                  launchSingleTop = true
                                              }
                                          }
                                      }
                                  }
-
                                 // Coordination portal screen (accessible from bottom navigation)
                                 composable("coordination_portal") {
                                     val localContext = LocalContext.current
@@ -266,7 +300,7 @@ fun EmergencyResponseScreen(
 // HomeScreen(...) is defined in HomeScreen.kt
 
 @Composable
-fun AnimatedHomeScreen(responderRole: String? = null) {
+fun AnimatedHomeScreen(responderRole: String? = null, onLogout: () -> Unit) {
     var showEntrance by remember { mutableStateOf(true) }
     val alpha = remember { Animatable(0f) }
     val scale = remember { Animatable(0.9f) }
@@ -293,7 +327,7 @@ fun AnimatedHomeScreen(responderRole: String? = null) {
         }
     } else {
         // Pass the role through to HomeScreen (from HomeScreen.kt) so role-scoped UI works
-        HomeScreen(responderRole = responderRole)
+        HomeScreen(responderRole = responderRole, onLogout = onLogout)
     }
 }
 

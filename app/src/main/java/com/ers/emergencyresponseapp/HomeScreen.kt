@@ -353,7 +353,7 @@ private fun EmergencyRequestList(requests: List<EmergencyRequest>, title: String
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(responderRole: String? = null) {
+fun HomeScreen(responderRole: String? = null, onLogout: () -> Unit) {
     val context = LocalContext.current
     var isLocationMonitoringEnabled by remember { mutableStateOf(false) }
 
@@ -1486,12 +1486,11 @@ fun HomeScreen(responderRole: String? = null) {
                         showSettingsDialog = false
                      },
                      onBack = { showSettingsDialog = false },
-                     onLogout = {
-                         prefs.edit().clear().apply()
-                         context.getSharedPreferences("user_prefs", android.content.Context.MODE_PRIVATE).edit().clear().apply()
-                         Toast.makeText(context, "Logged out", Toast.LENGTH_SHORT).show()
-                         showSettingsDialog = false
-                     }
+                    onLogout = {
+                        Toast.makeText(context, "Logged out", Toast.LENGTH_SHORT).show()
+                        showSettingsDialog = false
+                        onLogout() // ✅ navigate + clear session handled in MainActivity
+                    }
                  )
              }
 
