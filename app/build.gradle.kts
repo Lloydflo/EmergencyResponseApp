@@ -24,7 +24,7 @@ android {
         buildConfigField(
             "String",
             "BASE_URL",
-            "\"https://hytographicallly-nondistorted-aurelia.ngrok-free.dev/\""
+            "\"https://emergency-response.alertaraqc.com/\""
         )
     }
 
