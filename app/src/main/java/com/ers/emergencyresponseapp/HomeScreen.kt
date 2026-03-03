@@ -123,6 +123,17 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.draw.shadow
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Switch
+import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.unit.dp
+
 
 
 private object AppColors {
@@ -485,6 +496,153 @@ private fun EmergencyRequestList(requests: List<EmergencyRequest>, title: String
     }
 }
 
+@Composable
+private fun AssignedActionButtons(
+    inc: Incident,
+    context: Context,
+    currentLatitude: Double?,
+    currentLongitude: Double?,
+    onSceneEnabled: Boolean,
+    setOnSceneEnabled: (Boolean) -> Unit,
+    setNavTarget: (id: String, lat: Double?, lng: Double?) -> Unit,
+    startOnSceneTracking: () -> Unit,
+    requestOnScenePermission: () -> Unit,
+    navigateToLocation: (Double?, Double?, String?) -> Unit,
+    sendOnSceneReport: (Incident) -> Unit,
+    openMarkDone: (Incident) -> Unit
+) {
+    val buttonScope = rememberCoroutineScope()
+    val showNavLabel = remember(inc.id) { mutableStateOf(false) }
+    val showOnSceneLabel = remember(inc.id + "_scene") { mutableStateOf(false) }
+    val showMarkLabel = remember(inc.id + "_mark") { mutableStateOf(false) }
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.End
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+
+            // NAVIGATE
+            OutlinedButton(
+                onClick = {
+                    val navPrefs = context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
+                    navPrefs.edit().putString("last_nav_incident_id", inc.id).apply()
+
+                    setOnSceneEnabled(false)
+                    setNavTarget(inc.id, inc.latitude, inc.longitude)
+
+                    if (currentLatitude != null && currentLongitude != null &&
+                        inc.latitude != null && inc.longitude != null
+                    ) {
+                        RouteHistoryStore.startRoute(
+                            context = context,
+                            incidentId = inc.id,
+                            startLat = currentLatitude,
+                            startLng = currentLongitude,
+                            destLat = inc.latitude,
+                            destLng = inc.longitude
+                        )
+                    }
+
+                    if (inc.latitude != null && inc.longitude != null) {
+                        if (ContextCompat.checkSelfPermission(
+                                context,
+                                Manifest.permission.ACCESS_FINE_LOCATION
+                            ) == PackageManager.PERMISSION_GRANTED
+                        ) {
+                            startOnSceneTracking()
+                        } else {
+                            requestOnScenePermission()
+                        }
+                    }
+
+                    navigateToLocation(inc.latitude, inc.longitude, inc.location)
+                },
+                modifier = Modifier
+                    .size(42.dp)
+                    .combinedClickable(
+                        onClick = {},
+                        onLongClick = {
+                            showNavLabel.value = true
+                            buttonScope.launch { delay(900); showNavLabel.value = false }
+                        }
+                    ),
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Icon(
+                    Icons.Default.LocationOn,
+                    contentDescription = "Navigate",
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            // ON-SCENE
+            OutlinedButton(
+                onClick = { sendOnSceneReport(inc) },
+                enabled = onSceneEnabled,
+                modifier = Modifier
+                    .size(42.dp)
+                    .combinedClickable(
+                        onClick = {},
+                        onLongClick = {
+                            showOnSceneLabel.value = true
+                            buttonScope.launch { delay(900); showOnSceneLabel.value = false }
+                        }
+                    ),
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Icon(
+                    Icons.Default.MyLocation,
+                    contentDescription = "On Scene",
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            // MARK DONE
+            Button(
+                onClick = { openMarkDone(inc) },
+                modifier = Modifier
+                    .size(42.dp)
+                    .combinedClickable(
+                        onClick = {},
+                        onLongClick = {
+                            showMarkLabel.value = true
+                            buttonScope.launch { delay(900); showMarkLabel.value = false }
+                        }
+                    ),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF2E7D32),
+                    contentColor = Color.White
+                ),
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Icon(
+                    Icons.Default.Done,
+                    contentDescription = "Mark Done",
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+    }
+}
+private fun timeAgoLabel(timeReported: java.util.Date): String {
+    val now = System.currentTimeMillis()
+    val diff = now - timeReported.time
+    val diffMin = (diff / 60000).toInt()
+
+    return when {
+        diffMin < 1 -> "just now"
+        diffMin < 60 -> "${diffMin}m ago"
+        diffMin < 1440 -> "${diffMin / 60}h ago"
+        else -> java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
+            .format(timeReported)
+    }
+}
+private enum class ActivePriorityFilter { ALL, HIGH, MEDIUM, LOW }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(responderRole: String? = null, onLogout: () -> Unit) {
@@ -557,6 +715,11 @@ fun HomeScreen(responderRole: String? = null, onLogout: () -> Unit) {
         }
     }
 
+    var selectedActiveIncident by remember { mutableStateOf<Incident?>(null) }
+    var showActiveDetailsSheet by remember { mutableStateOf(false) }
+
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
     // Online/offline and availability
     var onlineStatus by remember { mutableStateOf(ResponderOnlineStatus.Online) }
     var responderAvailable by remember { mutableStateOf(true) }
@@ -588,6 +751,7 @@ fun HomeScreen(responderRole: String? = null, onLogout: () -> Unit) {
     var showDepartmentSelection by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
     var showAllActiveDialog by remember { mutableStateOf(false) }
+    var activeFilter by remember { mutableStateOf(ActivePriorityFilter.ALL) }
 
 
     // Mark-complete / proof form state (UI only)
@@ -1249,7 +1413,7 @@ fun HomeScreen(responderRole: String? = null, onLogout: () -> Unit) {
                     .windowInsetsPadding(WindowInsets.navigationBars),
                 contentPadding = PaddingValues(
                     top = if (showAlwaysLocationNotice) 132.dp else 0.dp,
-                    bottom = 88.dp // ✅ para di dikit sa bottom nav
+                    bottom = 10.dp // ✅ para di dikit sa bottom nav
                 ),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
@@ -1352,16 +1516,24 @@ fun HomeScreen(responderRole: String? = null, onLogout: () -> Unit) {
                     ) {
 
                         @Composable
-                        fun StatCardLocal(value: Int, label: String, modifier: Modifier = Modifier) {
+                        fun StatCardLocal(
+                            value: Int,
+                            label: String,
+                            modifier: Modifier = Modifier
+                        ) {
                             Card(
-                                modifier = modifier.shadow(8.dp, RoundedCornerShape(20.dp)),
+                                modifier = modifier
+                                    .shadow(8.dp, RoundedCornerShape(20.dp)),
                                 shape = RoundedCornerShape(20.dp),
                                 colors = CardDefaults.cardColors(
                                     containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)
                                 )
                             ) {
                                 Column(
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 16.dp),
+                                    modifier = Modifier.padding(
+                                        horizontal = 12.dp,
+                                        vertical = 16.dp
+                                    ),
                                     horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
                                     Text(
@@ -1374,15 +1546,26 @@ fun HomeScreen(responderRole: String? = null, onLogout: () -> Unit) {
                                     Text(
                                         text = label,
                                         fontSize = 12.sp,
-                                        textAlign = TextAlign.Center
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier.fillMaxWidth()
                                     )
                                 }
                             }
                         }
 
-                        StatCardLocal(fireCount, "Fire Today", Modifier.weight(1f))
-                        StatCardLocal(medicalCount, "Medical Today", Modifier.weight(1f))
-                        StatCardLocal(crimeCount, "Crime Today", Modifier.weight(1f))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(
+                                12.dp,
+                                Alignment.CenterHorizontally
+                            )
+                        ) {
+                            StatCardLocal(fireCount, "Fire Today", Modifier.weight(1f))
+                            StatCardLocal(medicalCount, "Medical Today", Modifier.weight(1f))
+                            StatCardLocal(crimeCount, "Crime Today", Modifier.weight(1f))
+                        }
                     }
                 }
 
@@ -1424,10 +1607,15 @@ fun HomeScreen(responderRole: String? = null, onLogout: () -> Unit) {
                                             diffMin < 1 -> "just now"
                                             diffMin < 60 -> "${diffMin}m ago"
                                             diffMin < 1440 -> "${diffMin / 60}h ago"
-                                            else -> java.text.SimpleDateFormat("h:mm a", Locale.getDefault())
+                                            else -> java.text.SimpleDateFormat(
+                                                "h:mm a",
+                                                Locale.getDefault()
+                                            )
                                                 .format(inc.timeReported)
                                         }
-                                    } catch (_: Exception) { "" }
+                                    } catch (_: Exception) {
+                                        ""
+                                    }
                                 }
 
                                 val priorityColor = when (inc.priority) {
@@ -1442,14 +1630,20 @@ fun HomeScreen(responderRole: String? = null, onLogout: () -> Unit) {
                                         .shadow(10.dp, RoundedCornerShape(18.dp)),
                                     shape = RoundedCornerShape(18.dp),
                                     colors = CardDefaults.cardColors(containerColor = Color.White),
-                                    border = androidx.compose.foundation.BorderStroke(1.dp, AppColors.Border)
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        1.dp,
+                                        AppColors.Border
+                                    )
                                 ) {
                                     Column(
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .background(
                                                 Brush.verticalGradient(
-                                                    listOf(Color.White, AppColors.Primary.copy(alpha = 0.04f))
+                                                    listOf(
+                                                        Color.White,
+                                                        AppColors.Primary.copy(alpha = 0.04f)
+                                                    )
                                                 )
                                             )
                                             .padding(14.dp),
@@ -1464,7 +1658,10 @@ fun HomeScreen(responderRole: String? = null, onLogout: () -> Unit) {
                                                     .clip(RoundedCornerShape(99.dp))
                                                     .background(
                                                         Brush.verticalGradient(
-                                                            listOf(AppColors.Primary, AppColors.Secondary)
+                                                            listOf(
+                                                                AppColors.Primary,
+                                                                AppColors.Secondary
+                                                            )
                                                         )
                                                     )
                                             )
@@ -1508,7 +1705,11 @@ fun HomeScreen(responderRole: String? = null, onLogout: () -> Unit) {
                                         }
 
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text(timeLabel, fontSize = 12.sp, color = AppColors.TextSecondary)
+                                            Text(
+                                                timeLabel,
+                                                fontSize = 12.sp,
+                                                color = AppColors.TextSecondary
+                                            )
                                             Spacer(modifier = Modifier.width(10.dp))
                                             Box(
                                                 modifier = Modifier
@@ -1536,7 +1737,41 @@ fun HomeScreen(responderRole: String? = null, onLogout: () -> Unit) {
                                         }
 
                                         // ✅ ACTION BUTTONS (same code mo dito)
-                                        // (Iwan mo yung existing action buttons block mo dito, no duplicates)
+                                        AssignedActionButtons(
+                                            inc = inc,
+                                            context = context,
+                                            currentLatitude = currentLatitude,
+                                            currentLongitude = currentLongitude,
+                                            onSceneEnabled = (onSceneEnabledMap[inc.id] == true),
+                                            setOnSceneEnabled = { enabled ->
+                                                onSceneEnabledMap[inc.id] = enabled
+                                            },
+                                            setNavTarget = { id, lat, lng ->
+                                                navDestinationIncidentId = id
+                                                navDestinationLat = lat
+                                                navDestinationLng = lng
+                                            },
+                                            startOnSceneTracking = { startOnSceneTracking() },
+                                            requestOnScenePermission = {
+                                                onScenePermissionLauncher.launch(
+                                                    Manifest.permission.ACCESS_FINE_LOCATION
+                                                )
+                                            },
+                                            navigateToLocation = { lat, lng, addr ->
+                                                navigateToLocation(
+                                                    lat,
+                                                    lng,
+                                                    addr
+                                                )
+                                            },
+                                            sendOnSceneReport = { sendOnSceneReport(it) },
+                                            openMarkDone = {
+                                                markTargetIncidentInc = it
+                                                proofNotes = ""
+                                                selectedProofUri = null
+                                                showMarkCompleteDialog = true
+                                            }
+                                        )
                                     }
                                 }
                             }
@@ -1546,25 +1781,7 @@ fun HomeScreen(responderRole: String? = null, onLogout: () -> Unit) {
 
                 item { Spacer(modifier = Modifier.height(12.dp)) }
 
-                // ✅ ACTIVE INCIDENTS HEADER + SEE ALL (ONE TIME LANG!)
-                item {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = "Active Incidents",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        TextButton(onClick = { showAllActiveDialog = true }) { Text("See all") }
-                    }
-                }
-
-                // ✅ ACTIVE INCIDENTS LIST (max 5)
+                // ---------- ACTIVE INCIDENTS (Header + Filters) ----------
                 item {
                     Column(
                         modifier = Modifier
@@ -1572,44 +1789,226 @@ fun HomeScreen(responderRole: String? = null, onLogout: () -> Unit) {
                             .padding(horizontal = 12.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        val activeListVisible = remember(activeIncidents) {
-                            activeIncidents.filter { it.type != IncidentType.DISASTER }.take(5)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "Active Incidents",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "Sorted by priority",
+                                color = AppColors.TextSecondary,
+                                fontSize = 12.sp
+                            )
                         }
 
-                        if (activeListVisible.isEmpty()) {
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                elevation = CardDefaults.cardElevation(2.dp),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Column(modifier = Modifier.padding(16.dp)) {
-                                    Text("No active incidents")
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            @Composable
+                            fun chip(label: String, selected: Boolean, onClick: () -> Unit) {
+                                OutlinedButton(
+                                    onClick = onClick,
+                                    shape = RoundedCornerShape(999.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        containerColor = if (selected) AppColors.Primary.copy(alpha = 0.12f) else Color.Transparent,
+                                        contentColor = if (selected) AppColors.Primary else AppColors.Text
+                                    ),
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        1.dp,
+                                        if (selected) AppColors.Primary.copy(alpha = 0.55f) else AppColors.Border
+                                    )
+                                ) {
+                                    Text(label, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                                 }
                             }
-                        } else {
-                            activeListVisible.forEach { inc ->
-                                Card(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    elevation = CardDefaults.cardElevation(2.dp),
-                                    shape = RoundedCornerShape(12.dp)
-                                ) {
-                                    Column(modifier = Modifier.padding(12.dp)) {
-                                        Text(inc.type.displayName, fontWeight = FontWeight.SemiBold)
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(inc.location.ifBlank { "Unknown location" })
-                                        Spacer(modifier = Modifier.height(6.dp))
-                                        Text(
-                                            inc.description,
-                                            maxLines = 2,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
+
+                            chip("All", activeFilter == ActivePriorityFilter.ALL) { activeFilter = ActivePriorityFilter.ALL }
+                            chip("High", activeFilter == ActivePriorityFilter.HIGH) { activeFilter = ActivePriorityFilter.HIGH }
+                            chip("Medium", activeFilter == ActivePriorityFilter.MEDIUM) { activeFilter = ActivePriorityFilter.MEDIUM }
+                            chip("Low", activeFilter == ActivePriorityFilter.LOW) { activeFilter = ActivePriorityFilter.LOW }
+                        }
+                    }
+                }
+
+// ---------- ACTIVE INCIDENTS (Scrollable Container List) ----------
+                item {
+                    val activeListVisible = remember(activeIncidents, activeFilter) {
+                        activeIncidents
+                            .filter { it.type != IncidentType.DISASTER }
+                            .filter { inc ->
+                                when (activeFilter) {
+                                    ActivePriorityFilter.ALL -> true
+                                    ActivePriorityFilter.HIGH -> inc.priority == IncidentPriority.HIGH
+                                    ActivePriorityFilter.MEDIUM -> inc.priority == IncidentPriority.MEDIUM
+                                    ActivePriorityFilter.LOW -> inc.priority == IncidentPriority.LOW
+                                }
+                            }
+                            .sortedWith(
+                                compareByDescending<Incident> {
+                                    when (it.priority) {
+                                        IncidentPriority.HIGH -> 3
+                                        IncidentPriority.MEDIUM -> 2
+                                        IncidentPriority.LOW -> 1
+                                    }
+                                }.thenByDescending { it.timeReported.time }
+                            )
+                    }
+
+                    if (activeListVisible.isEmpty()) {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp),
+                            elevation = CardDefaults.cardElevation(2.dp),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Text("No active incidents")
+                            }
+                        }
+                    } else {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp)
+                                .heightIn(max = 320.dp),
+                            shape = RoundedCornerShape(18.dp),
+                            elevation = CardDefaults.cardElevation(4.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color.White),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, AppColors.Border)
+                        ) {
+                            LazyColumn(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                items(activeListVisible) { inc ->
+
+                                    val timeLabel = timeAgoLabel(inc.timeReported)
+
+                                    val priorityColor = when (inc.priority) {
+                                        IncidentPriority.HIGH -> Color(0xFFD32F2F)
+                                        IncidentPriority.MEDIUM -> Color(0xFFFFA000)
+                                        IncidentPriority.LOW -> Color(0xFF388E3C)
+                                    }
+
+                                    val accent = when (inc.type) {
+                                        IncidentType.FIRE -> Color(0xFFE53935)
+                                        IncidentType.MEDICAL -> Color(0xFF1E88E5)
+                                        IncidentType.CRIME -> Color(0xFF6D4C41)
+                                        IncidentType.DISASTER -> Color(0xFF8E24AA)
+                                    }
+
+                                    Card(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .shadow(6.dp, RoundedCornerShape(18.dp))
+                                            .combinedClickable(
+                                                onClick = {
+                                                    selectedActiveIncident = inc
+                                                    showActiveDetailsSheet = true
+                                                },
+                                                onLongClick = {
+                                                    selectedActiveIncident = inc
+                                                    showActiveDetailsSheet = true
+                                                }
+                                            ),
+                                        shape = RoundedCornerShape(18.dp),
+                                        colors = CardDefaults.cardColors(containerColor = Color.White),
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, AppColors.Border)
+                                    ) {
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(14.dp),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+
+                                                // accent bar
+                                                Box(
+                                                    modifier = Modifier
+                                                        .width(6.dp)
+                                                        .height(54.dp)
+                                                        .clip(RoundedCornerShape(999.dp))
+                                                        .background(accent.copy(alpha = 0.9f))
+                                                )
+
+                                                Spacer(Modifier.width(12.dp))
+
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(
+                                                        text = inc.type.displayName,
+                                                        fontWeight = FontWeight.SemiBold,
+                                                        fontSize = 16.sp,
+                                                        color = AppColors.Text
+                                                    )
+                                                    Spacer(Modifier.height(4.dp))
+                                                    Text(
+                                                        text = inc.location.ifBlank { "Unknown location" },
+                                                        fontSize = 13.sp,
+                                                        color = AppColors.TextSecondary,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                }
+
+                                                // priority chip
+                                                Box(
+                                                    modifier = Modifier
+                                                        .clip(RoundedCornerShape(999.dp))
+                                                        .background(priorityColor.copy(alpha = 0.12f))
+                                                        .border(
+                                                            1.dp,
+                                                            priorityColor.copy(alpha = 0.55f),
+                                                            RoundedCornerShape(999.dp)
+                                                        )
+                                                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                                                ) {
+                                                    Text(
+                                                        text = inc.priority.name,
+                                                        color = priorityColor,
+                                                        fontSize = 12.sp,
+                                                        fontWeight = FontWeight.Bold
+                                                    )
+                                                }
+                                            }
+
+                                            // time label
+                                            Text(
+                                                text = timeLabel,
+                                                fontSize = 12.sp,
+                                                color = AppColors.TextSecondary
+                                            )
+
+                                            // description
+                                            Text(
+                                                text = inc.description,
+                                                fontSize = 13.sp,
+                                                color = AppColors.Text.copy(alpha = 0.85f),
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+
+                                            Text(
+                                                text = "Tap to view",
+                                                color = AppColors.Primary,
+                                                fontWeight = FontWeight.SemiBold,
+                                                fontSize = 12.sp
+                                            )
+                                        }
                                     }
                                 }
                             }
                         }
                     }
                 }
-
                 // ✅ SETTINGS BUTTON (less bottom space)
                 item {
                     OutlinedButton(
@@ -1621,8 +2020,95 @@ fun HomeScreen(responderRole: String? = null, onLogout: () -> Unit) {
                     ) { Text("Settings") }
 
                     Spacer(modifier = Modifier.height(2.dp))
+                    }
+                } // ✅ CLOSE LazyColumn
+
+        if (showAllActiveDialog) {
+            val activeAll = activeIncidents.filter { it.type != IncidentType.DISASTER }
+
+            AlertDialog(
+                onDismissRequest = { showAllActiveDialog = false },
+                title = { Text("All Active Incidents") },
+                text = {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 420.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        items(activeAll) { inc ->
+                            val timeLabel = timeAgoLabel(inc.timeReported)
+                            val priorityColor = when (inc.priority) {
+                                IncidentPriority.HIGH -> Color(0xFFD32F2F)
+                                IncidentPriority.MEDIUM -> Color(0xFFFFA000)
+                                IncidentPriority.LOW -> Color(0xFF388E3C)
+                            }
+
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .combinedClickable(
+                                        onClick = {
+                                            selectedActiveIncident = inc
+                                            showActiveDetailsSheet = true
+                                            showAllActiveDialog = false
+                                        },
+                                        onLongClick = {
+                                            selectedActiveIncident = inc
+                                            showActiveDetailsSheet = true
+                                            showAllActiveDialog = false
+                                        }
+                                    ),
+                                shape = RoundedCornerShape(14.dp),
+                                elevation = CardDefaults.cardElevation(2.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color.White)
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = inc.type.displayName,
+                                            fontWeight = FontWeight.SemiBold,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(999.dp))
+                                                .background(priorityColor.copy(alpha = 0.12f))
+                                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                                        ) {
+                                            Text(
+                                                text = inc.priority.name,
+                                                color = priorityColor,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(inc.location.ifBlank { "Unknown location" })
+                                    Spacer(Modifier.height(6.dp))
+                                    Text(
+                                        text = inc.description,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Spacer(Modifier.height(6.dp))
+                                    Text(
+                                        text = timeLabel,
+                                        fontSize = 12.sp,
+                                        color = AppColors.TextSecondary
+                                    )
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showAllActiveDialog = false }) { Text("Close") }
                 }
-            } // ✅ CLOSE LazyColumn
+            )
+        }
 
 
 // Mark Complete dialog
@@ -1716,6 +2202,71 @@ fun HomeScreen(responderRole: String? = null, onLogout: () -> Unit) {
                         }) { Text("Cancel") }
                     }
                 )
+            }
+
+            if (showActiveDetailsSheet && selectedActiveIncident != null) {
+                val inc = selectedActiveIncident!!
+
+                ModalBottomSheet(
+                    onDismissRequest = {
+                        showActiveDetailsSheet = false
+                        selectedActiveIncident = null
+                    },
+                    sheetState = sheetState
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Text(
+                            text = inc.type.displayName,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        Text(
+                            text = inc.location.ifBlank { "Unknown location" },
+                            color = AppColors.TextSecondary
+                        )
+
+                        HorizontalDivider()
+
+                        Text(
+                            text = "Description",
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = inc.description.ifBlank { "No description" },
+                            color = AppColors.Text.copy(alpha = 0.9f)
+                        )
+
+                        HorizontalDivider()
+
+                        // actions (optional)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = { navigateToLocation(inc.latitude, inc.longitude, inc.location) },
+                                modifier = Modifier.weight(1f)
+                            ) { Text("Navigate") }
+
+                            Button(
+                                onClick = {
+                                    // pwede mo ilagay dito: accept / focus / etc.
+                                    showActiveDetailsSheet = false
+                                    selectedActiveIncident = null
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) { Text("Close") }
+                        }
+
+                        Spacer(Modifier.height(12.dp))
+                    }
+                }
             }
 
 // Department selection dialog
@@ -1833,6 +2384,7 @@ fun HomeScreen(responderRole: String? = null, onLogout: () -> Unit) {
 }
 
 
+
 @Composable
 private fun AccountSettingsDialog(
     fullName: String,
@@ -1849,67 +2401,226 @@ private fun AccountSettingsDialog(
     onBack: () -> Unit,
     onLogout: () -> Unit
 ) {
+    var showProfilePreview by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onBack,
-        title = { Text("Account Settings", fontWeight = FontWeight.SemiBold) },
+        title = {
+            Text(
+                text = "Account Settings",
+                fontWeight = FontWeight.Bold,
+                fontSize = 20.sp
+            )
+            // ✅ preview dialog sa labas ng AlertDialog
+            if (showProfilePreview) {
+                AlertDialog(
+                    onDismissRequest = { showProfilePreview = false },
+                    title = { Text("Profile Photo", fontWeight = FontWeight.SemiBold) },
+                    text = {
+                        Box(
+                            modifier = Modifier.fillMaxWidth(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(240.dp)
+                                    .clip(CircleShape)
+                                    .border(1.dp, AppColors.Border, CircleShape)
+                            ) {
+                                ResponderAvatar(
+                                    modifier = Modifier.fillMaxSize(),
+                                    imageUri = photoUri,
+                                    drawableRes = null,
+                                    status = ResponderOnlineStatus.Offline,
+                                    contentDescription = "Profile photo"
+                                )
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { showProfilePreview = false }) { Text("Close") }
+                    }
+                )
+            }
+        },
         text = {
-            Column(modifier = Modifier.fillMaxWidth().wrapContentHeight(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    ResponderAvatar(
-                        modifier = Modifier.size(64.dp),
-                        imageUri = photoUri,
-                        drawableRes = null,
-                        status = ResponderOnlineStatus.Offline,
-                        contentDescription = "Profile photo"
-                    )
-                    OutlinedButton(onClick = onPickPhoto, modifier = Modifier.widthIn(min = 120.dp)) {
-                        Text("Add Photo")
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 520.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+
+                // ---------- Profile Avatar ----------
+                var showProfilePreview by remember { mutableStateOf(false) }
+
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier.size(96.dp), // overall space (para di dikit)
+                        contentAlignment = Alignment.Center
+                    ) {
+                        // Avatar (tap = view)
+                        Box(
+                            modifier = Modifier
+                                .size(88.dp) // laki ng avatar (dito mo lalakihan/liliitan)
+                                .clip(CircleShape)
+                                .border(1.dp, AppColors.Border, CircleShape)
+                                .clickable { showProfilePreview = true }
+                        ) {
+                            ResponderAvatar(
+                                modifier = Modifier.fillMaxSize(),
+                                imageUri = photoUri,
+                                drawableRes = null,
+                                status = ResponderOnlineStatus.Offline,
+                                contentDescription = "Profile photo"
+                            )
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .offset(x = 6.dp, y = 6.dp)
+                                .size(30.dp)
+                                .shadow(4.dp, CircleShape)
+                                .clip(CircleShape)
+                                .background(AppColors.Primary),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            IconButton(
+                                onClick = onPickPhoto,
+                                modifier = Modifier.fillMaxSize()
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CameraAlt,
+                                    contentDescription = "Change photo",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
                     }
                 }
 
+                HorizontalDivider()
+
+                // ---------- Form ----------
                 OutlinedTextField(
                     value = fullName,
                     onValueChange = onFullNameChange,
-                    label = { Text("Full name") },
+                    label = { Text(text = "Full name") },
+                    singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+
                 OutlinedTextField(
                     value = username,
                     onValueChange = onUsernameChange,
-                    label = { Text("Username") },
+                    label = { Text(text = "Username") },
+                    singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+
                 OutlinedTextField(
                     value = email,
                     onValueChange = onEmailChange,
-                    label = { Text("Email") },
+                    label = { Text(text = "Email") },
+                    singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                // ---------- Toggle ----------
+                Card(
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, AppColors.Border)
                 ) {
-                    Text("Night mode")
-                    androidx.compose.material3.Switch(
-                        checked = isDarkMode,
-                        onCheckedChange = onDarkModeChange
-                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column {
+                            Text(
+                                text = "Night mode",
+                                fontWeight = FontWeight.SemiBold,
+                                color = AppColors.Text
+                            )
+                            Text(
+                                text = "Reduce glare in low light",
+                                fontSize = 12.sp,
+                                color = AppColors.TextSecondary
+                            )
+                        }
+                        Switch(
+                            checked = isDarkMode,
+                            onCheckedChange = onDarkModeChange
+                        )
+                    }
                 }
 
-                androidx.compose.material3.HorizontalDivider()
-                Text("Account Actions", fontWeight = FontWeight.SemiBold)
-                OutlinedButton(onClick = onLogout, colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)) {
-                    Text("Logout")
+                // ---------- Logout ----------
+                Card(
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        MaterialTheme.colorScheme.error.copy(alpha = 0.35f)
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column {
+                            Text(
+                                text = "Logout",
+                                fontWeight = FontWeight.SemiBold,
+                                color = AppColors.Text
+                            )
+                            Text(
+                                text = "Sign out of this device",
+                                fontSize = 12.sp,
+                                color = AppColors.TextSecondary
+                            )
+                        }
+                        TextButton(onClick = onLogout) {
+                            Text(
+                                text = "Logout",
+                                color = MaterialTheme.colorScheme.error,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
                 }
             }
         },
         confirmButton = {
-            Button(onClick = onSave) { Text("Save Changes") }
+            Button(
+                onClick = onSave,
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = AppColors.Primary),
+                modifier = Modifier.height(44.dp)
+            ) {
+                Text(text = "Save", fontWeight = FontWeight.SemiBold)
+            }
         },
         dismissButton = {
-            OutlinedButton(onClick = onBack) { Text("Back") }
-        }
+            OutlinedButton(
+                onClick = onBack,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.height(44.dp)
+            ) {
+                Text(text = "Cancel")
+            }
+        },
+        shape = RoundedCornerShape(20.dp),
+        containerColor = Color(0xFFF7F5F9)
     )
 }
