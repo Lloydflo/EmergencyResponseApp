@@ -83,6 +83,11 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         markDepartmentRead(dept.name)
         viewModelScope.launch { loadMockDepartmentHistory(dept.name) }
     }
+    fun clearCurrentChatHistory() {
+        messages.clear() // kung messages mo ay MutableList / mutableStateListOf
+        latestNotification.value = null
+    }
+
 
     private suspend fun loadMockPrivateHistory(meId: String, peerId: String) {
         withContext(Dispatchers.Default) {
