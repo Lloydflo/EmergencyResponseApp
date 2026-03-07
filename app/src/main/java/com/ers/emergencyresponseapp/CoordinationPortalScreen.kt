@@ -92,7 +92,7 @@ fun CoordinationPortalScreen(
     val showDetailsDialog = remember { mutableStateOf(false) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     LaunchedEffect(Unit) {
-        drawerState.snapTo(DrawerValue.Closed)
+        drawerState.close()
     }
     val ctx = LocalContext.current
     val attachLauncher = rememberLauncherForActivityResult(

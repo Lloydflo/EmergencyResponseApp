@@ -1,66 +1,62 @@
 package com.ers.emergencyresponseapp
 
-import android.content.Context
-import android.content.SharedPreferences
 import android.os.Bundle
-import android.util.Log
-import android.view.MotionEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.RateReview
 import androidx.compose.material.icons.filled.Timeline
-import androidx.compose.material3.Button
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.dp
-import androidx.navigation.NavHostController
+import android.content.Context
+import android.content.SharedPreferences
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import com.ers.emergencyresponseapp.navigation.InAppNavigationScreen
 import com.ers.emergencyresponseapp.ui.theme.EmergencyResponseAppTheme
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import android.util.Log
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import com.ers.emergencyresponseapp.network.RetrofitProvider
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import kotlinx.coroutines.Job
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.input.pointer.PointerEventPass
+import android.view.MotionEvent
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.launch
 
-// Bottom nav items
+
+
+// If you have a BottomNavItem sealed class in the project, reuse it; otherwise declare a lightweight version here.
 sealed class NavItem(val route: String, val title: String, val icon: ImageVector) {
     object Home : NavItem("home", "Home", Icons.Filled.Home)
     object CoordinationPortal : NavItem("coordination_portal", "Coordination", Icons.Filled.Groups)
@@ -69,315 +65,403 @@ sealed class NavItem(val route: String, val title: String, val icon: ImageVector
 }
 
 class MainActivity : ComponentActivity() {
-
-    // ✅ flow para sa timeout watcher
-    private val lastTouchFlow = MutableStateFlow(System.currentTimeMillis())
+    private var lastTouchTime = System.currentTimeMillis()
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-        lastTouchFlow.value = System.currentTimeMillis()
+        lastTouchTime = System.currentTimeMillis()
         return super.dispatchTouchEvent(ev)
     }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
+        Log.e("APP_START", "MainActivity onCreate - started")
         setContent {
             val context = LocalContext.current
-
             val prefs = context.getSharedPreferences("ers_prefs", MODE_PRIVATE)
             val authPrefs = context.getSharedPreferences("auth", MODE_PRIVATE)
+            val isLoggedIn = authPrefs.getBoolean("user_verified", false)
+
+// Optional: kung gusto mo direct home/{department} agad
             val userPrefs = context.getSharedPreferences("user_prefs", MODE_PRIVATE)
-
-            var isDarkMode by remember { mutableStateOf(prefs.getBoolean("dark_mode", false)) }
-
-            // ✅ optional home/{dept}
             val dept = userPrefs.getString("department", null)?.lowercase()
             val homeRoute = if (!dept.isNullOrBlank()) "home/$dept" else "home"
 
-            val isLoggedIn = authPrefs.getBoolean("user_verified", false)
+// ✅ start destination
             val DEV_BYPASS_LOGIN = true // TEMP ONLY
 
-            val startDestination = when {
-                DEV_BYPASS_LOGIN -> homeRoute
-                isLoggedIn -> homeRoute
-                else -> "entry"
-            }
+            val startDestination = if (DEV_BYPASS_LOGIN) homeRoute
+            else if (isLoggedIn) homeRoute else "entry"
+            var isDarkMode by remember { mutableStateOf(prefs.getBoolean("dark_mode", false)) }
 
-            val navController = rememberNavController()
-
-            // listen theme changes
             DisposableEffect(prefs) {
                 val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-                    if (key == "dark_mode") isDarkMode = prefs.getBoolean("dark_mode", false)
+                    if (key == "dark_mode") {
+                        isDarkMode = prefs.getBoolean("dark_mode", false)
+                    }
                 }
                 prefs.registerOnSharedPreferenceChangeListener(listener)
                 onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
             }
 
             EmergencyResponseAppTheme(darkTheme = isDarkMode) {
+                Surface(color = MaterialTheme.colorScheme.background) {
 
-                // ✅ timeout watcher (works kahit anong screen)
-                SessionTimeoutWatcher(
-                    lastTouchMillis = lastTouchFlow,
-                    timeoutMillis = 5 * 60 * 1000L,
-                    onTimeout = {
-                        context.getSharedPreferences("auth", Context.MODE_PRIVATE).edit().clear().apply()
-                        context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE).edit().clear().apply()
+                    val navController = rememberNavController()
+                    LaunchedEffect(Unit) {
+                        while (true) {
+                            delay(1000)
+                            val currentTime = System.currentTimeMillis()
 
-                        navController.navigate("login") {
-                            popUpTo(0) { inclusive = true }
-                            launchSingleTop = true
+                            if (System.currentTimeMillis() - lastTouchTime >= 5 * 60 * 1000L) {
+
+                                context.getSharedPreferences("auth", Context.MODE_PRIVATE).edit().clear().commit()
+                                context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE).edit().clear().commit()
+
+                                navController.navigate("login") {
+                                    popUpTo(0) { inclusive = true }
+                                    launchSingleTop = true
+                                }
+
+                                break
+                            }
                         }
-                    }
-                )
+                        }
+                    SessionTimeoutWatcher(
+                        lastTouchMillis = lastTouchTime,
+                        timeoutMillis = 5 * 60 * 1000L, onTimeout = {
+                            context.getSharedPreferences("auth", Context.MODE_PRIVATE).edit().clear().commit()
+                            context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE).edit().clear().commit()
 
-                val navBackStackEntry by navController.currentBackStackEntryAsState()
-                val currentRoute = navBackStackEntry?.destination?.route
-                val showBottomBar = currentRoute != "entry" && currentRoute != "login"
+                            navController.navigate("login") {
+                                popUpTo(0) { inclusive = true }
+                                launchSingleTop = true
+                            }
+                        }
+                    )
+                    val navBackStackEntry by navController.currentBackStackEntryAsState()
+                    val currentRoute = navBackStackEntry?.destination?.route
+                    val showBottomBar = currentRoute != "entry" && currentRoute != "login"
 
-                Scaffold(
-                    bottomBar = {
-                        if (showBottomBar) {
-                            BottomNavigationBar(
-                                currentRoute = currentRoute,
-                                onNavigate = { route ->
-                                    if (route != currentRoute) {
-                                        navController.navigate(route) {
-                                            popUpTo(navController.graph.startDestinationId) { saveState = true }
-                                            launchSingleTop = true
-                                            restoreState = true
+                    Scaffold(
+                            bottomBar = {
+                                AnimatedVisibility(
+                                    visible = showBottomBar,
+                                    enter = fadeIn(animationSpec = tween(350)) +
+                                            slideInVertically(animationSpec = tween(350)) { height -> height / 2 },
+                                    exit = fadeOut(animationSpec = tween(200)) +
+                                            slideOutVertically(animationSpec = tween(200)) { height -> height / 2 }
+                                ) {
+                                    BottomNavigationBar(
+                                        currentRoute = currentRoute,
+                                        onNavigate = { route ->
+                                            if (route != currentRoute) navController.navigate(route) {
+                                                popUpTo(navController.graph.startDestinationId)
+                                                launchSingleTop = true
+                                            }
+                                        })
+                                }
+                            }
+                        ) { innerPadding ->
+                            Box(modifier = Modifier.padding(innerPadding)) {
+                                NavHost(
+                                    navController = navController,
+                                    startDestination = startDestination
+                                ) {
+                                    composable("entry") {
+                                        // Single Proceed button navigates to the login flow
+                                        EmergencyResponseScreen(onProceed = {
+                                            navController.navigate("login") {
+                                                popUpTo("entry") { inclusive = true }
+                                                launchSingleTop = true
+                                            }
+                                        })
+                                    }
+
+                                    // Login flow (email + OTP) -> navigate to home on success
+                                    composable("login") {
+                                        LoginScreen(onLoggedIn = { _email: String ->
+                                            navController.navigate(homeRoute) {
+                                                popUpTo("entry") {
+                                                    inclusive = true
+                                                }   // remove entry
+                                                popUpTo("login") {
+                                                    inclusive = true
+                                                }   // remove login
+                                                launchSingleTop = true
+                                            }
+                                        })
+                                    }
+
+                                    // Home route (no role) and home route accepting an optional role segment
+                                    composable("home") {
+                                        AnimatedHomeScreen(
+                                            responderRole = null,
+                                            onLogout = {
+                                                authPrefs.edit().clear().commit()
+                                                context.getSharedPreferences(
+                                                    "user_prefs",
+                                                    MODE_PRIVATE
+                                                ).edit().clear().commit()
+
+                                                navController.navigate("entry") {
+                                                    popUpTo(0) {
+                                                        inclusive = true
+                                                    } // wipe everything
+                                                    launchSingleTop = true
+                                                }
+                                            }
+                                        )
+                                    }
+                                    composable("home/{role}") { backStackEntry ->
+                                        val roleArg = backStackEntry.arguments?.getString("role")
+
+                                        // ✅ declare inner prefs here (para walang duplicate/undefined)
+                                        val innerContext = LocalContext.current
+                                        val innerPrefs = innerContext.getSharedPreferences(
+                                            "ers_prefs",
+                                            MODE_PRIVATE
+                                        )
+
+                                        AnimatedHomeScreen(
+                                            responderRole = roleArg?.takeIf { it.isNotBlank() },
+                                            onLogout = {
+                                                // clear BOTH auth + user prefs
+                                                innerContext.getSharedPreferences(
+                                                    "auth",
+                                                    MODE_PRIVATE
+                                                ).edit().clear().commit()
+                                                innerContext.getSharedPreferences(
+                                                    "user_prefs",
+                                                    MODE_PRIVATE
+                                                ).edit().clear().commit()
+
+                                                navController.navigate("login") {
+                                                    popUpTo(0) { inclusive = true }
+                                                    launchSingleTop = true
+                                                }
+                                            }
+                                        )
+
+                                        LaunchedEffect(Unit) {
+                                            if (innerPrefs.getBoolean(
+                                                    "navigate_to_reviews",
+                                                    false
+                                                )
+                                            ) {
+                                                innerPrefs.edit()
+                                                    .putBoolean("navigate_to_reviews", false)
+                                                    .commit()
+                                                navController.navigate("reviews_feedback") {
+                                                    launchSingleTop = true
+                                                }
+                                            }
                                         }
+                                    }
+                                    // Coordination portal screen (accessible from bottom navigation)
+                                    composable("coordination_portal") {
+                                        val localContext = LocalContext.current
+                                        val localPrefs = localContext.getSharedPreferences(
+                                            "user_prefs",
+                                            MODE_PRIVATE
+                                        )
+                                        val department =
+                                            localPrefs.getString("department", "fire") ?: "fire"
+                                        CoordinationPortalScreen(
+                                            currentResponderId = "current_user",
+                                            currentResponderRole = department
+                                        )
+                                    }
+
+                                    // Reviews & Feedback screen (accessible from bottom navigation)
+                                    composable("reviews_feedback") {
+                                        ReviewsFeedbackScreen()
+                                    }
+
+                                    composable("analytics") {
+                                        HistoricalRouteAnalyticsScreen()
                                     }
                                 }
-                            )
-                        }
-                    }
-                ) { innerPadding ->
-
-                    Box(modifier = Modifier.padding(innerPadding)) {
-                        NavHost(
-                            navController = navController,
-                            startDestination = startDestination
-                        ) {
-                            composable("entry") {
-                                EmergencyResponseScreen(onProceed = {
-                                    navController.navigate("login") {
-                                        popUpTo("entry") { inclusive = true }
-                                        launchSingleTop = true
-                                    }
-                                })
                             }
-
-                            composable("login") {
-                                LoginScreen(onLoggedIn = { _ ->
-                                    navController.navigate(homeRoute) {
-                                        popUpTo(0) { inclusive = true }
-                                        launchSingleTop = true
-                                    }
-                                })
-                            }
-
-                            composable("home") {
-                                AnimatedHomeScreen(
-                                    navController = navController,
-                                    responderRole = null,
-                                    onLogout = {
-                                        authPrefs.edit().clear().apply()
-                                        userPrefs.edit().clear().apply()
-                                        navController.navigate("entry") {
-                                            popUpTo(0) { inclusive = true }
-                                            launchSingleTop = true
-                                        }
-                                    }
-                                )
-                            }
-
-                            composable("home/{role}") { backStackEntry ->
-                                val roleArg = backStackEntry.arguments?.getString("role")
-                                AnimatedHomeScreen(
-                                    navController = navController,
-                                    responderRole = roleArg,
-                                    onLogout = {
-                                        authPrefs.edit().clear().apply()
-                                        userPrefs.edit().clear().apply()
-                                        navController.navigate("login") {
-                                            popUpTo(0) { inclusive = true }
-                                            launchSingleTop = true
-                                        }
-                                    }
-                                )
-                            }
-
-                            composable("inapp_nav/{lat}/{lng}/{label}") { backStackEntry ->
-                                val lat = backStackEntry.arguments?.getString("lat")?.toDoubleOrNull() ?: 0.0
-                                val lng = backStackEntry.arguments?.getString("lng")?.toDoubleOrNull() ?: 0.0
-                                val label = backStackEntry.arguments?.getString("label") ?: "Destination"
-
-                                InAppNavigationScreen(
-                                    destLat = lat,
-                                    destLng = lng,
-                                    destLabel = label,
-                                    onBack = { navController.popBackStack() }
-                                )
-                            }
-
-                            composable("coordination_portal") {
-                                val department = userPrefs.getString("department", "fire") ?: "fire"
-                                CoordinationPortalScreen(
-                                    currentResponderId = "current_user",
-                                    currentResponderRole = department
-                                )
-                            }
-
-                            composable("reviews_feedback") { ReviewsFeedbackScreen() }
-                            composable("analytics") { HistoricalRouteAnalyticsScreen() }
                         }
                     }
                 }
             }
         }
+
+    private fun SessionTimeoutWatcher(lastTouchMillis: Long, timeoutMillis: Long, onTimeout: () -> Unit) {
+
     }
 }
 
-@Composable
-fun BottomNavigationBar(currentRoute: String?, onNavigate: (String) -> Unit) {
-    val items = listOf(
-        NavItem.Home,
-        NavItem.CoordinationPortal,
-        NavItem.ReviewsFeedback,
-        NavItem.Analytics
-    )
-    val context = LocalContext.current
-    val prefs = context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
-    val department = prefs.getString("department", null)
-    val departmentHomeRoute = department?.let { "home/${it.lowercase()}" } ?: "home"
-
-    NavigationBar {
-        items.forEach { item ->
-            NavigationBarItem(
-                icon = { Icon(item.icon, contentDescription = item.title) },
-                label = { Text(item.title) },
-                selected = currentRoute == item.route,
-                onClick = {
-                    if (item is NavItem.Home) onNavigate(departmentHomeRoute)
-                    else onNavigate(item.route)
-                }
-            )
-        }
-    }
-}
-
-@Composable
-fun EmergencyResponseScreen(
-    modifier: Modifier = Modifier,
-    onProceed: () -> Unit
-) {
-    val scope = rememberCoroutineScope()
-
-    Button(onClick = { scope.launch { onProceed() } }) {
-        Text("Proceed")
-    }
-
-    val quotes = listOf(
-        "Every call you answer makes a community safer.",
-        "Courage is contagious — thank you for showing up.",
-        "Small acts of care create huge impacts.",
-        "You're the calm in someone else's storm.",
-        "Your quick response saves lives and builds trust."
-    )
-    var currentIndex by remember { mutableStateOf(0) }
-
-    LaunchedEffect(Unit) {
-        Log.d("API_TEST", "App opened")
-        while (true) {
-            delay(5000L)
-            currentIndex = (currentIndex + 1) % quotes.size
-        }
-    }
-
-    Column(
-        modifier = modifier.fillMaxSize().padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text(
-            text = "Emergency Response",
-            style = MaterialTheme.typography.headlineSmall,
-            modifier = Modifier.fillMaxWidth(),
-            textAlign = TextAlign.Center
+    @Composable
+    fun BottomNavigationBar(currentRoute: String?, onNavigate: (String) -> Unit) {
+        val items = listOf(
+            NavItem.Home,
+            NavItem.CoordinationPortal,
+            NavItem.ReviewsFeedback,
+            NavItem.Analytics
         )
-        Spacer(modifier = Modifier.height(12.dp))
+        val context = LocalContext.current
+        // registration stores department under 'user_prefs'
+        val prefs = context.getSharedPreferences("auth", Context.MODE_PRIVATE)
+        val departmentPref = prefs.getString("department", null)
+        // Map stored department to a home route; use lowercase role token used by nav
+        val departmentHomeRoute = departmentPref?.let { "home/${it.lowercase()}" } ?: "home"
+        NavigationBar {
+            items.forEach { item ->
+                NavigationBarItem(
+                    icon = { Icon(item.icon, contentDescription = item.title) },
+                    label = { Text(item.title) },
+                    selected = currentRoute == item.route,
+                    onClick = {
+                        // Preserve department when navigating to Home
+                        if (item is NavItem.Home) onNavigate(departmentHomeRoute) else onNavigate(
+                            item.route
+                        )
+                    }
+                )
+            }
+        }
+    }
 
-        Crossfade(targetState = currentIndex, animationSpec = tween(600)) { idx ->
+    @Composable
+    fun EmergencyResponseScreen(
+        modifier: Modifier = Modifier,
+        onProceed: () -> Unit
+    ) {
+        val scope = rememberCoroutineScope()
+
+        LaunchedEffect(Unit) {
+            Log.d("API_TEST", "App opened")
+
+
+            try {
+
+            } catch (e: Exception) {
+                Log.e("API_TEST", "ERROR: ${e.message}", e)
+            }
+        }
+
+        // Encouraging quotes to rotate
+        val quotes = listOf(
+            "Every call you answer makes a community safer.",
+            "Courage is contagious — thank you for showing up.",
+            "Small acts of care create huge impacts.",
+            "You're the calm in someone else's storm.",
+            "Your quick response saves lives and builds trust."
+        )
+
+        var currentIndex by remember { mutableStateOf(0) }
+
+        // Rotate quotes every 5 seconds
+        LaunchedEffect(Unit) {
+            while (true) {
+                delay(5000L)
+                currentIndex = (currentIndex + 1) % quotes.size
+            }
+        }
+
+        Column(
+            modifier = modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
             Text(
-                text = quotes[idx],
-                style = MaterialTheme.typography.bodyLarge,
+                text = "Emergency Response",
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.onBackground,
                 modifier = Modifier.fillMaxWidth(),
                 textAlign = TextAlign.Center
             )
-        }
+            Spacer(modifier = Modifier.height(12.dp))
 
-        Spacer(modifier = Modifier.height(24.dp))
-        Button(onClick = { scope.launch { onProceed() } }, modifier = Modifier.fillMaxWidth()) {
-            Text("Proceed")
+            // Show rotating encouraging quote with crossfade animation
+            Crossfade(
+                targetState = currentIndex,
+                animationSpec = tween(durationMillis = 600)
+            ) { idx: Int ->
+                Text(
+                    text = quotes[idx],
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.95f),
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center
+                )
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Single Proceed button -> registration
+            Spacer(modifier = Modifier.height(8.dp))
+            Button(onClick = { scope.launch { onProceed() } }, modifier = Modifier.fillMaxWidth()) {
+                Text("Proceed")
+            }
         }
     }
-}
 
-@Composable
-fun AnimatedHomeScreen(
-    navController: NavHostController,
-    responderRole: String? = null,
-    onLogout: () -> Unit
-) {
-    var showEntrance by remember { mutableStateOf(true) }
-    val alpha = remember { Animatable(0f) }
-    val scale = remember { Animatable(0.9f) }
+// LoginScreen is defined in LoginScreen.kt
+// HomeScreen(...) is defined in HomeScreen.kt
 
-    LaunchedEffect(Unit) {
-        alpha.animateTo(1f, animationSpec = tween(450))
-        scale.animateTo(1f, animationSpec = tween(500, easing = FastOutSlowInEasing))
-        delay(450L)
-        showEntrance = false
-    }
+    @Composable
+    fun AnimatedHomeScreen(responderRole: String? = null, onLogout: () -> Unit) {
+        var showEntrance by remember { mutableStateOf(true) }
+        val alpha = remember { Animatable(0f) }
+        val scale = remember { Animatable(0.9f) }
 
-    if (showEntrance) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(
-                text = "Emergency Response",
-                style = MaterialTheme.typography.headlineLarge,
-                modifier = Modifier.scale(scale.value).alpha(alpha.value),
-                textAlign = TextAlign.Center
+        LaunchedEffect(Unit) {
+            alpha.animateTo(1f, animationSpec = tween(durationMillis = 450))
+            scale.animateTo(
+                1f,
+                animationSpec = tween(durationMillis = 500, easing = FastOutSlowInEasing)
             )
+            delay(450L)
+            showEntrance = false
         }
-    } else {
-        HomeScreen(
-            navController = navController,
-            responderRole = responderRole,
-            onLogout = onLogout
-        )
-    }
-}
 
-@Preview(showBackground = true)
-@Composable
-fun EmergencyResponsePreview() {
-    EmergencyResponseAppTheme {
-        EmergencyResponseScreen(onProceed = {})
+        if (showEntrance) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "Emergency Response",
+                    style = MaterialTheme.typography.headlineLarge,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    modifier = Modifier
+                        .scale(scale.value)
+                        .alpha(alpha.value)
+                        .fillMaxWidth(),
+                    textAlign = TextAlign.Center
+                )
+            }
+        } else {
+            // Pass the role through to HomeScreen (from HomeScreen.kt) so role-scoped UI works
+            HomeScreen(responderRole = responderRole, onLogout = onLogout)
+        }
     }
-}
 
+    @Preview(showBackground = true)
+    @Composable
+    fun EmergencyResponsePreview() {
+        EmergencyResponseAppTheme {
+            EmergencyResponseScreen(onProceed = {})
+        }
+    }
 @Composable
 fun SessionTimeoutWatcher(
     lastTouchMillis: MutableStateFlow<Long>,
-    timeoutMillis: Long,
+    timeoutMillis: Long = 5 * 60 * 1000L,
     onTimeout: () -> Unit
 ) {
     LaunchedEffect(Unit) {
         lastTouchMillis.collectLatest { last ->
+            // collectLatest cancels previous delay when new touch happens
             delay(timeoutMillis)
             val now = System.currentTimeMillis()
-            if (now - last >= timeoutMillis) onTimeout()
+            if (now - last >= timeoutMillis) {
+                onTimeout()
+            }
         }
     }
 }
