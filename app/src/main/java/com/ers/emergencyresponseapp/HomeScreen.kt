@@ -133,6 +133,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.unit.dp
+import com.ers.emergencyresponseapp.routing.RouteMonitoringService
+import androidx.navigation.NavHostController
+
+
+
 
 
 
@@ -315,6 +320,22 @@ private fun ResponderAvatar(
 ) {
     val context = LocalContext.current
 
+    val notifPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { }
+
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= 33) {
+            if (ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+    }
+
     Box(modifier = modifier.size(36.dp), contentAlignment = Alignment.Center) {
         when {
             drawableRes != null -> {
@@ -414,6 +435,27 @@ private fun demoFeedIncomingRequests(list: MutableList<EmergencyRequest>) {
     }
 }
 
+
+
+private fun startRouteUpdateMonitoring(
+    context: Context,
+    incidentId: String,
+    destLat: Double?,
+    destLng: Double?,
+    destAddress: String?
+) {
+    Log.d("RouteMonitor", "Starting service for incident=${incidentId}")
+    Toast.makeText(context, "Starting monitor…", Toast.LENGTH_SHORT).show()
+
+    val intent = Intent(context, RouteMonitoringService::class.java).apply {
+        putExtra(RouteMonitoringService.EXTRA_INCIDENT_ID, incidentId)
+        putExtra(RouteMonitoringService.EXTRA_DEST_LAT, destLat ?: Double.NaN)
+        putExtra(RouteMonitoringService.EXTRA_DEST_LNG, destLng ?: Double.NaN)
+        putExtra(RouteMonitoringService.EXTRA_DEST_ADDRESS, destAddress ?: "")
+    }
+    ContextCompat.startForegroundService(context, intent)
+}
+
 private fun openMapPin(context: android.content.Context, lat: Double?, lng: Double?, address: String?) {
     try {
         val primaryUri = when {
@@ -500,6 +542,7 @@ private fun EmergencyRequestList(requests: List<EmergencyRequest>, title: String
 private fun AssignedActionButtons(
     inc: Incident,
     context: Context,
+    navController: NavHostController,  // ✅ ADD THIS
     currentLatitude: Double?,
     currentLongitude: Double?,
     onSceneEnabled: Boolean,
@@ -531,6 +574,22 @@ private fun AssignedActionButtons(
                     setOnSceneEnabled(false)
                     setNavTarget(inc.id, inc.latitude, inc.longitude)
 
+                    // start route monitoring
+                    startRouteUpdateMonitoring(
+                        context = context,
+                        incidentId = inc.id,
+                        destLat = inc.latitude,
+                        destLng = inc.longitude,
+                        destAddress = inc.location
+                    )
+
+                    // open google maps navigation
+                    navigateToLocation(
+                        inc.latitude,
+                        inc.longitude,
+                        inc.location
+                    )
+
                     if (currentLatitude != null && currentLongitude != null &&
                         inc.latitude != null && inc.longitude != null
                     ) {
@@ -555,7 +614,25 @@ private fun AssignedActionButtons(
                             requestOnScenePermission()
                         }
                     }
+                    val lat = inc.latitude
+                    val lng = inc.longitude
+                    val label = inc.location.ifBlank { "Incident Location" }
 
+
+// ✅ start monitor + open external maps
+                    startRouteUpdateMonitoring(context, inc.id, inc.latitude, inc.longitude, inc.location)
+                    navigateToLocation(inc.latitude, inc.longitude, inc.location)
+
+                    // ✅ START route update monitoring (foreground service) - UNCOMMENT
+                    startRouteUpdateMonitoring(
+                        context = context,
+                        incidentId = inc.id,
+                        destLat = inc.latitude,
+                        destLng = inc.longitude,
+                        destAddress = inc.location
+                    )
+
+// ✅ OPEN external navigation (Google Maps)
                     navigateToLocation(inc.latitude, inc.longitude, inc.location)
                 },
                 modifier = Modifier
@@ -645,7 +722,11 @@ private enum class ActivePriorityFilter { ALL, HIGH, MEDIUM, LOW }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(responderRole: String? = null, onLogout: () -> Unit) {
+fun HomeScreen(
+    navController: NavHostController,
+    responderRole: String? = null,
+    onLogout: () -> Unit
+) {
     val context = LocalContext.current
     var isLocationMonitoringEnabled by remember { mutableStateOf(false) }
 
@@ -977,7 +1058,14 @@ fun HomeScreen(responderRole: String? = null, onLogout: () -> Unit) {
                 ).apply { setPackage("com.google.android.apps.maps") }
                 val resolveInfo = context.packageManager.resolveActivity(mapIntent, 0)
                 if (resolveInfo != null) {
-                    context.startActivity(mapIntent)
+                    val act = context as? Activity
+
+                    if (act != null) {
+                        act.startActivity(mapIntent)
+                    } else {
+                        mapIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        context.startActivity(mapIntent)
+                    }
                     return
                 } else {
                     // Fallback to geo URI with label
@@ -1742,6 +1830,7 @@ fun HomeScreen(responderRole: String? = null, onLogout: () -> Unit) {
                                             context = context,
                                             currentLatitude = currentLatitude,
                                             currentLongitude = currentLongitude,
+                                            navController = navController,
                                             onSceneEnabled = (onSceneEnabledMap[inc.id] == true),
                                             setOnSceneEnabled = { enabled ->
                                                 onSceneEnabledMap[inc.id] = enabled
