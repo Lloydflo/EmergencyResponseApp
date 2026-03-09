@@ -125,21 +125,10 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                         }
-                    SessionTimeoutWatcher(
-                        lastTouchMillis = lastTouchTime,
-                        timeoutMillis = 5 * 60 * 1000L, onTimeout = {
-                            context.getSharedPreferences("auth", Context.MODE_PRIVATE).edit().clear().commit()
-                            context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE).edit().clear().commit()
-
-                            navController.navigate("login") {
-                                popUpTo(0) { inclusive = true }
-                                launchSingleTop = true
-                            }
-                        }
-                    )
                     val navBackStackEntry by navController.currentBackStackEntryAsState()
                     val currentRoute = navBackStackEntry?.destination?.route
-                    val showBottomBar = currentRoute != "entry" && currentRoute != "login"
+                    val hideBottomBarRoutes = setOf("entry", "login", "coordination_portal")
+                    val showBottomBar = currentRoute !in hideBottomBarRoutes
 
                     Scaffold(
                             bottomBar = {
@@ -150,9 +139,9 @@ class MainActivity : ComponentActivity() {
                                     exit = fadeOut(animationSpec = tween(200)) +
                                             slideOutVertically(animationSpec = tween(200)) { height -> height / 2 }
                                 ) {
-                                    BottomNavigationBar(
-                                        currentRoute = currentRoute,
-                                        onNavigate = { route ->
+                                    CustomBottomNavigation(
+                                        selectedRoute = currentRoute ?: "",
+                                        onItemSelected = { route ->
                                             if (route != currentRoute) navController.navigate(route) {
                                                 popUpTo(navController.graph.startDestinationId)
                                                 launchSingleTop = true
@@ -194,6 +183,7 @@ class MainActivity : ComponentActivity() {
                                     // Home route (no role) and home route accepting an optional role segment
                                     composable("home") {
                                         AnimatedHomeScreen(
+                                            navController = navController,
                                             responderRole = null,
                                             onLogout = {
                                                 authPrefs.edit().clear().commit()
@@ -222,6 +212,7 @@ class MainActivity : ComponentActivity() {
                                         )
 
                                         AnimatedHomeScreen(
+                                            navController = navController,
                                             responderRole = roleArg?.takeIf { it.isNotBlank() },
                                             onLogout = {
                                                 // clear BOTH auth + user prefs
@@ -286,11 +277,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-
-    private fun SessionTimeoutWatcher(lastTouchMillis: Long, timeoutMillis: Long, onTimeout: () -> Unit) {
-
     }
-}
 
     @Composable
     fun BottomNavigationBar(currentRoute: String?, onNavigate: (String) -> Unit) {
@@ -403,8 +390,12 @@ class MainActivity : ComponentActivity() {
 // LoginScreen is defined in LoginScreen.kt
 // HomeScreen(...) is defined in HomeScreen.kt
 
-    @Composable
-    fun AnimatedHomeScreen(responderRole: String? = null, onLogout: () -> Unit) {
+@Composable
+fun AnimatedHomeScreen(
+    navController: androidx.navigation.NavHostController,
+    responderRole: String? = null,
+    onLogout: () -> Unit
+) {
         var showEntrance by remember { mutableStateOf(true) }
         val alpha = remember { Animatable(0f) }
         val scale = remember { Animatable(0.9f) }
@@ -437,7 +428,11 @@ class MainActivity : ComponentActivity() {
             }
         } else {
             // Pass the role through to HomeScreen (from HomeScreen.kt) so role-scoped UI works
-            HomeScreen(responderRole = responderRole, onLogout = onLogout)
+            HomeScreen(
+                navController = navController,
+                responderRole = responderRole,
+                onLogout = onLogout
+            )
         }
     }
 

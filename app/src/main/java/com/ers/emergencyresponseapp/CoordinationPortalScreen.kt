@@ -32,7 +32,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -44,11 +43,16 @@ import java.util.*
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.NotificationsOff
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import com.ers.emergencyresponseapp.coordination.model.viewmodel.CoordinationViewModel
+import com.ers.emergencyresponseapp.coordination.model.ChatMessage
+
+
+
+
 
 private enum class ScreenSize { SMALL, MEDIUM, LARGE }
 
@@ -61,7 +65,12 @@ fun CoordinationPortalScreen(
     currentResponderRole: String // "fire" | "medical" | "police"
 ) {
     var muted by remember { mutableStateOf(false) }
-    val vm: CoordinationViewModel = viewModel()
+    val vm: CoordinationViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+    val selectedResponder = vm.selectedResponder
+    val selectedDepartment = vm.selectedDepartment
+    val responders = vm.responders
+    val departments = vm.departments
+    val messages = vm.messages
 
     val messageInput = remember { mutableStateOf("") }   // ✅ una ito
     val isTyping = messageInput.value.isNotBlank()       // ✅ saka ito
@@ -78,11 +87,6 @@ fun CoordinationPortalScreen(
 
     // Local UI state
     val scope = rememberCoroutineScope()
-    val selectedResponder = vm.selectedResponder
-    val selectedDepartment = vm.selectedDepartment
-    val responders = vm.responders
-    val departments = vm.departments
-    val messages = vm.messages
     // list state for chat messages so we can auto-scroll
     val listState = rememberLazyListState()
     // track unseen messages when user is scrolled up
@@ -90,10 +94,7 @@ fun CoordinationPortalScreen(
     val searchQuery = remember { mutableStateOf("") }
     val timeFmt = remember { SimpleDateFormat("hh:mm a", Locale.getDefault()) }
     val showDetailsDialog = remember { mutableStateOf(false) }
-    val drawerState = rememberDrawerState(DrawerValue.Closed)
-    LaunchedEffect(Unit) {
-        drawerState.close()
-    }
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val ctx = LocalContext.current
     val attachLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -138,11 +139,110 @@ fun CoordinationPortalScreen(
     Box(modifier = Modifier.fillMaxSize()) {
         when (screenSize) {
             ScreenSize.SMALL -> {
-                ModalNavigationDrawer(
-                    drawerState = drawerState,
-                    drawerContent = {
-                        // Compact drawer width to match left sidebar
-                        ModalDrawerSheet(modifier = Modifier.width(220.dp)) {
+                var showSidebar by remember { mutableStateOf(false) }
+
+                Box(modifier = Modifier.fillMaxSize()) {
+
+                    Scaffold(
+                        topBar = {
+                            TopAppBar(
+                                title = {
+                                    Text(
+                                        text = selectedResponder.value?.fullName
+                                            ?: selectedDepartment.value?.displayName
+                                            ?: "Select a chat"
+                                    )
+                                },
+                                navigationIcon = {
+                                    IconButton(onClick = { showSidebar = true }) {
+                                        Icon(Icons.Default.Menu, contentDescription = "Menu")
+                                    }
+                                },
+                                actions = {
+                                    IconButton(onClick = { /* call */ }) {
+                                        Icon(Icons.Default.Call, contentDescription = "Call")
+                                    }
+
+                                    IconButton(onClick = {
+                                        vm.clearCurrentChatHistory()
+                                        Toast.makeText(ctx, "Chat cleared", Toast.LENGTH_SHORT).show()
+                                    }) {
+                                        Icon(Icons.Default.Delete, contentDescription = "Clear chat")
+                                    }
+
+                                    IconButton(onClick = { showDetailsDialog.value = true }) {
+                                        Icon(Icons.Default.Info, contentDescription = "Info")
+                                    }
+                                }
+                            )
+                        }
+                    ) { padding ->
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(padding)
+                                .navigationBarsPadding()
+                                .background(Color(0xFFF8F9FA))
+                        ) {
+                            ChatMessagesPanel(
+                                messages = messages,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .padding(12.dp),
+                                timeFmt = timeFmt,
+                                listState = listState
+                            )
+
+                            HorizontalDivider()
+
+                            ChatComposer(
+                                text = messageInput.value,
+                                onTextChange = { messageInput.value = it },
+                                onSend = {
+                                    vm.sendTextMessage(
+                                        senderId = currentResponderId,
+                                        senderName = "You",
+                                        text = messageInput.value
+                                    )
+                                    messageInput.value = ""
+                                },
+                                onAttach = { attachLauncher.launch("image/*") }
+                            )
+
+                            if (showDetailsDialog.value) {
+                                AlertDialog(
+                                    onDismissRequest = { showDetailsDialog.value = false },
+                                    confirmButton = {
+                                        TextButton(onClick = { showDetailsDialog.value = false }) {
+                                            Text("Close")
+                                        }
+                                    },
+                                    title = { Text("Responder Details") },
+                                    text = {
+                                        selectedResponder.value?.let { ChatDetailsPanel(it) }
+                                            ?: Text("No responder selected")
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    if (showSidebar) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = 0.35f))
+                                .clickable { showSidebar = false }
+                        )
+
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .width(250.dp),
+                            shape = RoundedCornerShape(topEnd = 28.dp, bottomEnd = 28.dp),
+                            color = Color(0xFFF7F4FA),
+                            shadowElevation = 10.dp
+                        ) {
                             ChatListSidebar(
                                 searchQuery = searchQuery.value,
                                 onSearchChange = { searchQuery.value = it },
@@ -154,80 +254,20 @@ fun CoordinationPortalScreen(
                                 onChatSelected = { res, dept ->
                                     if (res != null) vm.selectResponderAndLoadHistory(currentResponderId, res)
                                     else if (dept != null) vm.selectDepartmentAndLoadHistory(dept)
-                                    scope.launch { drawerState.close() }
+                                    showSidebar = false
                                 }
                             )
-                        }
-                    }
-                ) {
-                    Scaffold(
-                        topBar = {
-                            TopAppBar(
-                                title = { Text(text = selectedResponder.value?.fullName ?: selectedDepartment.value?.displayName ?: "Select a chat") },
-                                navigationIcon = {
-                                    IconButton(onClick = { scope.launch { drawerState.open() } }) { Icon(Icons.Default.Menu, contentDescription = "Menu") }
-                                },
-                                actions = {
-                                    IconButton(onClick = { /* call */ }) {
-                                        Icon(Icons.Default.Call, contentDescription = "Call")
-                                    }
-
-                                    // ✅ Clear chat icon (hindi na check)
-                                    IconButton(onClick = {
-                                        vm.clearCurrentChatHistory()
-                                        Toast.makeText(ctx, "Chat cleared", Toast.LENGTH_SHORT).show()
-                                    }) {
-                                        Icon(Icons.Default.Delete, contentDescription = "Clear chat")
-                                    }
-
-                                    // ✅ Info (isa nalang)
-                                    IconButton(onClick = { showDetailsDialog.value = true }) {
-                                        Icon(Icons.Default.Info, contentDescription = "Info")
-                                    }
-                                }
-                            )
-                        },
-                    ) { padding ->
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(padding)
-                                .navigationBarsPadding()
-                                .background(Color(0xFFF8F9FA))
-                        ) {
-                            ChatMessagesPanel(messages = messages, modifier = Modifier.weight(1f).padding(12.dp), timeFmt = timeFmt, listState = listState)
-
-                            HorizontalDivider()
-
-                            ChatComposer(
-                                text = messageInput.value,
-                                onTextChange = { messageInput.value = it },
-                                onSend = { doSend() },
-                                onAttach = { attachLauncher.launch("image/*") } // pwede rin "*/*"
-                            )
-
-                            // Chat details dialog for small screen
-                            if (showDetailsDialog.value) {
-                                AlertDialog(
-                                    onDismissRequest = { showDetailsDialog.value = false },
-                                    confirmButton = {
-                                        TextButton(onClick = { showDetailsDialog.value = false }) { Text("Close") }
-                                    },
-                                    title = { Text("Responder Details") },
-                                    text = {
-                                        selectedResponder.value?.let { ChatDetailsPanel(it) } ?: Text("No responder selected")
-                                    }
-                                )
-                            }
                         }
                     }
                 }
-
             }
 
             ScreenSize.MEDIUM -> {
                 ModalNavigationDrawer(drawerState = drawerState, drawerContent = {
-                    ModalDrawerSheet(modifier = Modifier.width(320.dp)) {
+                    ModalDrawerSheet(
+                        modifier = Modifier.width(250.dp),
+                        drawerShape = RoundedCornerShape(topEnd = 28.dp, bottomEnd = 28.dp)
+                    ) {
                         ChatListSidebar(
                             searchQuery = searchQuery.value,
                             onSearchChange = { searchQuery.value = it },
@@ -278,39 +318,57 @@ fun CoordinationPortalScreen(
                         // ✅ Info (isa nalang)
                         IconButton(onClick = { showDetailsDialog.value = true }) {
                             Icon(Icons.Default.Info, contentDescription = "Details")
+                        }
+                        HorizontalDivider()
 
-
-                            HorizontalDivider()
-
-                            if (isTyping) {
-                                Text(
-                                    text = "Typing…",
-                                    color = Color.Gray,
-                                    fontSize = 12.sp,
-                                    modifier = Modifier.padding(start = 16.dp, top = 6.dp, bottom = 4.dp)
-                                )
-                            }
-
-                            ChatMessagesPanel(messages = messages, modifier = Modifier.weight(1f).padding(12.dp), timeFmt = timeFmt, listState = listState)
-
-                            HorizontalDivider()
-
-                            ChatComposer(
-                                text = messageInput.value,
-                                onTextChange = { messageInput.value = it },
-                                onSend = { doSend() },
-                                onAttach = { attachLauncher.launch("image/*") }
+                        if (isTyping) {
+                            Text(
+                                text = "Typing…",
+                                color = Color.Gray,
+                                fontSize = 12.sp,
+                                modifier = Modifier.padding(start = 16.dp, top = 6.dp, bottom = 4.dp)
                             )
+                        }
 
-                            // Details as modal/dialog (not side panel) on medium
-                            if (showDetailsDialog.value) {
-                                AlertDialog(
-                                    onDismissRequest = { showDetailsDialog.value = false },
-                                    confirmButton = { TextButton(onClick = { showDetailsDialog.value = false }) { Text("Close") } },
-                                    title = { Text("Responder Details") },
-                                    text = { selectedResponder.value?.let { ChatDetailsPanel(it) } ?: Text("No responder selected") }
+                        ChatMessagesPanel(
+                            messages = messages,
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(12.dp),
+                            timeFmt = timeFmt,
+                            listState = listState
+                        )
+
+                        HorizontalDivider()
+
+                        ChatComposer(
+                            text = messageInput.value,
+                            onTextChange = { messageInput.value = it },
+                            onSend = {
+                                vm.sendTextMessage(
+                                    senderId = currentResponderId,
+                                    senderName = "You",
+                                    text = messageInput.value
                                 )
-                            }
+                                messageInput.value = ""
+                            },
+                            onAttach = { attachLauncher.launch("image/*") }
+                        )
+
+                        if (showDetailsDialog.value) {
+                            AlertDialog(
+                                onDismissRequest = { showDetailsDialog.value = false },
+                                confirmButton = {
+                                    TextButton(onClick = { showDetailsDialog.value = false }) {
+                                        Text("Close")
+                                    }
+                                },
+                                title = { Text("Responder Details") },
+                                text = {
+                                    selectedResponder.value?.let { ChatDetailsPanel(it) }
+                                        ?: Text("No responder selected")
+                                }
+                            )
                         }
                     }
                 }
@@ -373,17 +431,6 @@ fun CoordinationPortalScreen(
                         // ✅ Info (optional — pwede mo tanggalin kung ayaw mo na)
                         IconButton(onClick = { showDetailsDialog.value = true }) {
                             Icon(Icons.Default.Info, contentDescription = "Info")
-
-                            HorizontalDivider()
-
-                            ChatMessagesPanel(messages = messages, modifier = Modifier.weight(1f).padding(16.dp), timeFmt = timeFmt, listState = listState)
-
-                            ChatComposer(
-                                text = messageInput.value,
-                                onTextChange = { messageInput.value = it },
-                                onSend = { doSend() },
-                                onAttach = { attachLauncher.launch("image/*") }
-                            )
                         }
 
                         Column(modifier = Modifier.widthIn(min = 240.dp, max = 360.dp).fillMaxHeight().background(Color.White).shadow(4.dp).padding(16.dp)) {
@@ -467,34 +514,91 @@ private fun ChatListSidebar(
     collapsed: Boolean = false,
     onChatSelected: (ResponderBrief?, DepartmentInfo?) -> Unit
 ) {
-    var tabIndex by remember { mutableStateOf(0) } // 0=Responders, 1=Departments
+    var tabIndex by remember { mutableStateOf(0) }
 
     if (collapsed) {
-        // keep your compact layout if you want — optional
-        Column(modifier = Modifier.fillMaxHeight().padding(6.dp)) {
-            Text("Sidebar", fontWeight = FontWeight.Bold, modifier = Modifier.padding(8.dp))
+        Column(
+            modifier = Modifier
+                .fillMaxHeight()
+                .padding(6.dp)
+        ) {
+            Text(
+                "Sidebar",
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(8.dp)
+            )
         }
         return
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFFF7F4FA))
+            .padding(top = 10.dp)
+    ) {
         OutlinedTextField(
             value = searchQuery,
             onValueChange = onSearchChange,
-            placeholder = { Text("Search") },
-            leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
+            placeholder = {
+                Text(
+                    "Search chats",
+                    color = Color(0xFF9A9A9A)
+                )
+            },
+            leadingIcon = {
+                Icon(
+                    Icons.Default.Search,
+                    contentDescription = "Search",
+                    tint = Color(0xFF6D6D6D)
+                )
+            },
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
-            shape = RoundedCornerShape(20.dp),
-            singleLine = true
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+            shape = RoundedCornerShape(24.dp),
+            singleLine = true,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedContainerColor = Color.White,
+                unfocusedContainerColor = Color.White,
+                focusedBorderColor = Color(0xFF6D9998),
+                unfocusedBorderColor = Color(0xFFD8D2DB)
+            )
         )
 
-        TabRow(selectedTabIndex = tabIndex) {
-            Tab(selected = tabIndex == 0, onClick = { tabIndex = 0 }, text = { Text("Responders") })
-            Tab(selected = tabIndex == 1, onClick = { tabIndex = 1 }, text = { Text("Departments") })
+        Spacer(modifier = Modifier.height(4.dp))
+
+        TabRow(
+            selectedTabIndex = tabIndex,
+            containerColor = Color(0xFFF7F4FA),
+            contentColor = Color(0xFF4C8A89),
+            divider = {
+                HorizontalDivider(color = Color(0xFFD8D2DB))
+            }
+        ) {
+            Tab(
+                selected = tabIndex == 0,
+                onClick = { tabIndex = 0 },
+                text = {
+                    Text(
+                        text = "Responders",
+                        fontWeight = if (tabIndex == 0) FontWeight.SemiBold else FontWeight.Medium
+                    )
+                }
+            )
+            Tab(
+                selected = tabIndex == 1,
+                onClick = { tabIndex = 1 },
+                text = {
+                    Text(
+                        text = "Departments",
+                        fontWeight = if (tabIndex == 1) FontWeight.SemiBold else FontWeight.Medium
+                    )
+                }
+            )
         }
+
+        Spacer(modifier = Modifier.height(6.dp))
 
         when (tabIndex) {
             0 -> {
@@ -502,60 +606,93 @@ private fun ChatListSidebar(
                     it.fullName.contains(searchQuery, true) || it.role.contains(searchQuery, true)
                 }
 
-                LazyColumn(modifier = Modifier.weight(1f)) {
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(bottom = 16.dp)
+                ) {
                     items(filtered) { r ->
                         val isSelected = selectedResponder?.id == r.id
+
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                                .padding(horizontal = 14.dp, vertical = 8.dp)
                                 .clickable { onChatSelected(r, null) },
                             colors = CardDefaults.cardColors(
                                 containerColor = if (isSelected) Color(0xFFEAF3FF) else Color.White
                             ),
-                            shape = RoundedCornerShape(14.dp)
+                            shape = RoundedCornerShape(22.dp),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                         ) {
                             Row(
-                                modifier = Modifier.padding(10.dp),
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(40.dp)
+                                        .size(50.dp)
                                         .clip(CircleShape)
-                                        .background(Color(0xFFEDEDED)),
+                                        .background(Color(0xFFF1EEF4)),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    Icon(Icons.Default.AccountCircle, contentDescription = null, tint = Color.Gray)
+                                    Icon(
+                                        Icons.Default.AccountCircle,
+                                        contentDescription = null,
+                                        tint = Color(0xFF8A8A8A),
+                                        modifier = Modifier.size(30.dp)
+                                    )
                                 }
 
-                                Spacer(Modifier.width(10.dp))
+                                Spacer(Modifier.width(12.dp))
 
                                 Column(modifier = Modifier.weight(1f)) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(r.fullName, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text(
+                                            text = r.fullName,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 15.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+
                                         Spacer(Modifier.width(8.dp))
 
-                                        // online dot
                                         Box(
                                             modifier = Modifier
-                                                .size(8.dp)
+                                                .size(10.dp)
                                                 .clip(CircleShape)
-                                                .background(if (r.status.contains("online", true)) Color(0xFF4CAF50) else Color.Gray)
+                                                .background(
+                                                    if (r.status.contains("online", true)) Color(0xFF4CAF50)
+                                                    else Color.Gray
+                                                )
                                         )
                                     }
+
+                                    Spacer(modifier = Modifier.height(4.dp))
+
                                     Text(
                                         text = r.lastMessage.ifBlank { "No recent message" },
-                                        fontSize = 11.sp,
-                                        color = Color.Gray,
+                                        fontSize = 12.sp,
+                                        color = Color(0xFF7A7A7A),
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
                                 }
 
                                 if (r.unreadCount > 0) {
-                                    Badge(containerColor = Color(0xFFF44336)) {
-                                        Text(r.unreadCount.toString(), color = Color.White, fontSize = 10.sp)
+                                    Box(
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .clip(CircleShape)
+                                            .background(Color(0xFFE74C3C)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = r.unreadCount.toString(),
+                                            color = Color.White,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
                                     }
                                 }
                             }
@@ -569,40 +706,77 @@ private fun ChatListSidebar(
                     .filter { it.displayName.contains(searchQuery, true) || it.name.contains(searchQuery, true) }
                     .filter { it.name == currentResponderRole || currentResponderRole == "admin" }
 
-                LazyColumn(modifier = Modifier.weight(1f)) {
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(bottom = 16.dp)
+                ) {
                     items(filtered) { d ->
                         val isSelected = selectedDepartment?.name == d.name
+
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                                .padding(horizontal = 14.dp, vertical = 8.dp)
                                 .clickable { onChatSelected(null, d) },
                             colors = CardDefaults.cardColors(
                                 containerColor = if (isSelected) Color(0xFFEAF3FF) else Color.White
                             ),
-                            shape = RoundedCornerShape(14.dp)
+                            shape = RoundedCornerShape(22.dp),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                         ) {
                             Row(
-                                modifier = Modifier.padding(10.dp),
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(d.emoji, fontSize = 18.sp)
-                                Spacer(Modifier.width(10.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .size(42.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFFF1EEF4)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = d.emoji,
+                                        fontSize = 18.sp
+                                    )
+                                }
+
+                                Spacer(Modifier.width(12.dp))
 
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text(d.displayName, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(
+                                        text = d.displayName,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 15.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+
+                                    Spacer(modifier = Modifier.height(4.dp))
+
                                     Text(
                                         text = d.lastMessage.ifBlank { "No recent update" },
-                                        fontSize = 11.sp,
-                                        color = Color.Gray,
+                                        fontSize = 12.sp,
+                                        color = Color(0xFF7A7A7A),
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
                                 }
 
                                 if (d.unreadCount > 0) {
-                                    Badge(containerColor = Color(0xFFF44336)) {
-                                        Text(d.unreadCount.toString(), color = Color.White, fontSize = 10.sp)
+                                    Box(
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .clip(CircleShape)
+                                            .background(Color(0xFFE74C3C)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = d.unreadCount.toString(),
+                                            color = Color.White,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
                                     }
                                 }
                             }
@@ -616,7 +790,7 @@ private fun ChatListSidebar(
 
 @Composable
 private fun ChatMessagesPanel(
-    messages: List<ChatMessage>,
+    messages: List<com.ers.emergencyresponseapp.coordination.model.ChatMessage>,
     modifier: Modifier = Modifier,
     timeFmt: SimpleDateFormat,
     listState: LazyListState
@@ -677,7 +851,10 @@ private fun ChatMessagesPanel(
 }
 
 @Composable
-private fun ChatBubble(msg: ChatMessage, timeLabel: String) {
+private fun ChatBubble(
+    msg: com.ers.emergencyresponseapp.coordination.model.ChatMessage,
+    timeLabel: String
+) {
     val isOwn = msg.isOwn
     val bubbleColor = if (isOwn) Color(0xFF4C8A89) else Color.White
     val textColor = if (isOwn) Color.White else Color(0xFF1B1B1B)
@@ -731,39 +908,6 @@ private fun ChatDetailsPanel(selected: ResponderBrief?) {
     }
 }
 
-// --- Mock backend helpers (synchronous, UI/test-only) ---
-@Suppress("unused")
-private fun loadMockPrivateHistory(messages: MutableList<ChatMessage>, meId: String, peerId: String) {
-    messages.clear()
-    messages.addAll(listOf(
-        ChatMessage("h1", peerId, "Peer", "fire", "Hey, need backup?", System.currentTimeMillis() - 120_000, false),
-        ChatMessage("h2", meId, "You", "fire", "On my way.", System.currentTimeMillis() - 90_000, true)
-    ))
-}
-
-@Suppress("unused")
-private fun loadMockDepartmentHistory(messages: MutableList<ChatMessage>, department: String) {
-    messages.clear()
-    messages.addAll(listOf(
-        ChatMessage("d1", "2", "Alice", department, "Fire team, status update.", System.currentTimeMillis() - 60_000, false),
-        ChatMessage("d2", "3", "Bob", department, "Medical on scene.", System.currentTimeMillis() - 30_000, false)
-    ))
-}
-
-@Suppress("unused")
-private fun sendMockPrivateMessage(messages: MutableList<ChatMessage>, meId: String, peer: ResponderBrief, body: String) {
-    val now = System.currentTimeMillis()
-    messages.add(ChatMessage(null, meId, "You", peer.role, body, now, true))
-    // immediate echo for mock
-    messages.add(ChatMessage(null, peer.id, peer.fullName, peer.role, "Received: $body", System.currentTimeMillis(), false))
-}
-
-@Suppress("unused")
-private fun sendMockDepartmentMessage(messages: MutableList<ChatMessage>, meId: String, department: String, body: String) {
-    val now = System.currentTimeMillis()
-    messages.add(ChatMessage(null, meId, "You", department, body, now, true))
-    messages.add(ChatMessage(null, "2", "Alice", department, "Acknowledged", System.currentTimeMillis(), false))
-}
 
 @Composable
 private fun ChatComposer(
