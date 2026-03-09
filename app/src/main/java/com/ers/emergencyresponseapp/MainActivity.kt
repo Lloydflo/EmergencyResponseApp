@@ -38,21 +38,18 @@ import com.ers.emergencyresponseapp.ui.theme.EmergencyResponseAppTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import android.util.Log
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import com.ers.emergencyresponseapp.network.RetrofitProvider
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import kotlinx.coroutines.Job
 import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.input.pointer.PointerEventPass
 import android.view.MotionEvent
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 
 
 
@@ -292,36 +289,77 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-    @Composable
-    fun BottomNavigationBar(currentRoute: String?, onNavigate: (String) -> Unit) {
-        val items = listOf(
-            NavItem.Home,
-            NavItem.CoordinationPortal,
-            NavItem.ReviewsFeedback,
-            NavItem.Analytics
-        )
-        val context = LocalContext.current
-        // registration stores department under 'user_prefs'
-        val prefs = context.getSharedPreferences("auth", Context.MODE_PRIVATE)
-        val departmentPref = prefs.getString("department", null)
-        // Map stored department to a home route; use lowercase role token used by nav
-        val departmentHomeRoute = departmentPref?.let { "home/${it.lowercase()}" } ?: "home"
-        NavigationBar {
+@Composable
+fun BottomNavigationBar(
+    currentRoute: String?,
+    onNavigate: (String) -> Unit
+) {
+    val items = listOf(
+        NavItem.Home,
+        NavItem.CoordinationPortal,
+        NavItem.ReviewsFeedback,
+        NavItem.Analytics
+    )
+
+    val context = LocalContext.current
+    val prefs = context.getSharedPreferences("auth", Context.MODE_PRIVATE)
+    val departmentPref = prefs.getString("department", null)
+    val departmentHomeRoute = departmentPref?.let { "home/${it.lowercase()}" } ?: "home"
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        shape = RoundedCornerShape(28.dp),
+        color = MaterialTheme.colorScheme.surface,
+        shadowElevation = 10.dp,
+        tonalElevation = 3.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceAround,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             items.forEach { item ->
-                NavigationBarItem(
-                    icon = { Icon(item.icon, contentDescription = item.title) },
-                    label = { Text(item.title) },
-                    selected = currentRoute == item.route,
-                    onClick = {
-                        // Preserve department when navigating to Home
-                        if (item is NavItem.Home) onNavigate(departmentHomeRoute) else onNavigate(
-                            item.route
+                val targetRoute = if (item is NavItem.Home) departmentHomeRoute else item.route
+                val selected = currentRoute == item.route || (item is NavItem.Home && currentRoute?.startsWith("home") == true)
+
+                Column(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .clickable { onNavigate(targetRoute) }
+                        .background(
+                            if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                            else Color.Transparent
                         )
-                    }
-                )
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(
+                        imageVector = item.icon,
+                        contentDescription = item.title,
+                        tint = if (selected) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    Text(
+                        text = item.title,
+                        fontSize = 12.sp,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (selected) MaterialTheme.colorScheme.onSurface
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
+                    )
+                }
             }
         }
     }
+}
 
     @Composable
     fun EmergencyResponseScreen(

@@ -32,7 +32,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -44,13 +43,14 @@ import java.util.*
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.NotificationsOff
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 
 private enum class ScreenSize { SMALL, MEDIUM, LARGE }
+
 
 
 
@@ -90,10 +90,8 @@ fun CoordinationPortalScreen(
     val searchQuery = remember { mutableStateOf("") }
     val timeFmt = remember { SimpleDateFormat("hh:mm a", Locale.getDefault()) }
     val showDetailsDialog = remember { mutableStateOf(false) }
-    val drawerState = rememberDrawerState(DrawerValue.Closed)
-    LaunchedEffect(Unit) {
-        drawerState.close()
-    }
+    var showSidebar by remember { mutableStateOf(false) }
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val ctx = LocalContext.current
     val attachLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -138,11 +136,110 @@ fun CoordinationPortalScreen(
     Box(modifier = Modifier.fillMaxSize()) {
         when (screenSize) {
             ScreenSize.SMALL -> {
-                ModalNavigationDrawer(
-                    drawerState = drawerState,
-                    drawerContent = {
-                        // Compact drawer width to match left sidebar
-                        ModalDrawerSheet(modifier = Modifier.width(220.dp)) {
+                Box(modifier = Modifier.fillMaxSize()) {
+
+                    Scaffold(
+                        topBar = {
+                            TopAppBar(
+                                title = {
+                                    Text(
+                                        text = selectedResponder.value?.fullName
+                                            ?: selectedDepartment.value?.displayName
+                                            ?: "Select a chat"
+                                    )
+                                },
+                                navigationIcon = {
+                                    IconButton(onClick = { showSidebar = true }) {
+                                        Icon(Icons.Default.Menu, contentDescription = "Menu")
+                                    }
+                                },
+                                actions = {
+                                    IconButton(onClick = { /* call */ }) {
+                                        Icon(Icons.Default.Call, contentDescription = "Call")
+                                    }
+
+                                    IconButton(onClick = {
+                                        vm.clearCurrentChatHistory()
+                                        Toast.makeText(ctx, "Chat cleared", Toast.LENGTH_SHORT).show()
+                                    }) {
+                                        Icon(Icons.Default.Delete, contentDescription = "Clear chat")
+                                    }
+
+                                    IconButton(onClick = { showDetailsDialog.value = true }) {
+                                        Icon(Icons.Default.Info, contentDescription = "Info")
+                                    }
+                                }
+                            )
+                        }
+                    ) { padding ->
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(padding)
+                                .navigationBarsPadding()
+                                .background(Color(0xFFF8F9FA))
+                        ) {
+                            ChatMessagesPanel(
+                                messages = messages,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .padding(12.dp),
+                                timeFmt = timeFmt,
+                                listState = listState
+                            )
+
+                            HorizontalDivider()
+
+                            ChatComposer(
+                                text = messageInput.value,
+                                onTextChange = { messageInput.value = it },
+                                onSend = { doSend() },
+                                onAttach = { attachLauncher.launch("image/*") }
+                            )
+
+                            if (showDetailsDialog.value) {
+                                AlertDialog(
+                                    onDismissRequest = { showDetailsDialog.value = false },
+                                    confirmButton = {
+                                        TextButton(onClick = { showDetailsDialog.value = false }) {
+                                            Text("Close")
+                                        }
+                                    },
+                                    title = { Text("Responder Details") },
+                                    text = {
+                                        selectedResponder.value?.let { ChatDetailsPanel(it) }
+                                            ?: Text("No responder selected")
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    AnimatedVisibility(
+                        visible = showSidebar,
+                        enter = fadeIn(),
+                        exit = fadeOut()
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = 0.35f))
+                                .clickable { showSidebar = false }
+                        )
+                    }
+
+                    AnimatedVisibility(
+                        visible = showSidebar,
+                        enter = slideInHorizontally(initialOffsetX = { -it / 2 }) + fadeIn(),
+                        exit = slideOutHorizontally(targetOffsetX = { -it / 2 }) + fadeOut()
+                    ) {
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .width(220.dp),
+                            color = Color(0xFFF5F0F7),
+                            shadowElevation = 8.dp
+                        ) {
                             ChatListSidebar(
                                 searchQuery = searchQuery.value,
                                 onSearchChange = { searchQuery.value = it },
@@ -154,75 +251,12 @@ fun CoordinationPortalScreen(
                                 onChatSelected = { res, dept ->
                                     if (res != null) vm.selectResponderAndLoadHistory(currentResponderId, res)
                                     else if (dept != null) vm.selectDepartmentAndLoadHistory(dept)
-                                    scope.launch { drawerState.close() }
+                                    showSidebar = false
                                 }
                             )
-                        }
-                    }
-                ) {
-                    Scaffold(
-                        topBar = {
-                            TopAppBar(
-                                title = { Text(text = selectedResponder.value?.fullName ?: selectedDepartment.value?.displayName ?: "Select a chat") },
-                                navigationIcon = {
-                                    IconButton(onClick = { scope.launch { drawerState.open() } }) { Icon(Icons.Default.Menu, contentDescription = "Menu") }
-                                },
-                                actions = {
-                                    IconButton(onClick = { /* call */ }) {
-                                        Icon(Icons.Default.Call, contentDescription = "Call")
-                                    }
-
-                                    // ✅ Clear chat icon (hindi na check)
-                                    IconButton(onClick = {
-                                        vm.clearCurrentChatHistory()
-                                        Toast.makeText(ctx, "Chat cleared", Toast.LENGTH_SHORT).show()
-                                    }) {
-                                        Icon(Icons.Default.Delete, contentDescription = "Clear chat")
-                                    }
-
-                                    // ✅ Info (isa nalang)
-                                    IconButton(onClick = { showDetailsDialog.value = true }) {
-                                        Icon(Icons.Default.Info, contentDescription = "Info")
-                                    }
-                                }
-                            )
-                        },
-                    ) { padding ->
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(padding)
-                                .navigationBarsPadding()
-                                .background(Color(0xFFF8F9FA))
-                        ) {
-                            ChatMessagesPanel(messages = messages, modifier = Modifier.weight(1f).padding(12.dp), timeFmt = timeFmt, listState = listState)
-
-                            HorizontalDivider()
-
-                            ChatComposer(
-                                text = messageInput.value,
-                                onTextChange = { messageInput.value = it },
-                                onSend = { doSend() },
-                                onAttach = { attachLauncher.launch("image/*") } // pwede rin "*/*"
-                            )
-
-                            // Chat details dialog for small screen
-                            if (showDetailsDialog.value) {
-                                AlertDialog(
-                                    onDismissRequest = { showDetailsDialog.value = false },
-                                    confirmButton = {
-                                        TextButton(onClick = { showDetailsDialog.value = false }) { Text("Close") }
-                                    },
-                                    title = { Text("Responder Details") },
-                                    text = {
-                                        selectedResponder.value?.let { ChatDetailsPanel(it) } ?: Text("No responder selected")
-                                    }
-                                )
-                            }
                         }
                     }
                 }
-
             }
 
             ScreenSize.MEDIUM -> {
@@ -291,7 +325,14 @@ fun CoordinationPortalScreen(
                                 )
                             }
 
-                            ChatMessagesPanel(messages = messages, modifier = Modifier.weight(1f).padding(12.dp), timeFmt = timeFmt, listState = listState)
+                            ChatMessagesPanel(
+                                messages = messages,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .padding(12.dp),
+                                timeFmt = timeFmt,
+                                listState = listState
+                            )
 
                             HorizontalDivider()
 
@@ -302,13 +343,19 @@ fun CoordinationPortalScreen(
                                 onAttach = { attachLauncher.launch("image/*") }
                             )
 
-                            // Details as modal/dialog (not side panel) on medium
                             if (showDetailsDialog.value) {
                                 AlertDialog(
                                     onDismissRequest = { showDetailsDialog.value = false },
-                                    confirmButton = { TextButton(onClick = { showDetailsDialog.value = false }) { Text("Close") } },
+                                    confirmButton = {
+                                        TextButton(onClick = { showDetailsDialog.value = false }) {
+                                            Text("Close")
+                                        }
+                                    },
                                     title = { Text("Responder Details") },
-                                    text = { selectedResponder.value?.let { ChatDetailsPanel(it) } ?: Text("No responder selected") }
+                                    text = {
+                                        selectedResponder.value?.let { ChatDetailsPanel(it) }
+                                            ?: Text("No responder selected")
+                                    }
                                 )
                             }
                         }
@@ -373,17 +420,6 @@ fun CoordinationPortalScreen(
                         // ✅ Info (optional — pwede mo tanggalin kung ayaw mo na)
                         IconButton(onClick = { showDetailsDialog.value = true }) {
                             Icon(Icons.Default.Info, contentDescription = "Info")
-
-                            HorizontalDivider()
-
-                            ChatMessagesPanel(messages = messages, modifier = Modifier.weight(1f).padding(16.dp), timeFmt = timeFmt, listState = listState)
-
-                            ChatComposer(
-                                text = messageInput.value,
-                                onTextChange = { messageInput.value = it },
-                                onSend = { doSend() },
-                                onAttach = { attachLauncher.launch("image/*") }
-                            )
                         }
 
                         Column(modifier = Modifier.widthIn(min = 240.dp, max = 360.dp).fillMaxHeight().background(Color.White).shadow(4.dp).padding(16.dp)) {
