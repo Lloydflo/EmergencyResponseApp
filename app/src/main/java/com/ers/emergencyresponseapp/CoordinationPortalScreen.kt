@@ -49,8 +49,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import com.ers.emergencyresponseapp.coordination.model.viewmodel.CoordinationViewModel
 import com.ers.emergencyresponseapp.coordination.model.ChatMessage
-
-
+import androidx.compose.foundation.combinedClickable
+import com.ers.emergencyresponseapp.coordination.model.MessageStatus
 
 
 
@@ -165,9 +165,13 @@ fun CoordinationPortalScreen(
 
                                     IconButton(onClick = {
                                         vm.clearCurrentChatHistory()
-                                        Toast.makeText(ctx, "Chat cleared", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(ctx, "Chat cleared", Toast.LENGTH_SHORT)
+                                            .show()
                                     }) {
-                                        Icon(Icons.Default.Delete, contentDescription = "Clear chat")
+                                        Icon(
+                                            Icons.Default.Delete,
+                                            contentDescription = "Clear chat"
+                                        )
                                     }
 
                                     IconButton(onClick = { showDetailsDialog.value = true }) {
@@ -190,7 +194,10 @@ fun CoordinationPortalScreen(
                                     .weight(1f)
                                     .padding(12.dp),
                                 timeFmt = timeFmt,
-                                listState = listState
+                                listState = listState,
+                                onReact = { messageId, emoji ->
+                                    vm.addReaction(messageId, emoji, currentResponderId)
+                                }
                             )
 
                             HorizontalDivider()
@@ -235,33 +242,83 @@ fun CoordinationPortalScreen(
                                 .clickable { showSidebar = false }
                         )
 
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxHeight()
-                                .width(250.dp),
-                            shape = RoundedCornerShape(topEnd = 28.dp, bottomEnd = 28.dp),
-                            color = Color(0xFFF7F4FA),
-                            shadowElevation = 10.dp
-                        ) {
-                            ChatListSidebar(
-                                searchQuery = searchQuery.value,
-                                onSearchChange = { searchQuery.value = it },
-                                responders = responders,
-                                departments = departments,
-                                currentResponderRole = currentResponderRole,
-                                selectedResponder = selectedResponder.value,
-                                selectedDepartment = selectedDepartment.value,
-                                onChatSelected = { res, dept ->
-                                    if (res != null) vm.selectResponderAndLoadHistory(currentResponderId, res)
-                                    else if (dept != null) vm.selectDepartmentAndLoadHistory(dept)
-                                    showSidebar = false
-                                }
+                        if (showSidebar) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.35f))
+                                    .clickable { showSidebar = false }
                             )
+
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .width(250.dp),
+                                shape = RoundedCornerShape(topEnd = 28.dp, bottomEnd = 28.dp),
+                                color = Color(0xFFF7F4FA),
+                                shadowElevation = 10.dp
+                            ) {
+                                ChatListSidebar(
+                                    searchQuery = searchQuery.value,
+                                    onSearchChange = { searchQuery.value = it },
+                                    responders = responders,
+                                    departments = departments,
+                                    currentResponderRole = currentResponderRole,
+                                    selectedResponder = selectedResponder.value,
+                                    selectedDepartment = selectedDepartment.value,
+                                    onChatSelected = { res, dept ->
+                                        if (res != null) {
+                                            vm.selectResponderAndLoadHistory(currentResponderId, res)
+                                        } else if (dept != null) {
+                                            vm.selectDepartmentAndLoadHistory(dept)
+                                        }
+                                        showSidebar = false
+                                    }
+                                )
+                            }
+                        }
+
+                        if (showSidebar) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.35f))
+                                    .clickable { showSidebar = false }
+                            )
+
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .width(250.dp),
+                                shape = RoundedCornerShape(topEnd = 28.dp, bottomEnd = 28.dp),
+                                color = Color(0xFFF7F4FA),
+                                shadowElevation = 10.dp
+                            ) {
+                                ChatListSidebar(
+                                    searchQuery = searchQuery.value,
+                                    onSearchChange = { searchQuery.value = it },
+                                    responders = responders,
+                                    departments = departments,
+                                    currentResponderRole = currentResponderRole,
+                                    selectedResponder = selectedResponder.value,
+                                    selectedDepartment = selectedDepartment.value,
+                                    onChatSelected = { res, dept ->
+                                        if (res != null) {
+                                            vm.selectResponderAndLoadHistory(
+                                                currentResponderId,
+                                                res
+                                            )
+                                        } else if (dept != null) {
+                                            vm.selectDepartmentAndLoadHistory(dept)
+                                        }
+                                        showSidebar = false
+                                    }
+                                )
+                            }
                         }
                     }
                 }
             }
-
             ScreenSize.MEDIUM -> {
                 ModalNavigationDrawer(drawerState = drawerState, drawerContent = {
                     ModalDrawerSheet(
@@ -336,7 +393,10 @@ fun CoordinationPortalScreen(
                                 .weight(1f)
                                 .padding(12.dp),
                             timeFmt = timeFmt,
-                            listState = listState
+                            listState = listState,
+                            onReact = { messageId, emoji ->
+                                vm.addReaction(messageId, emoji, currentResponderId)
+                            }
                         )
 
                         HorizontalDivider()
@@ -443,12 +503,62 @@ fun CoordinationPortalScreen(
 
         // Bottom-right transient notification for new messages
         val latest = vm.latestNotification.value
-        AnimatedVisibility(visible = latest != null, enter = slideInVertically(initialOffsetY = { it / 2 }) + fadeIn(), exit = slideOutVertically(targetOffsetY = { it / 2 }) + fadeOut(), modifier = Modifier.fillMaxSize()) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.BottomEnd) {
-                Card(modifier = Modifier.padding(16.dp).wrapContentWidth().wrapContentHeight().clickable { vm.clearNotification() }, shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF323232)), elevation = CardDefaults.cardElevation(8.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-                        Text(text = latest ?: "", color = Color.White, modifier = Modifier.weight(1f))
-                        IconButton(onClick = { vm.clearNotification() }) { Icon(imageVector = Icons.Default.Done, contentDescription = "Dismiss", tint = Color.White) }
+        AnimatedVisibility(
+            visible = latest != null,
+            enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .imePadding()
+                    .navigationBarsPadding(),
+                contentAlignment = Alignment.BottomCenter
+            ) {
+
+                Card(
+                    modifier = Modifier
+                        .padding(horizontal = 16.dp, vertical = 120.dp)
+                        .fillMaxWidth()
+                        .clickable { vm.clearNotification() },
+
+                    shape = RoundedCornerShape(18.dp),
+
+                    colors = CardDefaults.cardColors(
+                        containerColor = Color(0xFF1E1E1E)
+                    ),
+
+                    elevation = CardDefaults.cardElevation(10.dp)
+                ) {
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(14.dp)
+                    ) {
+
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = null,
+                            tint = Color(0xFF4CAF50),
+                            modifier = Modifier.size(22.dp)
+                        )
+
+                        Spacer(Modifier.width(10.dp))
+
+                        Text(
+                            text = latest ?: "",
+                            color = Color.White,
+                            modifier = Modifier.weight(1f)
+                        )
+
+                        IconButton(onClick = { vm.clearNotification() }) {
+                            Icon(
+                                imageVector = Icons.Default.Done,
+                                contentDescription = "Dismiss",
+                                tint = Color.White
+                            )
+                        }
                     }
                 }
             }
@@ -461,7 +571,19 @@ fun CoordinationPortalScreen(
             }
         }
 
-        // Auto-scroll to newest message whenever messages list size changes
+        // 🔧 TEST: simulate incoming message notification
+        LaunchedEffect(Unit) {
+            delay(2000)
+            vm.receiveIncomingPrivateMessage(
+                meId = currentResponderId,
+                peerId = "2",
+                senderName = "Alice Johnson",
+                role = "fire",
+                body = "Need backup?"
+            )
+        }
+
+        // Auto-scroll to newest message whenever messages   list size changes
         LaunchedEffect(messages.size) {
             if (messages.isNotEmpty()) {
                 // Determine the last visible item index; if no visible items yet, treat as near-end and scroll
@@ -793,7 +915,8 @@ private fun ChatMessagesPanel(
     messages: List<com.ers.emergencyresponseapp.coordination.model.ChatMessage>,
     modifier: Modifier = Modifier,
     timeFmt: SimpleDateFormat,
-    listState: LazyListState
+    listState: LazyListState,
+    onReact: (String, String) -> Unit = { _, _ -> }
 ) {
     if (messages.isEmpty()) {
         Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -845,47 +968,152 @@ private fun ChatMessagesPanel(
                     }
                 }
             }
-            ChatBubble(msg, timeFmt.format(Date(msg.createdAt)))
+            ChatBubble(
+                msg = msg,
+                timeLabel = timeFmt.format(Date(msg.createdAt)),
+                onReact = { messageId, emoji ->
+                    onReact(messageId, emoji)
+                }
+            )
         }
     }
 }
 
 @Composable
 private fun ChatBubble(
-    msg: com.ers.emergencyresponseapp.coordination.model.ChatMessage,
-    timeLabel: String
+    msg: ChatMessage,
+    timeLabel: String,
+    onReact: (String, String) -> Unit = { _, _ -> }
 ) {
-    val isOwn = msg.isOwn
+    val isOwn = msg.senderName == "You"
     val bubbleColor = if (isOwn) Color(0xFF4C8A89) else Color.White
     val textColor = if (isOwn) Color.White else Color(0xFF1B1B1B)
     val alignment = if (isOwn) Alignment.End else Alignment.Start
 
-    Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = alignment) {
-        Surface(
-            color = bubbleColor,
-            shape = RoundedCornerShape(18.dp),
-            tonalElevation = if (isOwn) 0.dp else 2.dp,
-            shadowElevation = if (isOwn) 0.dp else 2.dp,
+    var showReactions by remember(msg.id) { mutableStateOf(false) }
+
+    val reactionCounts = msg.reactions.groupingBy { it.emoji }.eachCount()
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = alignment
+    ) {
+        Box(
             modifier = Modifier
-                .widthIn(max = 300.dp)
                 .padding(horizontal = 6.dp)
+                .widthIn(max = 300.dp)
         ) {
-            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-                if (!isOwn && msg.senderName.isNotBlank() && msg.senderName != "You") {
-                    Text(
-                        msg.senderName,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 12.sp,
-                        color = textColor.copy(alpha = 0.75f)
-                    )
-                    Spacer(Modifier.height(4.dp))
+            Column {
+                if (showReactions) {
+                    Card(
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color.White),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+                        modifier = Modifier.padding(bottom = 6.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            listOf("👍", "❤️", "😮", "🔥", "🚨").forEach { emoji ->
+                                Text(
+                                    text = emoji,
+                                    fontSize = 22.sp,
+                                    modifier = Modifier.clickable {
+                                        onReact(msg.id, emoji)
+                                        showReactions = false
+                                    }
+                                )
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = timeLabel,
+                                        fontSize = 10.sp,
+                                        color = Color.Gray
+                                    )
+
+                                    if (isOwn) {
+                                        val statusText = when (msg.status) {
+                                            MessageStatus.SENT -> "✓"
+                                            MessageStatus.DELIVERED -> "✓✓"
+                                            MessageStatus.READ -> "✓✓ Read"
+                                        }
+
+                                        Text(
+                                            text = statusText,
+                                            fontSize = 10.sp,
+                                            color = if (msg.status == MessageStatus.READ) Color(0xFF4C8A89) else Color.Gray
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
-                Text(msg.body, color = textColor, fontSize = 14.sp)
+
+                Surface(
+                    color = bubbleColor,
+                    shape = RoundedCornerShape(18.dp),
+                    tonalElevation = if (isOwn) 0.dp else 2.dp,
+                    shadowElevation = if (isOwn) 0.dp else 2.dp,
+                    modifier = Modifier.combinedClickable(
+                        onClick = {},
+                        onLongClick = {
+                            showReactions = !showReactions
+                        }
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                    ) {
+                        if (!isOwn && msg.senderName.isNotBlank() && msg.senderName != "You") {
+                            Text(
+                                text = msg.senderName,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 12.sp,
+                                color = textColor.copy(alpha = 0.75f)
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                        }
+
+                        Text(
+                            text = msg.text ?: "",
+                            color = textColor,
+                            fontSize = 14.sp
+                        )
+                    }
+                }
+
+                if (reactionCounts.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        reactionCounts.forEach { (emoji, count) ->
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = Color(0xFFF1F1F1)
+                            ) {
+                                Text(
+                                    text = "$emoji $count",
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    fontSize = 12.sp,
+                                    color = Color(0xFF333333)
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
 
         Text(
-            timeLabel,
+            text = timeLabel,
             fontSize = 10.sp,
             color = Color.Gray,
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp)

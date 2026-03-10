@@ -16,6 +16,8 @@ import com.ers.emergencyresponseapp.coordination.model.repository.ChatRepository
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import com.ers.emergencyresponseapp.coordination.model.MessageStatus
+import java.util.UUID
 
 
 class CoordinationViewModel(application: Application) : AndroidViewModel(application) {
@@ -121,75 +123,93 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         messages.addAll(repository.getMessages(thread.id))
     }
 
-    fun sendMockPrivateMessage(meId: String, peer: ResponderBrief, body: String) {
-        val thread = repository.getOrCreatePrivateThread(meId, peer.id, peer.fullName)
-        currentThread.value = thread
+    private fun updateMessageStatus(messageId: String, newStatus: MessageStatus) {
+        val index = messages.indexOfFirst { it.id == messageId }
+        if (index == -1) return
 
+        val oldMessage = messages[index]
+        messages[index] = oldMessage.copy(status = newStatus)
+    }
+
+    fun sendMockPrivateMessage(meId: String, peer: ResponderBrief, body: String) {
         viewModelScope.launch {
-            repository.addMessage(
-                ChatMessage(
-                    threadId = thread.id,
-                    senderId = meId,
-                    senderName = "You",
-                    role = peer.role,
-                    type = MessageType.TEXT,
-                    text = body,
-                    isOwn = true
-                )
+            val now = System.currentTimeMillis()
+
+            val myMessage = ChatMessage(
+                id = UUID.randomUUID().toString(),
+                senderId = meId,
+                senderName = "You",
+                threadId = selectedResponder.value?.id ?: selectedDepartment.value?.name ?: "general",
+                type = MessageType.TEXT,
+                text = body,
+                role = peer.role,
+                createdAt = now,
+                status = MessageStatus.SENT
             )
-            refreshMessages()
+
+            messages.add(myMessage)
 
             delay(700)
+            updateMessageStatus(myMessage.id, MessageStatus.DELIVERED)
 
-            repository.addMessage(
+            delay(1200)
+            updateMessageStatus(myMessage.id, MessageStatus.READ)
+
+            delay(400)
+            messages.add(
                 ChatMessage(
-                    threadId = thread.id,
-                    senderId = peer.id,
-                    senderName = peer.fullName,
-                    role = peer.role,
+                    id = UUID.randomUUID().toString(),
+                    senderId = meId,
+                    senderName = "You",
+                    threadId = selectedResponder.value?.id ?: selectedDepartment.value?.name ?: "general",
                     type = MessageType.TEXT,
-                    text = "Received: $body",
-                    isOwn = false
+                    text = body,
+                    role = peer.role,
+                    createdAt = now,
+                    status = MessageStatus.SENT
                 )
             )
-            refreshMessages()
         }
     }
 
     fun sendMockDepartmentMessage(meId: String, department: String, body: String) {
-        val deptInfo = departments.firstOrNull { it.name == department }
-        val displayName = deptInfo?.displayName ?: department
-        val thread = repository.getOrCreateDepartmentThread(department, displayName)
-        currentThread.value = thread
-
         viewModelScope.launch {
-            repository.addMessage(
-                ChatMessage(
-                    threadId = thread.id,
-                    senderId = meId,
-                    senderName = "You",
-                    role = department,
-                    type = MessageType.TEXT,
-                    text = body,
-                    isOwn = true
-                )
+            val now = System.currentTimeMillis()
+
+            val myMessage = ChatMessage(
+                id = UUID.randomUUID().toString(),
+                senderId = meId,
+                senderName = "You",
+                threadId = selectedResponder.value?.id ?: selectedDepartment.value?.name ?: "general",
+                type = MessageType.TEXT,
+                text = body,
+                role = department,
+                createdAt = now,
+                status = MessageStatus.SENT
             )
-            refreshMessages()
+
+            messages.add(myMessage)
+
+            delay(700)
+            updateMessageStatus(myMessage.id, MessageStatus.DELIVERED)
+
+            delay(1200)
+            updateMessageStatus(myMessage.id, MessageStatus.READ)
 
             delay(500)
-
-            repository.addMessage(
+            messages.add(
                 ChatMessage(
-                    threadId = thread.id,
-                    senderId = "2",
-                    senderName = "Alice",
-                    role = department,
+                    id = UUID.randomUUID().toString(),
+                    senderId = meId,
+                    senderName = "You",
+                    threadId = selectedResponder.value?.id ?: selectedDepartment.value?.name ?: "general",
                     type = MessageType.TEXT,
-                    text = "Acknowledged",
-                    isOwn = false
+                    text = body,
+                    role = department,
+                    createdAt = now,
+                    status = MessageStatus.SENT
                 )
             )
-            refreshMessages()
         }
     }
 
@@ -271,15 +291,31 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun addReaction(messageId: String, emoji: String, userId: String) {
-        val threadId = currentThread.value?.id ?: return
-        val list = repository.getMessages(threadId).toMutableList()
-        val index = list.indexOfFirst { it.id == messageId }
-        if (index >= 0) {
-            val item = list[index]
-            item.reactions.add(com.ers.emergencyresponseapp.coordination.model.MessageReaction(userId, emoji))
-            repository.replaceMessages(threadId, list)
-            refreshMessages()
+        val index = messages.indexOfFirst { it.id == messageId }
+        if (index == -1) return
+
+        val oldMessage = messages[index]
+
+        val updatedReactions = oldMessage.reactions.toMutableList()
+
+        val existingIndex = updatedReactions.indexOfFirst {
+            it.userId == userId && it.emoji == emoji
         }
+
+        if (existingIndex >= 0) {
+            updatedReactions.removeAt(existingIndex)
+        } else {
+            updatedReactions.add(
+                com.ers.emergencyresponseapp.coordination.model.MessageReaction(
+                    userId = userId,
+                    emoji = emoji
+                )
+            )
+        }
+
+        messages[index] = oldMessage.copy(
+            reactions = updatedReactions
+        )
     }
 
     fun markResponderRead(responderId: String) {
