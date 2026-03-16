@@ -37,8 +37,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.LocalHospital
@@ -57,7 +55,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.Composable
@@ -98,8 +95,6 @@ import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import java.io.File
 import java.io.FileOutputStream
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.combinedClickable
@@ -107,34 +102,24 @@ import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.wrapContentHeight
 import android.content.Context
 import android.location.LocationManager
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.draw.shadow
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Switch
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.filled.CameraAlt
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.unit.dp
 import com.ers.emergencyresponseapp.routing.RouteMonitoringService
 import androidx.navigation.NavHostController
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.LocalFireDepartment
 
 
 
@@ -1594,65 +1579,109 @@ fun HomeScreen(
                     }
                 }
 
-                // ✅ COUNTS
+                // ✅ COUNTS — Modern redesign
                 item {
+                    val incidentTypeData = listOf(
+                        Triple(fireCount,    "Fire",    Color(0xFFE53935)),
+                        Triple(medicalCount, "Medical", Color(0xFF1E88E5)),
+                        Triple(crimeCount,   "Crime",   Color(0xFF6D4C41))
+                    )
+                    val incidentIcons = listOf(
+                        Icons.Default.LocalFireDepartment,
+                        Icons.Default.LocalHospital,
+                        Icons.Default.Security
+                    )
+
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-
-                        @Composable
-                        fun StatCardLocal(
-                            value: Int,
-                            label: String,
-                            modifier: Modifier = Modifier
-                        ) {
+                        incidentTypeData.forEachIndexed { i, (count, label, accent) ->
                             Card(
-                                modifier = modifier
-                                    .shadow(8.dp, RoundedCornerShape(20.dp)),
-                                shape = RoundedCornerShape(20.dp),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .shadow(
+                                        elevation    = 10.dp,
+                                        shape        = RoundedCornerShape(22.dp),
+                                        ambientColor = accent.copy(alpha = 0.18f),
+                                        spotColor    = accent.copy(alpha = 0.22f)
+                                    ),
+                                shape  = RoundedCornerShape(22.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color.White),
+                                border = androidx.compose.foundation.BorderStroke(
+                                    1.dp, accent.copy(alpha = 0.13f)
                                 )
                             ) {
                                 Column(
-                                    modifier = Modifier.padding(
-                                        horizontal = 12.dp,
-                                        vertical = 16.dp
-                                    ),
-                                    horizontalAlignment = Alignment.CenterHorizontally
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(
+                                            Brush.verticalGradient(
+                                                colors = listOf(accent.copy(alpha = 0.07f), Color.White)
+                                            )
+                                        )
+                                        .padding(horizontal = 10.dp, vertical = 14.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
+                                    // Icon badge
+                                    Box(
+                                        modifier = Modifier
+                                            .size(34.dp)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(accent.copy(alpha = 0.12f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector    = incidentIcons[i],
+                                            contentDescription = label,
+                                            tint           = accent,
+                                            modifier       = Modifier.size(18.dp)
+                                        )
+                                    }
+
+                                    // Count number
                                     Text(
-                                        text = value.toString(),
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 20.sp,
-                                        textAlign = TextAlign.Center
+                                        text       = count.toString(),
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize   = 26.sp,
+                                        color      = AppColors.Text,
+                                        textAlign  = TextAlign.Center
                                     )
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    Text(
-                                        text = label,
-                                        fontSize = 12.sp,
-                                        textAlign = TextAlign.Center,
-                                        modifier = Modifier.fillMaxWidth()
+
+                                    // Label + "today"
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text(
+                                            text       = label,
+                                            fontSize   = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color      = AppColors.Text,
+                                            textAlign  = TextAlign.Center
+                                        )
+                                        Text(
+                                            text      = "today",
+                                            fontSize  = 10.sp,
+                                            color     = AppColors.TextSecondary,
+                                            textAlign = TextAlign.Center
+                                        )
+                                    }
+
+                                    // Gradient accent underline pill
+                                    Box(
+                                        modifier = Modifier
+                                            .height(3.dp)
+                                            .fillMaxWidth(0.55f)
+                                            .clip(RoundedCornerShape(999.dp))
+                                            .background(
+                                                Brush.horizontalGradient(
+                                                    listOf(accent.copy(alpha = 0.4f), accent)
+                                                )
+                                            )
                                     )
                                 }
                             }
-                        }
-
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(
-                                12.dp,
-                                Alignment.CenterHorizontally
-                            )
-                        ) {
-                            StatCardLocal(fireCount, "Fire Today", Modifier.weight(1f))
-                            StatCardLocal(medicalCount, "Medical Today", Modifier.weight(1f))
-                            StatCardLocal(crimeCount, "Crime Today", Modifier.weight(1f))
                         }
                     }
                 }
@@ -2239,30 +2268,34 @@ fun HomeScreen(
 
                                 selectedProofUri?.let { uriStr ->
                                     val bitmap = try {
+                                        val opts = BitmapFactory.Options().apply { inPreferredConfig = android.graphics.Bitmap.Config.ARGB_8888 }
                                         if (uriStr.startsWith("file://")) {
                                             val path = Uri.parse(uriStr).path
-                                            if (path != null) BitmapFactory.decodeFile(path) else null
+                                            if (path != null) BitmapFactory.decodeFile(path, opts) else null
                                         } else {
                                             val uri = Uri.parse(uriStr)
                                             context.contentResolver.openInputStream(uri)
-                                                ?.use { stream ->
-                                                    BitmapFactory.decodeStream(stream)
-                                                }
+                                                ?.use { stream -> BitmapFactory.decodeStream(stream, null, opts) }
                                         }
-                                    } catch (_: Exception) {
-                                        null
-                                    }
+                                    } catch (_: Exception) { null }
 
                                     if (bitmap != null) {
                                         Image(
-                                            bitmap = bitmap.asImageBitmap(),
+                                            bitmap             = bitmap.asImageBitmap(),
                                             contentDescription = "Proof image",
-                                            modifier = Modifier.size(64.dp)
+                                            modifier           = Modifier
+                                                .size(96.dp)                          // bigger thumbnail in dialog
+                                                .clip(androidx.compose.foundation.shape.RoundedCornerShape(10.dp))
+                                                .border(1.dp, Color(0xFFE5E5E5),
+                                                    androidx.compose.foundation.shape.RoundedCornerShape(10.dp)),
+                                            contentScale       = ContentScale.Fit,    // no stretching
+                                            filterQuality      = androidx.compose.ui.graphics.FilterQuality.High
                                         )
                                     } else {
                                         Text(
-                                            text = "Selected: ${uriStr.substringAfterLast('/')}",
-                                            fontSize = 12.sp
+                                            text = "Photo captured ✓",
+                                            fontSize = 12.sp,
+                                            color = Color(0xFF2E7D32)
                                         )
                                     }
                                 }

@@ -992,23 +992,21 @@ private fun ChatBubble(
 
     var showReactions by remember(msg.id) { mutableStateOf(false) }
 
-    val reactionCounts = msg.reactions.groupingBy { it.emoji }.eachCount()
-
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 6.dp),
         horizontalAlignment = alignment
     ) {
-        Box(
-            modifier = Modifier
-                .padding(horizontal = 6.dp)
-                .widthIn(max = 300.dp)
-        ) {
-            Column {
+        Box {
+            Column(
+                horizontalAlignment = alignment
+            ) {
                 if (showReactions) {
-                    Card(
-                        shape = RoundedCornerShape(20.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color.White),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+                    Surface(
+                        shape = RoundedCornerShape(18.dp),
+                        color = Color.White,
+                        shadowElevation = 6.dp,
                         modifier = Modifier.padding(bottom = 6.dp)
                     ) {
                         Row(
@@ -1025,31 +1023,6 @@ private fun ChatBubble(
                                         showReactions = false
                                     }
                                 )
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp)
-                                ) {
-                                    Text(
-                                        text = timeLabel,
-                                        fontSize = 10.sp,
-                                        color = Color.Gray
-                                    )
-
-                                    if (isOwn) {
-                                        val statusText = when (msg.status) {
-                                            MessageStatus.SENT -> "✓"
-                                            MessageStatus.DELIVERED -> "✓✓"
-                                            MessageStatus.READ -> "✓✓ Read"
-                                        }
-
-                                        Text(
-                                            text = statusText,
-                                            fontSize = 10.sp,
-                                            color = if (msg.status == MessageStatus.READ) Color(0xFF4C8A89) else Color.Gray
-                                        )
-                                    }
-                                }
                             }
                         }
                     }
@@ -1060,12 +1033,16 @@ private fun ChatBubble(
                     shape = RoundedCornerShape(18.dp),
                     tonalElevation = if (isOwn) 0.dp else 2.dp,
                     shadowElevation = if (isOwn) 0.dp else 2.dp,
-                    modifier = Modifier.combinedClickable(
-                        onClick = {},
-                        onLongClick = {
-                            showReactions = !showReactions
-                        }
-                    )
+                    modifier = Modifier
+                        .widthIn(max = 280.dp)
+                        .combinedClickable(
+                            onClick = {
+                                showReactions = false
+                            },
+                            onLongClick = {
+                                showReactions = !showReactions
+                            }
+                        )
                 ) {
                     Column(
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
@@ -1087,26 +1064,27 @@ private fun ChatBubble(
                         )
                     }
                 }
+            }
+        }
 
-                if (reactionCounts.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(4.dp))
+        if (msg.reactions.isNotEmpty()) {
+            val reactionCounts = msg.reactions.groupingBy { it.emoji }.eachCount()
 
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+            Row(
+                modifier = Modifier.padding(top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                reactionCounts.forEach { (emoji, count) ->
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color(0xFFF1F1F1)
                     ) {
-                        reactionCounts.forEach { (emoji, count) ->
-                            Surface(
-                                shape = RoundedCornerShape(12.dp),
-                                color = Color(0xFFF1F1F1)
-                            ) {
-                                Text(
-                                    text = "$emoji $count",
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                    fontSize = 12.sp,
-                                    color = Color(0xFF333333)
-                                )
-                            }
-                        }
+                        Text(
+                            text = "$emoji $count",
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            fontSize = 12.sp,
+                            color = Color(0xFF333333)
+                        )
                     }
                 }
             }
@@ -1116,7 +1094,7 @@ private fun ChatBubble(
             text = timeLabel,
             fontSize = 10.sp,
             color = Color.Gray,
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp)
+            modifier = Modifier.padding(top = 2.dp, start = 4.dp, end = 4.dp)
         )
     }
 }
