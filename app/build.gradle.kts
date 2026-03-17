@@ -70,6 +70,10 @@ dependencies {
     implementation ("com.squareup.okhttp3:logging-interceptor:4.12.0")
     implementation("com.google.android.gms:play-services-maps:18.2.0")
     implementation("com.google.android.gms:play-services-location:21.3.0")
+    // Retrofit
+    implementation("com.squareup.retrofit2:retrofit:2.9.0")
+// Gson Converter (kadalasan kailangan ito para ma-convert ang JSON)
+    implementation("com.squareup.retrofit2:converter-gson:2.9.0")
     // Retrofit + OkHttp for networking
 
     testImplementation(libs.junit)

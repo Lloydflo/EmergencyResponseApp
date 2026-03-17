@@ -7,6 +7,7 @@ import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 
 object RetrofitProvider {
+
     private const val BASE_URL = "https://emergency-response.alertaraqc.com/"
 
     private val httpLoggingInterceptor: HttpLoggingInterceptor by lazy {
@@ -37,5 +38,13 @@ object RetrofitProvider {
     }
 
     val authApi: AuthApi by lazy { retrofit.create(AuthApi::class.java) }
-    val incidentsApi: IncidentsApi by lazy { retrofit.create(IncidentsApi::class.java) }
+
+    val incidentApi: IncidentApi by lazy {
+        retrofit.create(IncidentApi::class.java)
+    }
+
+    // ✅ ADD HERE (IMPORTANT)
+    fun getToken(): String {
+        return "abc123xyz"
+    }
 }
