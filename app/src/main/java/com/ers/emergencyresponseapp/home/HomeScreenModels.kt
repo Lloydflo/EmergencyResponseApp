@@ -21,6 +21,8 @@ enum class IncidentStatus(val displayName: String) {
     DISPATCHED("Dispatched"),
     ON_ROUTE("On Route"),
     ON_SCENE("On Scene"),
+    PENDING_REVIEW("Pending Review"),
+    SUBMITTED_REVIEW("Submitted Review"),
     RESOLVED("Resolved")
 }
 
@@ -38,5 +40,42 @@ data class Incident(
     val timeReported: Date,
     val status: IncidentStatus,
     val description: String,
-    val assignedTo: String? = null
+    val assignedTo: String? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null
 )
+// network/IncidentDto.kt  (what the API returns)
+// network/IncidentDto.kt
+data class IncidentDto(
+    val id: String,
+    val type: String,
+    val priority: String? = null,
+    val location: String,
+    val status: String,
+    val description: String? = null,
+    val assignedTo: String? = null,
+    val timeReported: String? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null
+)
+
+fun IncidentDto.toDomain(): Incident {
+    return Incident(
+        id          = this.id,
+        type        = IncidentType.entries.firstOrNull {
+            it.name.equals(this.type.trim(), ignoreCase = true)
+        } ?: IncidentType.MEDICAL,
+        priority    = IncidentPriority.entries.firstOrNull {
+            it.name.equals(this.priority?.trim(), ignoreCase = true)
+        } ?: IncidentPriority.MEDIUM,
+        location    = this.location,
+        timeReported = java.util.Date(),
+        status      = IncidentStatus.entries.firstOrNull {
+            it.name.equals(this.status.trim(), ignoreCase = true)
+        } ?: IncidentStatus.REPORTED,
+        description = this.description ?: "",
+        assignedTo  = this.assignedTo,
+        latitude    = this.latitude,
+        longitude   = this.longitude
+    )
+}

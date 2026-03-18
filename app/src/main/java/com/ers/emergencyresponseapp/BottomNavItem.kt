@@ -18,12 +18,12 @@ sealed class BottomNavItem(
     )
     object CoordinationPortal : BottomNavItem(
         route = "coordination_portal",
-        title = "Coordination Portal",
+        title = "Coordination",
         icon = Icons.Default.Groups
     )
     object ReviewsFeedback : BottomNavItem(
         route = "reviews_feedback",
-        title = "Reviews and Feedback",
+        title = "Reviews",
         icon = Icons.Default.RateReview
     )
 }

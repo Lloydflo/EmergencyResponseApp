@@ -12,13 +12,20 @@ android {
     compileSdk = 36
 
     defaultConfig {
+        buildConfigField("String", "BASE_URL", "\"https://emergency-response.alertaraqc.com/\"")
         applicationId = "com.ers.emergencyresponseapp"
         minSdk = 23
-        targetSdk = 36
+        targetSdk = 34
         versionCode = 1
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        buildConfigField(
+            "String",
+            "BASE_URL",
+            "\"https://emergency-response.alertaraqc.com/\""
+        )
     }
 
     buildTypes {
@@ -39,6 +46,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -55,6 +63,19 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("com.google.maps.android:maps-compose:2.11.4")
     implementation("com.google.android.gms:play-services-location:21.0.1")
+    implementation ("com.squareup.retrofit2:retrofit:2.11.0")
+    implementation ("com.squareup.retrofit2:converter-gson:2.11.0")
+    implementation("com.google.android.gms:play-services-location:21.3.0")
+    implementation ("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation ("com.squareup.okhttp3:logging-interceptor:4.12.0")
+    implementation("com.google.android.gms:play-services-maps:18.2.0")
+    implementation("com.google.android.gms:play-services-location:21.3.0")
+    // Retrofit
+    implementation("com.squareup.retrofit2:retrofit:2.9.0")
+// Gson Converter (kadalasan kailangan ito para ma-convert ang JSON)
+    implementation("com.squareup.retrofit2:converter-gson:2.9.0")
+    // Retrofit + OkHttp for networking
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
