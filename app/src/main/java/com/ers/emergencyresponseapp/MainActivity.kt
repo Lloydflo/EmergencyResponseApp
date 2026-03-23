@@ -86,7 +86,7 @@ class MainActivity : ComponentActivity() {
             val homeRoute = if (!dept.isNullOrBlank()) "home/$dept" else "home"
 
 // ✅ start destination
-            val DEV_BYPASS_LOGIN = true // TEMP ONLY
+            val DEV_BYPASS_LOGIN = false
 
             val startDestination = if (DEV_BYPASS_LOGIN) homeRoute
             else if (isLoggedIn) homeRoute else "entry"

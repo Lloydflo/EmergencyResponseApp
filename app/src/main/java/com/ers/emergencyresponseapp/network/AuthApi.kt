@@ -14,22 +14,22 @@ data class AssignedIncidentsResponse(
 )
 
 // adjust fields to match your incidents table columns
-
+    
 interface AuthApi {
 
     @FormUrlEncoded
-    @POST("api/send-otp.php")
+    @POST("api/api_app/send-otp.php")
     suspend fun sendOtp(@Field("email") email: String): SendOtpResponse
 
     @FormUrlEncoded
-    @POST("api/verify-otp.php")
+    @POST("api/api_app/verify-otp.php")
     suspend fun verifyOtp(
         @Field("email") email: String,
         @Field("otp") otp: String
     ): VerifyOtpResponse
 
     @FormUrlEncoded
-    @POST("api/login.php")
+    @POST("api/api_app/login.php")
     suspend fun login(
         @Field("email") email: String
     ): LoginResponse
