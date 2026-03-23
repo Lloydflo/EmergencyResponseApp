@@ -2,6 +2,11 @@ package com.ers.emergencyresponseapp.network  // ✅ must match folder
 
 import retrofit2.Response
 import retrofit2.http.*
+import retrofit2.http.GET
+import retrofit2.http.POST
+import retrofit2.http.Path
+import retrofit2.http.Query
+import retrofit2.http.Header
 
 interface IncidentApi {
 
