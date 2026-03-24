@@ -3,7 +3,9 @@ package com.ers.emergencyresponseapp.network
 data class UserDto(
     val id: Int,
     val name: String? = null,
-    val email: String
+    val email: String,
+    val role: String? = null,
+    val department: String? = null
 )
 
 data class LoginResponse(

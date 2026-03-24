@@ -32,3 +32,14 @@ data class ChatMessage(
     val createdAt: Long,
     val isOwn: Boolean
 )
+
+// Holds the logged-in responder's profile data.
+// Populated from the login API response and stored in SharedPreferences.
+@Immutable
+data class LoggedInUser(
+    val id: Int,
+    val name: String,
+    val email: String,
+    val role: String,
+    val department: String
+)

@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import com.ers.emergencyresponseapp.network.UserDto
 
 data class LoginApiUiState(
     val loading: Boolean = false,
@@ -15,7 +16,8 @@ data class LoginApiUiState(
     val otpSent: Boolean = false,
     val verified: Boolean = false,
     val message: String? = null,
-    val error: String? = null
+    val error: String? = null,
+    val loggedInUser: UserDto? = null   // holds user after successful logi
 )
 
 class LoginApiViewModel : ViewModel() {
@@ -81,7 +83,8 @@ class LoginApiViewModel : ViewModel() {
                     loading = false,
                     verified = success,
                     message = response.message,
-                    error = if (success) null else response.message
+                    error = if (success) null else response.message,
+                    loggedInUser = if (success) response.user else null
                 )
                 if (success) {
                     onSuccess(email)
@@ -114,7 +117,7 @@ class LoginApiViewModel : ViewModel() {
                         otpSent = false,
                         verified = false,
                         message = loginRes.message,
-                        error = loginRes.message
+                        error = loginRes.message   // e.g. "Access denied" from PHP
                     )
                     return@launch
                 }
