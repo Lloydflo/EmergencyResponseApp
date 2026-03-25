@@ -2232,10 +2232,8 @@ fun HomeScreen(
 // Mark Complete dialog
             if (showMarkCompleteDialog && markTargetIncidentInc != null) {
                 val hasProof = selectedProofUri != null
-                val hasTwoWords = proofNotes.trim()
-                    .split(Regex("\\s+"))
-                    .filter { it.isNotBlank() }
-                    .size >= 2
+
+                // Inalis na natin yung hasTwoWords validation dito
 
                 AlertDialog(
                     onDismissRequest = {
@@ -2248,12 +2246,13 @@ fun HomeScreen(
                             modifier = Modifier.fillMaxWidth(),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Text("Provide a short note and take a photo as proof that the incident has been completed.")
+                            // Binago ang text para hindi tunog mandatory
+                            Text("You can provide a short note or take a photo as proof of completion.")
 
                             OutlinedTextField(
                                 value = proofNotes,
                                 onValueChange = { proofNotes = it },
-                                label = { Text("Completion notes") },
+                                label = { Text("Completion notes (Optional)") }, // Nilagyan ng label na Optional
                                 modifier = Modifier.fillMaxWidth()
                             )
 
@@ -2265,7 +2264,6 @@ fun HomeScreen(
                                     val cameraIntent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
                                     takePictureLauncher.launch(cameraIntent)
                                 }) { Text("Take Photo") }
-
                                 selectedProofUri?.let { uriStr ->
                                     val bitmap = try {
                                         val opts = BitmapFactory.Options().apply { inPreferredConfig = android.graphics.Bitmap.Config.ARGB_8888 }
@@ -2278,18 +2276,17 @@ fun HomeScreen(
                                                 ?.use { stream -> BitmapFactory.decodeStream(stream, null, opts) }
                                         }
                                     } catch (_: Exception) { null }
-
                                     if (bitmap != null) {
                                         Image(
-                                            bitmap             = bitmap.asImageBitmap(),
+                                            bitmap = bitmap.asImageBitmap(),
                                             contentDescription = "Proof image",
-                                            modifier           = Modifier
-                                                .size(96.dp)                          // bigger thumbnail in dialog
+                                            modifier = Modifier
+                                                .size(96.dp) // bigger thumbnail in dialog
                                                 .clip(androidx.compose.foundation.shape.RoundedCornerShape(10.dp))
                                                 .border(1.dp, Color(0xFFE5E5E5),
                                                     androidx.compose.foundation.shape.RoundedCornerShape(10.dp)),
-                                            contentScale       = ContentScale.Fit,    // no stretching
-                                            filterQuality      = androidx.compose.ui.graphics.FilterQuality.High
+                                            contentScale = ContentScale.Fit, // no stretching
+                                            filterQuality = androidx.compose.ui.graphics.FilterQuality.High
                                         )
                                     } else {
                                         Text(
@@ -2314,7 +2311,11 @@ fun HomeScreen(
                                     selectedProofUri = null
                                 }
                             },
-                            enabled = hasTwoWords && hasProof
+                            // OPTION A: Enable kahit walang text, basta may proof (photo)
+                            enabled = hasProof
+
+                            // OPTION B: Kung pati photo ay optional din, gamitin ito:
+                            // enabled = true
                         ) { Text("Submit") }
                     },
                     dismissButton = {
