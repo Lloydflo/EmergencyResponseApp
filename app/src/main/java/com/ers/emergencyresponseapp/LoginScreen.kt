@@ -83,10 +83,24 @@ fun LoginScreen(
                     enabled = !uiState.loading,
                     onClick = {
                         viewModel.verifyOtp { email ->
+                            val user = viewModel.uiState.value.loggedInUser
+                            // Save to "auth" prefs (existing)
                             context.getSharedPreferences("auth", Context.MODE_PRIVATE)
                                 .edit()
                                 .putString("email", email)
                                 .putBoolean("user_verified", true)
+                                .apply()
+                            // Save user profile to "ers_prefs" (what HomeScreen reads)
+                            context.getSharedPreferences("ers_prefs", Context.MODE_PRIVATE)
+                                .edit()
+                                .putString("account_full_name", user?.name.orEmpty())
+                                .putString("account_username", user?.name.orEmpty())
+                                .putString("account_email", user?.email.orEmpty())
+                                .apply()
+                            // Save department to "user_prefs" (what effectiveRole reads)
+                            context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
+                                .edit()
+                                .putString("department", user?.department.orEmpty())
                                 .apply()
                             onLoggedIn(email)
                         }
