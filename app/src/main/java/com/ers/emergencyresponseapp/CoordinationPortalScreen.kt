@@ -57,7 +57,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
-import java.util.*
+import java.util.*import androidx.compose.foundation.ExperimentalFoundationApi
 
 // ─── Screen-size tier ────────────────────────────────────────────────────────
 private enum class ScreenSize { SMALL, MEDIUM, LARGE }
@@ -76,6 +76,7 @@ private fun roleInitials(name: String): String =
 // ─────────────────────────────────────────────────────────────────────────────
 //  MAIN SCREEN
 // ─────────────────────────────────────────────────────────────────────────────
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CoordinationPortalScreen(

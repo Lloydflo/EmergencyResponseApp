@@ -2,6 +2,7 @@ package com.ers.emergencyresponseapp.home
 
 import androidx.compose.ui.graphics.Color
 import java.util.Date
+import androidx.compose.runtime.Immutable
 
 enum class IncidentType(val displayName: String) {
     FIRE("Fire"),
@@ -32,6 +33,7 @@ enum class ResponderStatus(val displayName: String, val color: Color) {
     BUSY("Busy", Color(0xFFD32F2F))
 }
 
+@Immutable
 data class Incident(
     val id: String,
     val type: IncidentType,
