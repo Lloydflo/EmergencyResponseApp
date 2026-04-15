@@ -2,6 +2,7 @@ package com.ers.emergencyresponseapp
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.ers.emergencyresponseapp.firebase.repository.FirebaseChatRepository  // ← NEW
 import com.ers.emergencyresponseapp.network.RetrofitProvider
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -17,26 +18,28 @@ data class LoginApiUiState(
     val verified: Boolean = false,
     val message: String? = null,
     val error: String? = null,
-    val loggedInUser: UserDto? = null   // holds user after successful logi
+    val loggedInUser: UserDto? = null
 )
 
 class LoginApiViewModel : ViewModel() {
+
     private val _uiState = MutableStateFlow(LoginApiUiState())
     val uiState: StateFlow<LoginApiUiState> = _uiState.asStateFlow()
 
-    fun onEmailChanged(value: String) {
-        val clean = value
-            .trim()
-            .replace("'", "")   // remove apostrophes
+    // ── Firebase repository instance ──────────────────────────────────────────
+    // We create it once here so we can reuse it in any function
+    private val firebaseChatRepo = FirebaseChatRepository()   // ← NEW
 
-        _uiState.value = _uiState.value.copy(
-            email = clean,
-            error = null
-        )
+    fun onEmailChanged(value: String) {
+        val clean = value.trim().replace("'", "")
+        _uiState.value = _uiState.value.copy(email = clean, error = null)
     }
 
     fun onOtpChanged(value: String) {
-        _uiState.value = _uiState.value.copy(otp = value.filter(Char::isDigit).take(6), error = null)
+        _uiState.value = _uiState.value.copy(
+            otp   = value.filter(Char::isDigit).take(6),
+            error = null
+        )
     }
 
     fun sendOtp() {
@@ -51,16 +54,16 @@ class LoginApiViewModel : ViewModel() {
             try {
                 val response = RetrofitProvider.authApi.sendOtp(email)
                 _uiState.value = _uiState.value.copy(
-                    loading = false,
-                    email = email,
-                    otpSent = response.success,
-                    message = response.message,
-                    error = if (response.success) null else response.message
+                    loading  = false,
+                    email    = email,
+                    otpSent  = response.success,
+                    message  = response.message,
+                    error    = if (response.success) null else response.message
                 )
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     loading = false,
-                    error = e.message ?: "Failed to send OTP"
+                    error   = e.message ?: "Failed to send OTP"
                 )
             }
         }
@@ -68,7 +71,8 @@ class LoginApiViewModel : ViewModel() {
 
     fun verifyOtp(onSuccess: (String) -> Unit) {
         val email = _uiState.value.email.trim()
-        val otp = _uiState.value.otp.trim()
+        val otp   = _uiState.value.otp.trim()
+
         if (email.isBlank() || otp.length != 6) {
             _uiState.value = _uiState.value.copy(error = "Enter a valid email and 6-digit OTP")
             return
@@ -78,29 +82,51 @@ class LoginApiViewModel : ViewModel() {
             _uiState.value = _uiState.value.copy(loading = true, message = null, error = null)
             try {
                 val response = RetrofitProvider.authApi.verifyOtp(email, otp)
-                val success = response.success
+                val success  = response.success
+
                 _uiState.value = _uiState.value.copy(
-                    loading = false,
-                    verified = success,
-                    message = response.message,
-                    error = if (success) null else response.message,
+                    loading      = false,
+                    verified     = success,
+                    message      = response.message,
+                    error        = if (success) null else response.message,
                     loggedInUser = if (success) response.user else null
                 )
+
                 if (success) {
-                    onSuccess(email)
+                    // ── ✅ LOGIN SUCCEEDED — save user to Firebase ─────────────
+                    // response.user is your UserDto from MySQL.
+                    // We push the user's info to Firebase so chat partners
+                    // can see their name, department, and online status.
+                    val user = response.user
+                    if (user != null) {
+                        firebaseChatRepo.saveUserToFirebase(
+                            userId     = user.id.toString(),        // MySQL user ID
+                            fullName   = user.name ?: "",           // UserDto uses "name" not "fullName"
+                            email      = user.email,                // String (non-nullable in UserDto)
+                            department = user.department ?: ""      // e.g. "Fire", "Medical", "Police"
+                        )
+                        // Mark this user as Online in Firebase
+                        firebaseChatRepo.setOnlineStatus(
+                            userId   = user.id.toString(),
+                            isOnline = true
+                        )
+                    }
+                    // ── end of Firebase code ───────────────────────────────────
+
+                    onSuccess(email)   // your existing navigation call — unchanged
                 }
+
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     loading = false,
-                    error = e.message ?: "OTP verification failed"
+                    error   = e.message ?: "OTP verification failed"
                 )
             }
         }
     }
+
     fun loginThenSendOtp() {
-        val email = _uiState.value.email
-            .trim()
-            .replace("'", "")   // remove any apostrophes
+        val email = _uiState.value.email.trim().replace("'", "")
         if (email.isBlank()) {
             _uiState.value = _uiState.value.copy(error = "Email is required")
             return
@@ -113,11 +139,11 @@ class LoginApiViewModel : ViewModel() {
                 val loginRes = RetrofitProvider.authApi.login(email)
                 if (!loginRes.success) {
                     _uiState.value = _uiState.value.copy(
-                        loading = false,
-                        otpSent = false,
+                        loading  = false,
+                        otpSent  = false,
                         verified = false,
-                        message = loginRes.message,
-                        error = loginRes.message   // e.g. "Access denied" from PHP
+                        message  = loginRes.message,
+                        error    = loginRes.message
                     )
                     return@launch
                 }
@@ -126,21 +152,26 @@ class LoginApiViewModel : ViewModel() {
                 val otpRes = RetrofitProvider.authApi.sendOtp(email)
                 _uiState.value = _uiState.value.copy(
                     loading = false,
-                    email = email,
+                    email   = email,
                     otpSent = otpRes.success,
                     message = otpRes.message,
-                    error = if (otpRes.success) null else otpRes.message
+                    error   = if (otpRes.success) null else otpRes.message
                 )
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     loading = false,
-                    error = e.message ?: "Network error"
+                    error   = e.message ?: "Network error"
                 )
             }
         }
     }
 
     fun backToEmailStep() {
-        _uiState.value = _uiState.value.copy(otpSent = false, otp = "", error = null, message = null)
+        _uiState.value = _uiState.value.copy(
+            otpSent = false,
+            otp     = "",
+            error   = null,
+            message = null
+        )
     }
 }

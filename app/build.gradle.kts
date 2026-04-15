@@ -1,5 +1,5 @@
 plugins {
-    id("com.google.gms.google-services") version "4.4.4" apply false
+    id("com.google.gms.google-services")   // ADD THIS LINE
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
@@ -70,11 +70,20 @@ dependencies {
     implementation ("com.squareup.okhttp3:logging-interceptor:4.12.0")
     implementation("com.google.android.gms:play-services-maps:18.2.0")
     implementation("com.google.android.gms:play-services-location:21.3.0")
-    // Retrofit
-    implementation("com.squareup.retrofit2:retrofit:2.9.0")
-// Gson Converter (kadalasan kailangan ito para ma-convert ang JSON)
-    implementation("com.squareup.retrofit2:converter-gson:2.9.0")
     // Retrofit + OkHttp for networking
+    // Firebase BOM — manages all Firebase versions automatically
+    implementation(platform("com.google.firebase:firebase-bom:33.1.0"))
+
+    // Realtime Database
+    implementation("com.google.firebase:firebase-database-ktx")
+
+    // Coroutines for Kotlin (you likely already have this)
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")
+
+    // ViewModel + Compose (you likely already have these)
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.3")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.3")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
@@ -83,5 +92,4 @@ dependencies {
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
-    implementation(platform("com.google.firebase:firebase-bom:34.7.0"))
 }

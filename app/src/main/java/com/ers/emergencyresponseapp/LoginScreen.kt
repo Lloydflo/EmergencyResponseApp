@@ -27,17 +27,15 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 
 @Composable
 fun LoginScreen(
-    modifier: Modifier = Modifier,
+    modifier  : Modifier = Modifier,
     onLoggedIn: (email: String) -> Unit,
-    viewModel: LoginApiViewModel = viewModel()
+    viewModel : LoginApiViewModel = viewModel()
 ) {
-    val context = LocalContext.current
+    val context  = LocalContext.current
     val uiState by viewModel.uiState.collectAsState()
 
     Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp),
+        modifier            = modifier.fillMaxSize().padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
@@ -45,100 +43,95 @@ fun LoginScreen(
         Spacer(modifier = Modifier.height(12.dp))
 
         OutlinedTextField(
-            value = uiState.email,
+            value         = uiState.email,
             onValueChange = viewModel::onEmailChanged,
-            label = { Text("Email") },
+            label         = { Text("Email") },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-            modifier = Modifier.fillMaxWidth(0.9f),
-            enabled = !uiState.otpSent && !uiState.loading
+            modifier      = Modifier.fillMaxWidth(0.9f),
+            enabled       = !uiState.otpSent && !uiState.loading
         )
 
         Spacer(modifier = Modifier.height(12.dp))
 
         if (!uiState.otpSent) {
             Button(
-                enabled = !uiState.loading,
-                onClick = viewModel::sendOtp,
+                enabled  = !uiState.loading,
+                onClick  = viewModel::sendOtp,
                 modifier = Modifier.fillMaxWidth(0.9f)
-            ) {
-                Text("Send OTP")
-            }
+            ) { Text("Send OTP") }
+
         } else {
             OutlinedTextField(
-                value = uiState.otp,
+                value         = uiState.otp,
                 onValueChange = viewModel::onOtpChanged,
-                label = { Text("6-digit OTP") },
+                label         = { Text("6-digit OTP") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.fillMaxWidth(0.9f),
-                enabled = !uiState.loading
+                modifier      = Modifier.fillMaxWidth(0.9f),
+                enabled       = !uiState.loading
             )
 
             Spacer(modifier = Modifier.height(12.dp))
 
             Row(
-                modifier = Modifier.fillMaxWidth(0.9f),
+                modifier              = Modifier.fillMaxWidth(0.9f),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Button(
-                    enabled = !uiState.loading,
-                    onClick = {
+                    enabled  = !uiState.loading,
+                    modifier = Modifier.weight(1f),
+                    onClick  = {
                         viewModel.verifyOtp { email ->
                             val user = viewModel.uiState.value.loggedInUser
-                            // Save to "auth" prefs (existing)
+
+                            // ── Save to "auth" prefs ──────────────────────────
                             context.getSharedPreferences("auth", Context.MODE_PRIVATE)
                                 .edit()
                                 .putString("email", email)
                                 .putBoolean("user_verified", true)
                                 .apply()
-                            // Save user profile to "ers_prefs" (what HomeScreen reads)
+
+                            // ── Save profile to "ers_prefs" (HomeScreen reads) ─
                             context.getSharedPreferences("ers_prefs", Context.MODE_PRIVATE)
                                 .edit()
                                 .putString("account_full_name", user?.name.orEmpty())
-                                .putString("account_username", user?.name.orEmpty())
-                                .putString("account_email", user?.email.orEmpty())
+                                .putString("account_username",  user?.name.orEmpty())
+                                .putString("account_email",     user?.email.orEmpty())
                                 .apply()
-                            // Save department to "user_prefs" (what effectiveRole reads)
+
+                            // ── Save user identity to "user_prefs" ────────────
+                            // FIX: user_id and full_name were missing — Firebase
+                            // was receiving "current_user" and "Responder" for
+                            // every account, so no real users appeared in the list.
                             context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
                                 .edit()
+                                .putString("user_id",    user?.id?.toString().orEmpty())
+                                .putString("full_name",  user?.name.orEmpty())
                                 .putString("department", user?.department.orEmpty())
                                 .apply()
+
                             onLoggedIn(email)
                         }
-                    },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Verify OTP")
-                }
+                    }
+                ) { Text("Verify OTP") }
 
                 Button(
-                    enabled = !uiState.loading,
-                    onClick = viewModel::sendOtp,
+                    enabled  = !uiState.loading,
+                    onClick  = viewModel::sendOtp,
                     modifier = Modifier.weight(1f)
-                ) {
-                    Text("Resend")
-                }
+                ) { Text("Resend") }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
             Button(
-                enabled = !uiState.loading,
-                onClick = viewModel::backToEmailStep,
+                enabled  = !uiState.loading,
+                onClick  = viewModel::backToEmailStep,
                 modifier = Modifier.fillMaxWidth(0.9f)
-            ) {
-                Text("Back")
-            }
+            ) { Text("Back") }
         }
 
         Spacer(modifier = Modifier.height(12.dp))
-        if (uiState.loading) {
-            CircularProgressIndicator()
-        }
-
-        uiState.message?.let {
-            Text(text = it)
-        }
-        uiState.error?.let {
-            Text(text = it, color = Color.Red)
-        }
+        if (uiState.loading) CircularProgressIndicator()
+        uiState.message?.let { Text(text = it) }
+        uiState.error?.let   { Text(text = it, color = Color.Red) }
     }
 }

@@ -543,6 +543,12 @@ fun HomeScreen(
     val storedPrefs      = context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
     val storedDepartment = storedPrefs.getString("department", null)
     val effectiveRole    = storedDepartment?.lowercase() ?: responderRole?.takeIf { it.isNotBlank() }
+    val departmentFilter: IncidentType? = when (effectiveRole?.trim()?.lowercase()) {
+        "fire"    -> IncidentType.FIRE
+        "medical" -> IncidentType.MEDICAL
+        "crime"   -> IncidentType.CRIME
+        else      -> null
+    }
 
     val prefs                        = context.getSharedPreferences("ers_prefs", Context.MODE_PRIVATE)
     val locationMonitoringEnabledKey = "location_monitoring_enabled"
@@ -622,8 +628,13 @@ fun HomeScreen(
 
     fun loadIncidents()          { incidentsList = IncidentStore.incidents.toList() }
     fun filterActive(l: List<Incident>): List<Incident> {
-        val cap = 60L * 60L * 1000L; val now = System.currentTimeMillis()
-        return l.filter { it.status != IncidentStatus.RESOLVED && (now - it.timeReported.time) <= cap }
+        val cap = 60L * 60L * 1000L
+        val now = System.currentTimeMillis()
+        return l.filter { inc ->
+            inc.status != IncidentStatus.RESOLVED &&
+                    (now - inc.timeReported.time) <= cap &&
+                    (departmentFilter == null || inc.type == departmentFilter)  // ← department filter
+        }
     }
     fun refreshActiveIncidents() { activeIncidents = filterActive(incidentsList) }
 
@@ -867,13 +878,24 @@ fun HomeScreen(
             val crimeCount   by remember { derivedStateOf { activeIncidents.count { it.type == IncidentType.CRIME } } }
 
             val assignedCandidateForRole = run {
-                val desiredType: IncidentType? = effectiveRole?.trim()?.lowercase()?.let { when (it) { "fire" -> IncidentType.FIRE; "medical" -> IncidentType.MEDICAL; "crime" -> IncidentType.CRIME; else -> null } }
                 val source = IncidentStore.incidents
-                val saved  = lastAssignedIncidentId?.let { id -> source.firstOrNull { it.id == id && it.status != IncidentStatus.RESOLVED } }
-                if (saved != null && (desiredType?.let { saved.type == it } ?: true)) return@run listOf(saved)
+
+                // 1. Try to restore the previously assigned incident for this session
+                val saved = lastAssignedIncidentId?.let { id ->
+                    source.firstOrNull { inc ->
+                        inc.id == id &&
+                                inc.status != IncidentStatus.RESOLVED &&
+                                (departmentFilter == null || inc.type == departmentFilter)  // ← respect dept
+                    }
+                }
+                if (saved != null) return@run listOf(saved)
+
+                // 2. Find incidents already assigned to this responder that match their dept
                 source.filter { inc ->
-                    (desiredType?.let { inc.type == it } ?: true) && inc.status != IncidentStatus.RESOLVED && inc.assignedTo == responderName
-                }.sortedWith(incidentPriorityComparator).take(1)  // FIX 4: use stable top-level comparator
+                    inc.assignedTo == responderName &&
+                            inc.status != IncidentStatus.RESOLVED &&
+                            (departmentFilter == null || inc.type == departmentFilter)  // ← dept filter
+                }.sortedWith(incidentPriorityComparator).take(1)
             }
 
             val assignedListForRole = if (showAssignedAfterNotification) assignedCandidateForRole else emptyList()
