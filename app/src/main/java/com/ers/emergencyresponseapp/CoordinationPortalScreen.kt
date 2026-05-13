@@ -35,12 +35,14 @@ import com.ers.emergencyresponseapp.coordination.model.ChatMessage
 import com.ers.emergencyresponseapp.coordination.model.MessageStatus
 import com.ers.emergencyresponseapp.coordination.model.MessageType
 import com.ers.emergencyresponseapp.coordination.model.viewmodel.CoordinationViewModel
+import com.ers.emergencyresponseapp.firebase.model.ResponderProfile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
+
 
 private val BrandGreen    = Color(0xFF00C07F)
 private val BgPage        = Color(0xFFF2F4F7)
@@ -295,6 +297,102 @@ private fun DepartmentRow(dept: DepartmentInfo, onClick: () -> Unit) {
         }
     }
     HorizontalDivider(modifier = Modifier.padding(start = 80.dp), color = DividerColor, thickness = 0.5.dp)
+}
+
+@Composable
+fun ResponderCard(responder: ResponderProfile) {
+    val isOnline = responder.isOnline
+
+    // Format lastSeen timestamp
+    val lastSeenText = remember(responder.lastSeen) {
+        if (responder.lastSeen > 0L) {
+            val sdf = java.text.SimpleDateFormat("MMM dd, hh:mm a", java.util.Locale.getDefault())
+            "Last seen: " + sdf.format(java.util.Date(responder.lastSeen))
+        } else "Last seen: Unknown"
+    }
+
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1A2D42)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Initials avatar (no photo URL in DB yet)
+            Box(contentAlignment = Alignment.BottomEnd) {
+                Box(
+                    modifier = Modifier
+                        .size(56.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF4FC3F7)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = responder.fullName
+                            .split(" ")
+                            .mapNotNull { it.firstOrNull()?.toString() }
+                            .take(2)
+                            .joinToString(""),
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp
+                    )
+                }
+
+                // Online/offline dot
+                Box(
+                    modifier = Modifier
+                        .size(14.dp)
+                        .clip(CircleShape)
+                        .background(if (isOnline) Color(0xFF4CAF50) else Color(0xFF9E9E9E))
+                )
+            }
+
+            Spacer(modifier = Modifier.width(14.dp))
+
+            // Info
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = responder.fullName.ifBlank { "Unknown" },
+                    color = Color.White,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 16.sp
+                )
+                Text(
+                    text = responder.department.replaceFirstChar { it.uppercase() },
+                    color = Color(0xFF4FC3F7),
+                    fontSize = 13.sp
+                )
+                Text(
+                    text = responder.email,
+                    color = Color(0xFF78909C),
+                    fontSize = 11.sp
+                )
+                if (!isOnline) {
+                    Text(
+                        text = lastSeenText,
+                        color = Color(0xFF546E7A),
+                        fontSize = 10.sp
+                    )
+                }
+            }
+
+            // Status badge
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = if (isOnline) Color(0xFF1B5E20) else Color(0xFF424242)
+            ) {
+                Text(
+                    text = if (isOnline) "Online" else "Offline",
+                    color = if (isOnline) Color(0xFF81C784) else Color(0xFFBDBDBD),
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                )
+            }
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

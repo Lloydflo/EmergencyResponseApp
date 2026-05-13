@@ -98,18 +98,24 @@ class LoginApiViewModel : ViewModel() {
                     // We push the user's info to Firebase so chat partners
                     // can see their name, department, and online status.
                     val user = response.user
+                    android.util.Log.d("LOGIN_DEBUG",
+                        "id=${user?.id} name=${user?.name} role=${user?.role} department=${user?.department}")
                     if (user != null) {
+                        viewModelScope.launch {
                         firebaseChatRepo.saveUserToFirebase(
                             userId     = user.id.toString(),        // MySQL user ID
                             fullName   = user.name ?: "",           // UserDto uses "name" not "fullName"
                             email      = user.email,                // String (non-nullable in UserDto)
-                            department = user.department ?: ""      // e.g. "Fire", "Medical", "Police"
+                            department = user.department?.takeIf { it.isNotBlank() }
+                                ?: user.role?.takeIf { it.isNotBlank() }
+                                ?: ""     // e.g. "Fire", "Medical", "Police"
                         )
                         // Mark this user as Online in Firebase
                         firebaseChatRepo.setOnlineStatus(
                             userId   = user.id.toString(),
                             isOnline = true
                         )
+                        }
                     }
                     // ── end of Firebase code ───────────────────────────────────
 

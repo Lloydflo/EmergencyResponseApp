@@ -73,6 +73,12 @@ dependencies {
     // Retrofit + OkHttp for networking
     // Firebase BOM — manages all Firebase versions automatically
     implementation(platform("com.google.firebase:firebase-bom:33.1.0"))
+    // Para sa Kotlin Coroutines at Flow
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3")
+
+// Para sa Firebase Realtime Database
+    implementation("com.google.firebase:firebase-database-ktx:21.0.0")
 
     // Realtime Database
     implementation("com.google.firebase:firebase-database-ktx")

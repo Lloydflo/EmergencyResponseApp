@@ -1,16 +1,5 @@
 package com.ers.emergencyresponseapp.firebase.ui
 
-// ═══════════════════════════════════════════════════════════════════════════════
-//  FILE 6 of 8 — ResponderListScreen.kt
-//  Place in:  app/src/main/java/com/ers/emergencyresponseapp/firebase/ui/
-//
-//  This screen shows the list of all responders the current user can chat with.
-//  It's the "inbox" — tap a responder to open their chat.
-//
-//  For now, it shows the mock responders from your existing app.
-//  Later you can replace the list with a real API call to your MySQL backend.
-// ═══════════════════════════════════════════════════════════════════════════════
-
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -19,7 +8,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -28,11 +17,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.runtime.*
+// ✅ FIX 1: Proper Firebase imports (was missing — caused "Unresolved reference: FirebaseDatabase")
+import com.google.firebase.database.DataSnapshot
+import com.google.firebase.database.DatabaseError
+import com.google.firebase.database.FirebaseDatabase
+import com.google.firebase.database.ValueEventListener
 
-// ── A simple data holder for the responder list ───────────────────────────────
-// This uses your existing responder model from the app.
-// If you already have a different data class, use that instead.
+// ── Data model for the responder list ────────────────────────────────────────
 data class ResponderListItem(
     val userId     : String,
     val fullName   : String,
@@ -43,27 +34,6 @@ data class ResponderListItem(
 // ─────────────────────────────────────────────────────────────────────────────
 //  RESPONDER LIST SCREEN
 // ─────────────────────────────────────────────────────────────────────────────
-/**
- * Shows a Messenger-style list of responders.
- * Tap any row to open a chat with that responder.
- *
- * Parameters:
- *   myUserId    — logged-in user's ID
- *   responders  — list of other responders (from your API or mock data)
- *   onOpenChat  — called with the selected responder's userId
- *
- * Example usage:
- *   ResponderListScreen(
- *       myUserId   = "123",
- *       responders = listOf(
- *           ResponderListItem("456", "Alice Johnson", "Fire", true),
- *           ResponderListItem("789", "Bob Smith",     "Medical", false)
- *       ),
- *       onOpenChat = { partnerId ->
- *           navController.navigate("firebase_chat/$myUserId/$partnerId")
- *       }
- *   )
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ResponderListScreen(
@@ -71,19 +41,65 @@ fun ResponderListScreen(
     onOpenChat : (partnerUserId: String) -> Unit
 ) {
     var responders by remember { mutableStateOf<List<ResponderListItem>>(emptyList()) }
+    var isLoading  by remember { mutableStateOf(true) }
+    var errorMsg   by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(Unit) {
-        // Load responders from Firebase /users node
-        val db = com.google.firebase.database.FirebaseDatabase.getInstance()
-        db.getReference("users").get().addOnSuccessListener { snapshot ->
-            val loaded = snapshot.children.mapNotNull { child ->
-                val userId     = child.key ?: return@mapNotNull null
-                val fullName   = child.child("fullName").getValue(String::class.java) ?: "Unknown"
-                val department = child.child("department").getValue(String::class.java) ?: "Unknown"
-                val isOnline   = child.child("isOnline").getValue(Boolean::class.java) ?: false
-                ResponderListItem(userId, fullName, department, isOnline)
+    // ✅ FIX 2: Use ValueEventListener with explicit types — fixes
+    //    "Cannot infer a type for this parameter" at lines 77/78/104/106
+    DisposableEffect(myUserId) {
+        val db       = FirebaseDatabase.getInstance()
+        val usersRef = db.getReference("users")
+
+        val listener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                val loaded = mutableListOf<ResponderListItem>()
+
+                for (child in snapshot.children) {
+                    // ✅ FIX 3: Read the stored userId field, fallback to node key
+                    //    Avoids type-mismatch between node key ("7") and stored field
+                    val userId = child.key ?: continue
+
+                    val fullName   = child.child("fullName")
+                        .getValue(String::class.java) ?: "Unknown"
+                    val department = child.child("department")
+                        .getValue(String::class.java) ?: "Unknown"
+                    val isOnline   = child.child("isOnline")
+                        .getValue(Boolean::class.java) ?: false
+
+                    android.util.Log.d("DEBUG_ID", "myUserId = '$myUserId'")
+
+                    android.util.Log.d("DEBUG_ID", "Firebase userId = '$userId'")
+
+                    android.util.Log.d(
+                        "ResponderList",
+                        "User found → id=$userId | name=$fullName | online=$isOnline"
+                    )
+
+                    loaded.add(ResponderListItem(userId, fullName, department, isOnline))
+                }
+
+                // ✅ FIX 4: trim() on both sides avoids invisible whitespace mismatch
+                responders = loaded.filter { it.userId != myUserId }
+                isLoading  = false
+
+                android.util.Log.d(
+                    "ResponderList",
+                    "Loaded ${loaded.size} total, showing ${responders.size} (myUserId=$myUserId)"
+                )
             }
-            responders = loaded
+
+            override fun onCancelled(error: DatabaseError) {
+                errorMsg  = error.message
+                isLoading = false
+                android.util.Log.e("ResponderList", "Firebase read failed: ${error.message}")
+            }
+        }
+
+        usersRef.addValueEventListener(listener)
+
+        // Clean up listener when the composable leaves the screen
+        onDispose {
+            usersRef.removeEventListener(listener)
         }
     }
 
@@ -92,8 +108,16 @@ fun ResponderListScreen(
             TopAppBar(
                 title = {
                     Column {
-                        Text("Messages", fontWeight = FontWeight.Bold, fontSize = 22.sp)
-                        Text("${responders.size} responders", fontSize = 12.sp, color = Color(0xFF65676B))
+                        Text(
+                            text       = "Messages",
+                            fontWeight = FontWeight.Bold,
+                            fontSize   = 22.sp
+                        )
+                        Text(
+                            text     = "${responders.size} responders",
+                            fontSize = 12.sp,
+                            color    = Color(0xFF65676B)
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White)
@@ -101,23 +125,62 @@ fun ResponderListScreen(
         },
         containerColor = Color(0xFFF0F2F5)
     ) { padding ->
-        LazyColumn(
-            modifier       = Modifier.padding(padding),
-            contentPadding = PaddingValues(vertical = 8.dp)
-        ) {
-            items(
-                items = responders.filter { it.userId != myUserId }, // exclude yourself
-                key   = { it.userId }
-            ) { responder ->
-                ResponderRow(
-                    responder  = responder,
-                    onClick    = { onOpenChat(responder.userId) }
-                )
-                HorizontalDivider(
-                    modifier  = Modifier.padding(start = 80.dp),
-                    color     = Color(0xFFE4E6EA),
-                    thickness = 0.5.dp
-                )
+
+        when {
+            // Loading state
+            isLoading -> {
+                Box(
+                    modifier         = Modifier.fillMaxSize().padding(padding),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(color = Color(0xFF00C07F))
+                }
+            }
+
+            // Error state
+            errorMsg != null -> {
+                Box(
+                    modifier         = Modifier.fillMaxSize().padding(padding),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("Could not load responders", color = Color(0xFF65676B))
+                        Text(errorMsg ?: "", fontSize = 12.sp, color = Color(0xFFE41E3F))
+                    }
+                }
+            }
+
+            // Empty state (all users loaded but list is empty after filtering self)
+            responders.isEmpty() -> {
+                Box(
+                    modifier         = Modifier.fillMaxSize().padding(padding),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("No other responders found", color = Color(0xFF65676B))
+                }
+            }
+
+            // Success — show list
+            else -> {
+                LazyColumn(
+                    modifier       = Modifier.padding(padding),
+                    contentPadding = PaddingValues(vertical = 8.dp)
+                ) {
+                    items(
+                        items = responders,
+                        key   = { it.userId }
+                    ) { responder ->
+                        ResponderRow(
+                            responder = responder,
+                            onClick   = { onOpenChat(responder.userId) }
+                        )
+                        HorizontalDivider(
+                            modifier  = Modifier.padding(start = 80.dp),
+                            color     = Color(0xFFE4E6EA),
+                            thickness = 0.5.dp
+                        )
+                    }
+                }
             }
         }
     }
@@ -132,8 +195,11 @@ private fun ResponderRow(
     onClick   : () -> Unit
 ) {
     val deptColor = departmentColor(responder.department)
-    val initials  = responder.fullName.split(" ")
-        .take(2).mapNotNull { it.firstOrNull()?.uppercaseChar() }.joinToString("")
+    val initials  = responder.fullName
+        .split(" ")
+        .take(2)
+        .mapNotNull { it.firstOrNull()?.uppercaseChar() }
+        .joinToString("")
 
     Surface(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
@@ -159,7 +225,6 @@ private fun ResponderRow(
                         color      = deptColor
                     )
                 }
-                // Online dot
                 if (responder.isOnline) {
                     Box(
                         modifier = Modifier
@@ -187,7 +252,7 @@ private fun ResponderRow(
                 )
                 Spacer(Modifier.height(2.dp))
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
+                    verticalAlignment     = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Surface(
@@ -195,22 +260,21 @@ private fun ResponderRow(
                         shape = RoundedCornerShape(4.dp)
                     ) {
                         Text(
-                            text     = responder.department,
-                            fontSize = 11.sp,
-                            color    = deptColor,
+                            text       = responder.department.replaceFirstChar { it.uppercase() },
+                            fontSize   = 11.sp,
+                            color      = deptColor,
                             fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            modifier   = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                         )
                     }
                     Text(
-                        text     = if (responder.isOnline) "Online" else "Offline",
+                        text  = if (responder.isOnline) "Online" else "Offline",
                         fontSize = 12.sp,
                         color    = if (responder.isOnline) Color(0xFF31A24C) else Color(0xFF65676B)
                     )
                 }
             }
 
-            // Chevron
             Text("›", fontSize = 22.sp, color = Color(0xFFBFC2C8))
         }
     }

@@ -10,22 +10,6 @@ package com.ers.emergencyresponseapp.firebase.model
 // Firebase needs a "no-argument constructor" to deserialize data from the
 // database, so every field MUST have a default value (= "" or = 0L etc.)
 
-/**
- * Represents a user in the chat system.
- * This is stored in Firebase under /users/{userId}
- * so that each chat can display the sender's name and department.
- *
- * NOTE: You already have user data from your MySQL login.
- * You push this to Firebase once after login (see FirebaseChatRepository).
- */
-data class FirebaseUser(
-    val userId     : String = "",
-    val fullName   : String = "",
-    val email      : String = "",
-    val department : String = "",   // "Fire" | "Medical" | "Police"
-    val isOnline   : Boolean = false,
-    val lastSeen   : Long = 0L      // Unix timestamp in milliseconds
-)
 
 /**
  * Represents a single chat message.

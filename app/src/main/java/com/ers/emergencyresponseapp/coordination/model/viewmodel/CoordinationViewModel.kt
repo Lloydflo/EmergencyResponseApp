@@ -62,13 +62,6 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
         viewModelScope.launch {
             try {
-                // Save/update this user's profile in Firebase
-                firebaseRepo.saveUserToFirebase(
-                    userId     = userId,
-                    fullName   = userName,
-                    email      = "",
-                    department = userRole
-                )
                 // Mark online
                 firebaseRepo.setOnlineStatus(userId, isOnline = true)
             } catch (e: Exception) {
@@ -77,7 +70,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         }
 
         // Load the real list of responders from Firebase /users
-        loadRespondersFromFirebase(userId)
+        loadRespondersFromFirebase()
 
         // Load static department list (departments are role-based, not user accounts)
         if (departments.isEmpty()) {
@@ -92,7 +85,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
     // ─────────────────────────────────────────────────────────────────────────
     //  LOAD REAL RESPONDERS FROM FIREBASE /users
     // ─────────────────────────────────────────────────────────────────────────
-    private fun loadRespondersFromFirebase(myId: String) {
+    private fun loadRespondersFromFirebase() {
         // Remove old listener if any
         respondersListener?.let { db.child("users").removeEventListener(it) }
 
@@ -100,13 +93,14 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
             override fun onDataChange(snapshot: DataSnapshot) {
                 val loaded = mutableListOf<ResponderBrief>()
                 for (child in snapshot.children) {
-                    val uid        = child.child("userId").getValue(String::class.java) ?: child.key ?: continue
+                    val uid = child.key ?: return
                     val fullName   = child.child("fullName").getValue(String::class.java) ?: "Unknown"
                     val department = child.child("department").getValue(String::class.java) ?: "general"
                     val isOnline   = child.child("isOnline").getValue(Boolean::class.java) ?: false
 
+
                     // Skip the current user — you don't chat with yourself
-                    if (uid == myId) continue
+                    if (uid == myUserId) continue
 
                     // Find existing entry to preserve unread count / last message
                     val existing = responders.firstOrNull { it.id == uid }
@@ -197,20 +191,22 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
     //  FIREBASE REAL-TIME MESSAGE LISTENER
     // ─────────────────────────────────────────────────────────────────────────
     private fun listenToMessages(threadId: String) {
-        // Remove any existing listener first
         stopListeningToMessages()
 
         messagesListenerPath = "messages/$threadId"
 
         messagesListener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
+
                 val loaded = mutableListOf<ChatMessage>()
+
                 for (child in snapshot.children) {
-                    val senderId   = child.child("senderId").getValue(String::class.java)   ?: continue
+
+                    val senderId   = child.child("senderId").getValue(String::class.java) ?: continue
                     val senderName = child.child("senderName").getValue(String::class.java) ?: "Unknown"
-                    val text       = child.child("text").getValue(String::class.java)       ?: ""
-                    val role       = child.child("role").getValue(String::class.java)       ?: ""
-                    val createdAt  = child.child("createdAt").getValue(Long::class.java)    ?: 0L
+                    val text       = child.child("text").getValue(String::class.java) ?: ""
+                    val role       = child.child("role").getValue(String::class.java) ?: ""
+                    val createdAt  = child.child("createdAt").getValue(Long::class.java) ?: 0L
                     val msgId      = child.key ?: UUID.randomUUID().toString()
 
                     loaded.add(
@@ -224,11 +220,11 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                             text       = text,
                             createdAt  = createdAt,
                             status     = MessageStatus.READ,
-                            // FIX: isOwn based on actual userId, NOT hardcoded "You"
                             isOwn      = senderId == myUserId
                         )
                     )
                 }
+
                 messages.clear()
                 messages.addAll(loaded.sortedBy { it.createdAt })
             }

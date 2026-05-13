@@ -106,7 +106,11 @@ fun LoginScreen(
                                 .edit()
                                 .putString("user_id",    user?.id?.toString().orEmpty())
                                 .putString("full_name",  user?.name.orEmpty())
-                                .putString("department", user?.department.orEmpty())
+                                .putString("department",
+                                    user?.department?.takeIf { it.isNotBlank() }
+                                        ?: user?.role?.takeIf { it.isNotBlank() }
+                                        ?: ""
+                                )
                                 .apply()
 
                             onLoggedIn(email)

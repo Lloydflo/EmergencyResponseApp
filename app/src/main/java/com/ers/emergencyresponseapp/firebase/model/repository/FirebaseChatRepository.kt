@@ -83,7 +83,7 @@ class FirebaseChatRepository {
             userId     = userId,
             fullName   = fullName,
             email      = email,
-            department = department,
+            department = department.lowercase(),
             isOnline   = true,
             lastSeen   = System.currentTimeMillis()
         )
@@ -95,9 +95,17 @@ class FirebaseChatRepository {
     // ─────────────────────────────────────────────────────────────────────────
     //  SET ONLINE STATUS — call on app open / close
     // ─────────────────────────────────────────────────────────────────────────
-    fun setOnlineStatus(userId: String, isOnline: Boolean) {
-        usersRef.child(userId).child("isOnline").setValue(isOnline)
-        usersRef.child(userId).child("lastSeen").setValue(System.currentTimeMillis())
+    suspend fun setOnlineStatus(userId: String, isOnline: Boolean) {
+        try {
+            val updates = mapOf(
+                "isOnline" to isOnline,
+                "lastSeen" to System.currentTimeMillis(),
+                "online"   to null  // deletes the duplicate field
+            )
+            usersRef.child(userId).updateChildren(updates).await()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────

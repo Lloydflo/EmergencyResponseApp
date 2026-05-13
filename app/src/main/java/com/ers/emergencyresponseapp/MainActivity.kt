@@ -46,6 +46,8 @@ import kotlinx.coroutines.flow.collectLatest
 import com.ers.emergencyresponseapp.firebase.ui.FirebaseChatScreen
 import com.ers.emergencyresponseapp.firebase.ui.ResponderListScreen
 import com.ers.emergencyresponseapp.firebase.repository.FirebaseChatRepository
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 
 sealed class NavItem(val route: String, val title: String, val icon: ImageVector) {
     object Home              : NavItem("home",                "Home",         Icons.Filled.Home)
@@ -73,13 +75,13 @@ class MainActivity : ComponentActivity() {
 
         Log.e("APP_START", "MainActivity onCreate - started")
         setContent {
-            val context   = LocalContext.current
-            val prefs     = context.getSharedPreferences("ers_prefs", MODE_PRIVATE)
+            val context = LocalContext.current
+            val prefs = context.getSharedPreferences("ers_prefs", MODE_PRIVATE)
             val authPrefs = context.getSharedPreferences("auth", MODE_PRIVATE)
             val isLoggedIn = authPrefs.getBoolean("user_verified", false)
-            val userPrefs  = context.getSharedPreferences("user_prefs", MODE_PRIVATE)
-            val dept       = userPrefs.getString("department", null)?.lowercase()
-            val homeRoute  = if (!dept.isNullOrBlank()) "home/$dept" else "home"
+            val userPrefs = context.getSharedPreferences("user_prefs", MODE_PRIVATE)
+            val dept = userPrefs.getString("department", null)?.lowercase()
+            val homeRoute = if (!dept.isNullOrBlank()) "home/$dept" else "home"
 
             val DEV_BYPASS_LOGIN = false
             val startDestination = if (DEV_BYPASS_LOGIN) homeRoute
@@ -121,24 +123,27 @@ class MainActivity : ComponentActivity() {
                     val navBackStackEntry by navController.currentBackStackEntryAsState()
                     val currentRoute = navBackStackEntry?.destination?.route
 
+                    // ✅ Match by prefix instead
                     val hideBottomBarRoutes = setOf(
                         "entry",
                         "login",
-                        "coordination_portal",
-                        "responder_list/{myUserId}",
-                        "firebase_chat/{myUserId}/{partnerUserId}"
+                        "coordination_portal"
                     )
-                    val showBottomBar = currentRoute !in hideBottomBarRoutes
+
+                    val showBottomBar = currentRoute != null &&
+                            !hideBottomBarRoutes.contains(currentRoute) &&
+                            !currentRoute.startsWith("responder_list/") &&
+                            !currentRoute.startsWith("firebase_chat/")
 
                     Scaffold(
                         bottomBar = {
                             AnimatedVisibility(
                                 visible = showBottomBar,
-                                enter   = fadeIn(tween(350)) + slideInVertically(tween(350))  { it / 2 },
-                                exit    = fadeOut(tween(200)) + slideOutVertically(tween(200)) { it / 2 }
+                                enter = fadeIn(tween(350)) + slideInVertically(tween(350)) { it / 2 },
+                                exit = fadeOut(tween(200)) + slideOutVertically(tween(200)) { it / 2 }
                             ) {
                                 CustomBottomNavigation(
-                                    selectedRoute  = currentRoute ?: "",
+                                    selectedRoute = currentRoute ?: "",
                                     onItemSelected = { route ->
                                         if (route != currentRoute) navController.navigate(route) {
                                             popUpTo(navController.graph.startDestinationId)
@@ -151,7 +156,7 @@ class MainActivity : ComponentActivity() {
                     ) { innerPadding ->
                         Box(modifier = Modifier.padding(innerPadding)) {
                             NavHost(
-                                navController    = navController,
+                                navController = navController,
                                 startDestination = startDestination
                             ) {
 
@@ -195,9 +200,10 @@ class MainActivity : ComponentActivity() {
 
                                 // Home with role
                                 composable("home/{role}") { backStackEntry ->
-                                    val roleArg      = backStackEntry.arguments?.getString("role")
+                                    val roleArg = backStackEntry.arguments?.getString("role")
                                     val innerContext = LocalContext.current
-                                    val innerPrefs   = innerContext.getSharedPreferences("ers_prefs", MODE_PRIVATE)
+                                    val innerPrefs =
+                                        innerContext.getSharedPreferences("ers_prefs", MODE_PRIVATE)
 
                                     AnimatedHomeScreen(
                                         navController = navController,
@@ -205,7 +211,10 @@ class MainActivity : ComponentActivity() {
                                         onLogout = {
                                             innerContext.getSharedPreferences("auth", MODE_PRIVATE)
                                                 .edit().clear().commit()
-                                            innerContext.getSharedPreferences("user_prefs", MODE_PRIVATE)
+                                            innerContext.getSharedPreferences(
+                                                "user_prefs",
+                                                MODE_PRIVATE
+                                            )
                                                 .edit().clear().commit()
                                             navController.navigate("login") {
                                                 popUpTo(0) { inclusive = true }
@@ -215,8 +224,11 @@ class MainActivity : ComponentActivity() {
                                     )
                                     LaunchedEffect(Unit) {
                                         if (innerPrefs.getBoolean("navigate_to_reviews", false)) {
-                                            innerPrefs.edit().putBoolean("navigate_to_reviews", false).commit()
-                                            navController.navigate("reviews_feedback") { launchSingleTop = true }
+                                            innerPrefs.edit()
+                                                .putBoolean("navigate_to_reviews", false).commit()
+                                            navController.navigate("reviews_feedback") {
+                                                launchSingleTop = true
+                                            }
                                         }
                                     }
                                 }
@@ -224,17 +236,29 @@ class MainActivity : ComponentActivity() {
                                 // ── Coordination portal ───────────────────────
                                 composable("coordination_portal") {
                                     val localContext = LocalContext.current
-                                    val localPrefs   = localContext.getSharedPreferences("user_prefs", MODE_PRIVATE)
-                                    val department   = localPrefs.getString("department", "fire") ?: "fire"
-                                    val myUserId     = localPrefs.getString("user_id", "current_user") ?: "current_user"
+                                    val localPrefs = localContext.getSharedPreferences(
+                                        "user_prefs",
+                                        MODE_PRIVATE
+                                    )
+                                    val department =
+                                        localPrefs.getString("department", "fire") ?: "fire"
+                                    val myUserId = localPrefs.getString("user_id", "current_user")
+                                        ?: "current_user"
                                     // FIX: read the saved full name — use the same key your login saves it with
-                                    val myUserName   = localPrefs.getString("full_name", "Responder") ?: "Responder"
+                                    val myUserName = localPrefs.getString("full_name", "Responder")
+                                        ?: "Responder"
+
+                                    // ADD THIS:
+                                    android.util.Log.d(
+                                        "COORD_DEBUG",
+                                        "userId=$myUserId name=$myUserName dept=$department"
+                                    )
 
                                     CoordinationPortalScreen(
-                                        currentResponderId   = myUserId,
+                                        currentResponderId = myUserId,
                                         currentResponderName = myUserName,
                                         currentResponderRole = department,
-                                        navController        = navController
+                                        navController = navController
                                     )
                                 }
 
@@ -249,9 +273,10 @@ class MainActivity : ComponentActivity() {
                                 }
 
                                 composable("responder_list/{myUserId}") { backStackEntry ->
-                                    val myUserId = backStackEntry.arguments?.getString("myUserId") ?: ""
+                                    val myUserId =
+                                        backStackEntry.arguments?.getString("myUserId") ?: ""
                                     ResponderListScreen(
-                                        myUserId  = myUserId,
+                                        myUserId = myUserId,
                                         onOpenChat = { partnerUserId ->
                                             navController.navigate(
                                                 "firebase_chat/$myUserId/$partnerUserId"
@@ -262,12 +287,14 @@ class MainActivity : ComponentActivity() {
 
                                 // ── One-to-one Firebase chat screen ───────────
                                 composable("firebase_chat/{myUserId}/{partnerUserId}") { backStackEntry ->
-                                    val myUserId      = backStackEntry.arguments?.getString("myUserId")      ?: ""
-                                    val partnerUserId = backStackEntry.arguments?.getString("partnerUserId") ?: ""
+                                    val myUserId =
+                                        backStackEntry.arguments?.getString("myUserId") ?: ""
+                                    val partnerUserId =
+                                        backStackEntry.arguments?.getString("partnerUserId") ?: ""
                                     FirebaseChatScreen(
-                                        myUserId      = myUserId,
+                                        myUserId = myUserId,
                                         partnerUserId = partnerUserId,
-                                        onBack        = { navController.popBackStack() }
+                                        onBack = { navController.popBackStack() }
                                     )
                                 }
 
@@ -281,14 +308,21 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        if (currentUserId.isNotEmpty())
-            firebaseChatRepo.setOnlineStatus(currentUserId, true)
+        if (currentUserId.isNotEmpty()) {
+            lifecycleScope.launch {
+                firebaseChatRepo.setOnlineStatus(currentUserId, true)
+            }
+        }
     }
+
 
     override fun onStop() {
         super.onStop()
-        if (currentUserId.isNotEmpty())
-            firebaseChatRepo.setOnlineStatus(currentUserId, false)
+        if (currentUserId.isNotEmpty()) {
+            lifecycleScope.launch {        // ← ADD this
+                firebaseChatRepo.setOnlineStatus(currentUserId, isOnline = false)
+            }                              // ← CLOSE
+        }
     }
 }
 
