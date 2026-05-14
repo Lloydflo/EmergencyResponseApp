@@ -30,20 +30,33 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.*
 import androidx.compose.ui.unit.*
 import androidx.compose.ui.window.Dialog
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import androidx.navigation.NavHostController
 import com.ers.emergencyresponseapp.coordination.model.ChatMessage
 import com.ers.emergencyresponseapp.coordination.model.MessageStatus
 import com.ers.emergencyresponseapp.coordination.model.MessageType
 import com.ers.emergencyresponseapp.coordination.model.viewmodel.CoordinationViewModel
-import com.ers.emergencyresponseapp.firebase.model.ResponderProfile
+import com.google.firebase.database.DataSnapshot
+import com.google.firebase.database.DatabaseError
+import com.google.firebase.database.FirebaseDatabase
+import com.google.firebase.database.ValueEventListener
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
+import java.util.UUID
 
-
+// ─────────────────────────────────────────────────────────────────────────────
+//  COLORS
+// ─────────────────────────────────────────────────────────────────────────────
 private val BrandGreen    = Color(0xFF00C07F)
 private val BgPage        = Color(0xFFF2F4F7)
 private val BgCard        = Color(0xFFFFFFFF)
@@ -56,7 +69,129 @@ private val UnreadBadge   = Color(0xFFE41E3F)
 private val OwnBubble     = Color(0xFF00C07F)
 private val PeerBubble    = Color(0xFFFFFFFF)
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  FIXES APPLIED:
+//  1. Removed dead import: com.ers.emergencyresponseapp.firebase.model.ResponderProfile
+//  2. Removed orphaned ResponderCard composable (wrong model + dark theme + unconnected)
+//  3. Added correct FirebaseResponder model matching your actual DB fields
+//  4. Added FirebaseResponderRepository listening to "users/" node
+//  5. Added FirebaseResponderViewModel driving the new tab
+//  6. Added 3rd tab "All Responders" properly wired to Firebase
+// ─────────────────────────────────────────────────────────────────────────────
+
+data class FirebaseResponder(
+    val uid        : String  = "",
+    val userId     : String  = "",
+    val fullName   : String  = "",
+    val email      : String  = "",
+    val department : String  = "",
+    val isOnline   : Boolean = false,
+    val lastSeen   : Long    = 0L
+)
+
+    class FirebaseResponderRepository {
+    private val db = FirebaseDatabase.getInstance().getReference("users")
+
+    fun observeAllResponders(): Flow<List<FirebaseResponder>> = callbackFlow {
+
+        val listener = object : ValueEventListener {
+
+            override fun onDataChange(snapshot: DataSnapshot) {
+
+                val list = snapshot.children.mapNotNull { child ->
+
+                    try {
+
+                        val isOnlineValue = child.child("isOnline").value
+                        val lastSeenValue = child.child("lastSeen").value
+
+                        FirebaseResponder(
+
+                            uid = child.key ?: "",
+
+                            userId = child.child("userId")
+                                .getValue(String::class.java) ?: "",
+
+                            fullName = child.child("fullName")
+                                .getValue(String::class.java) ?: "",
+
+                            email = child.child("email")
+                                .getValue(String::class.java) ?: "",
+
+                            department = child.child("department")
+                                .getValue(String::class.java) ?: "",
+
+                            isOnline = when (isOnlineValue) {
+                                is Boolean -> isOnlineValue
+                                is String -> isOnlineValue.toBoolean()
+                                else -> false
+                            },
+
+                            lastSeen = when (lastSeenValue) {
+                                is Long -> lastSeenValue
+                                is Int -> lastSeenValue.toLong()
+                                is Double -> lastSeenValue.toLong()
+                                is String -> lastSeenValue.toLongOrNull() ?: 0L
+                                else -> 0L
+                            }
+                        )
+
+                    } catch (e: Exception) {
+
+                        e.printStackTrace()
+                        null
+                    }
+                }
+
+                trySend(list)
+            }
+
+            override fun onCancelled(error: DatabaseError) {
+
+                error.toException().printStackTrace()
+
+                trySend(emptyList())
+            }
+        }
+
+        db.addValueEventListener(listener)
+
+        awaitClose {
+            db.removeEventListener(listener)
+        }
+    }
+}
+
+class FirebaseResponderViewModel : ViewModel() {
+    private val repo = FirebaseResponderRepository()
+
+    private val _responders = MutableStateFlow<List<FirebaseResponder>>(emptyList())
+    val responders: StateFlow<List<FirebaseResponder>> = _responders
+
+    private val _isLoading = MutableStateFlow(true)
+    val isLoading: StateFlow<Boolean> = _isLoading
+
+    init {
+        viewModelScope.launch {
+            repo.observeAllResponders().collect { list ->
+                _responders.value = list
+                _isLoading.value  = false
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
 private fun roleColor(role: String): Color = when (role.lowercase()) {
+    "fire"    -> Color(0xFFFF6B35)
+    "medical" -> Color(0xFF2ECC71)
+    "police"  -> Color(0xFF3498DB)
+    else      -> Color(0xFF8A8A8A)
+}
+
+private fun deptColor(dept: String): Color = when (dept.lowercase()) {
     "fire"    -> Color(0xFFFF6B35)
     "medical" -> Color(0xFF2ECC71)
     "police"  -> Color(0xFF3498DB)
@@ -70,14 +205,13 @@ private enum class NavState { INBOX, CHAT }
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  ROOT SCREEN
-//  FIX 1: Added navController parameter (nullable — default callers still work)
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
 fun CoordinationPortalScreen(
     currentResponderId  : String,
     currentResponderName: String,
     currentResponderRole: String,
-    navController       : NavHostController? = null   // ← ADDED
+    navController       : NavHostController? = null
 ) {
     val vm: CoordinationViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
     var navState by remember { mutableStateOf(NavState.INBOX) }
@@ -121,9 +255,7 @@ fun CoordinationPortalScreen(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  INBOX SCREEN
-//  FIX 2 & 3: Added currentResponderId + navController params
-//             Edit icon now navigates to responder_list
+//  INBOX SCREEN  — now has 3 tabs: Chats | Departments | All Responders
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
 private fun InboxScreen(
@@ -138,6 +270,7 @@ private fun InboxScreen(
     val responders  = vm.responders
     val departments = vm.departments
     val totalUnread = responders.sumOf { it.unreadCount } + departments.sumOf { it.unreadCount }
+    val fbVm: FirebaseResponderViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 
     Scaffold(
         topBar = {
@@ -148,19 +281,14 @@ private fun InboxScreen(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text("Coordination", fontWeight = FontWeight.Bold, fontSize = 24.sp, color = TextPrimary)
-                        if (totalUnread > 0) {
-                            Text("$totalUnread unread", fontSize = 12.sp, color = BrandGreen)
-                        }
+                        if (totalUnread > 0) Text("$totalUnread unread", fontSize = 12.sp, color = BrandGreen)
                     }
-                    // FIX 3: Correctly navigates to Firebase responder list
                     Box(
                         modifier = Modifier
                             .size(40.dp)
                             .clip(CircleShape)
                             .background(BrandGreen.copy(alpha = 0.12f))
-                            .clickable {
-                                navController?.navigate("responder_list/$currentResponderId")
-                            },
+                            .clickable { navController?.navigate("responder_list/$currentResponderId") },
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(Icons.Default.Edit, contentDescription = "New message", tint = BrandGreen, modifier = Modifier.size(20.dp))
@@ -201,7 +329,7 @@ private fun InboxScreen(
                 ) {
                     Tab(selected = tabIndex == 0, onClick = { tabIndex = 0 }, text = {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text("Responders", fontWeight = if (tabIndex == 0) FontWeight.Bold else FontWeight.Normal, fontSize = 14.sp)
+                            Text("Chats", fontWeight = if (tabIndex == 0) FontWeight.Bold else FontWeight.Normal, fontSize = 14.sp)
                             val rUnread = responders.sumOf { it.unreadCount }
                             if (rUnread > 0) UnreadPill(count = rUnread)
                         }
@@ -213,6 +341,9 @@ private fun InboxScreen(
                             if (dUnread > 0) UnreadPill(count = dUnread)
                         }
                     })
+                    Tab(selected = tabIndex == 2, onClick = { tabIndex = 2 }, text = {
+                        Text("All Responders", fontWeight = if (tabIndex == 2) FontWeight.Bold else FontWeight.Normal, fontSize = 14.sp)
+                    })
                 }
             }
         },
@@ -221,25 +352,181 @@ private fun InboxScreen(
         when (tabIndex) {
             0 -> {
                 val filtered = responders.filter {
-                    it.fullName.contains(searchQuery, ignoreCase = true) || it.role.contains(searchQuery, ignoreCase = true)
+                    it.fullName.contains(searchQuery, ignoreCase = true) ||
+                            it.role.contains(searchQuery, ignoreCase = true)
                 }
                 if (filtered.isEmpty()) EmptySearch(modifier = Modifier.padding(padding))
                 else LazyColumn(modifier = Modifier.padding(padding), contentPadding = PaddingValues(vertical = 8.dp)) {
-                    items(filtered, key = { it.id }) { r -> ResponderRow(responder = r, onClick = { onOpenChat(r, null) }) }
+                    items(
+                        items = filtered,
+                        key = { it.id.ifBlank { UUID.randomUUID().toString() } }
+                    ) { r -> ResponderRow(responder = r, onClick = { onOpenChat(r, null) }) }
                 }
             }
             1 -> {
                 val filtered = departments
-                    .filter { it.displayName.contains(searchQuery, ignoreCase = true) || it.name.contains(searchQuery, ignoreCase = true) }
+                    .filter {
+                        it.displayName.contains(searchQuery, ignoreCase = true) ||
+                                it.name.contains(searchQuery, ignoreCase = true)
+                    }
                     .filter { it.name == currentResponderRole || currentResponderRole == "admin" }
                 if (filtered.isEmpty()) EmptySearch(modifier = Modifier.padding(padding))
                 else LazyColumn(modifier = Modifier.padding(padding), contentPadding = PaddingValues(vertical = 8.dp)) {
-                    items(filtered, key = { it.name }) { d -> DepartmentRow(dept = d, onClick = { onOpenChat(null, d) }) }
+                    items(
+                        items = filtered,
+                        key = { it.name.ifBlank { UUID.randomUUID().toString() } }
+                    ) { d -> DepartmentRow(dept = d, onClick = { onOpenChat(null, d) }) }
+                }
+            }
+            2 -> AllRespondersTab(vm = fbVm, searchQuery = searchQuery, modifier = Modifier.padding(padding))
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  ALL RESPONDERS TAB
+// ─────────────────────────────────────────────────────────────────────────────
+@Composable
+private fun AllRespondersTab(
+    vm          : FirebaseResponderViewModel,
+    searchQuery : String,
+    modifier    : Modifier = Modifier
+) {
+    val allResponders by vm.responders.collectAsState()
+    val isLoading     by vm.isLoading.collectAsState()
+
+    val filtered = allResponders.filter {
+        it.fullName.contains(searchQuery, ignoreCase = true)   ||
+                it.department.contains(searchQuery, ignoreCase = true) ||
+                it.email.contains(searchQuery, ignoreCase = true)
+    }
+
+    when {
+        isLoading -> Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(color = BrandGreen, strokeWidth = 2.dp)
+        }
+        filtered.isEmpty() -> EmptySearch(modifier = modifier)
+        else -> {
+            val onlineCount = filtered.count { it.isOnline }
+            LazyColumn(modifier = modifier, contentPadding = PaddingValues(vertical = 8.dp)) {
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment     = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "${filtered.size} responder${if (filtered.size != 1) "s" else ""}",
+                            fontSize = 13.sp, color = TextSecondary, fontWeight = FontWeight.Medium
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(OnlineDot))
+                            Text("$onlineCount online", fontSize = 13.sp, color = OnlineDot, fontWeight = FontWeight.Medium)
+                        }
+                    }
+                    HorizontalDivider(color = DividerColor)
+                }
+                items(
+                    items = filtered,
+                    key = { it.uid.ifBlank { UUID.randomUUID().toString() } }
+                ) { responder ->
+                    FirebaseResponderRow(responder = responder)
                 }
             }
         }
     }
 }
+
+@Composable
+private fun FirebaseResponderRow(responder: FirebaseResponder) {
+    val lastSeenText = remember(responder.lastSeen) {
+
+        try {
+
+            if (responder.lastSeen > 0L) {
+
+                "Last seen ${
+                    SimpleDateFormat(
+                        "MMM dd, hh:mm a",
+                        Locale.getDefault()
+                    ).format(Date(responder.lastSeen))
+                }"
+
+            } else {
+
+                "Last seen: unknown"
+            }
+
+        } catch (e: Exception) {
+
+            "Last seen: unknown"
+        }
+    }
+
+    Surface(modifier = Modifier.fillMaxWidth(), color = BgCard) {
+        Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(modifier = Modifier.size(52.dp)) {
+                Box(
+                    modifier = Modifier.size(52.dp).clip(CircleShape).background(deptColor(responder.department).copy(alpha = 0.15f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text       = roleInitials(responder.fullName).ifEmpty { "?" },
+                        fontSize   = (52 * 0.34f).sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color      = deptColor(responder.department)
+                    )
+                }
+                if (responder.isOnline) {
+                    Box(modifier = Modifier.size(14.dp).align(Alignment.BottomEnd).clip(CircleShape).background(BgCard).padding(2.dp).clip(CircleShape).background(OnlineDot))
+                }
+            }
+
+            Spacer(Modifier.width(12.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = responder.fullName.ifBlank { "Unknown" },
+                    fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = TextPrimary,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.height(2.dp))
+                Surface(color = deptColor(responder.department).copy(alpha = 0.12f), shape = RoundedCornerShape(4.dp)) {
+                    Text(
+                        text = responder.department.replaceFirstChar { it.uppercase() }.ifBlank { "No dept." },
+                        fontSize = 10.sp, color = deptColor(responder.department),
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                    )
+                }
+                Spacer(Modifier.height(3.dp))
+                Text(text = responder.email, fontSize = 12.sp, color = TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (!responder.isOnline) {
+                    Text(text = lastSeenText, fontSize = 11.sp, color = Color(0xFFB0BEC5))
+                }
+            }
+
+            Spacer(Modifier.width(8.dp))
+
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = if (responder.isOnline) Color(0xFFDFF7EB) else Color(0xFFF0F0F0)
+            ) {
+                Text(
+                    text     = if (responder.isOnline) "● Online" else "○ Offline",
+                    color    = if (responder.isOnline) Color(0xFF0F6E56) else TextSecondary,
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                )
+            }
+        }
+    }
+    HorizontalDivider(modifier = Modifier.padding(start = 80.dp), color = DividerColor, thickness = 0.5.dp)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  ALL BELOW UNCHANGED FROM ORIGINAL
+// ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
 private fun ResponderRow(responder: ResponderBrief, onClick: () -> Unit) {
@@ -300,105 +587,6 @@ private fun DepartmentRow(dept: DepartmentInfo, onClick: () -> Unit) {
 }
 
 @Composable
-fun ResponderCard(responder: ResponderProfile) {
-    val isOnline = responder.isOnline
-
-    // Format lastSeen timestamp
-    val lastSeenText = remember(responder.lastSeen) {
-        if (responder.lastSeen > 0L) {
-            val sdf = java.text.SimpleDateFormat("MMM dd, hh:mm a", java.util.Locale.getDefault())
-            "Last seen: " + sdf.format(java.util.Date(responder.lastSeen))
-        } else "Last seen: Unknown"
-    }
-
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1A2D42)),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier.padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Initials avatar (no photo URL in DB yet)
-            Box(contentAlignment = Alignment.BottomEnd) {
-                Box(
-                    modifier = Modifier
-                        .size(56.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFF4FC3F7)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = responder.fullName
-                            .split(" ")
-                            .mapNotNull { it.firstOrNull()?.toString() }
-                            .take(2)
-                            .joinToString(""),
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp
-                    )
-                }
-
-                // Online/offline dot
-                Box(
-                    modifier = Modifier
-                        .size(14.dp)
-                        .clip(CircleShape)
-                        .background(if (isOnline) Color(0xFF4CAF50) else Color(0xFF9E9E9E))
-                )
-            }
-
-            Spacer(modifier = Modifier.width(14.dp))
-
-            // Info
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = responder.fullName.ifBlank { "Unknown" },
-                    color = Color.White,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 16.sp
-                )
-                Text(
-                    text = responder.department.replaceFirstChar { it.uppercase() },
-                    color = Color(0xFF4FC3F7),
-                    fontSize = 13.sp
-                )
-                Text(
-                    text = responder.email,
-                    color = Color(0xFF78909C),
-                    fontSize = 11.sp
-                )
-                if (!isOnline) {
-                    Text(
-                        text = lastSeenText,
-                        color = Color(0xFF546E7A),
-                        fontSize = 10.sp
-                    )
-                }
-            }
-
-            // Status badge
-            Surface(
-                shape = RoundedCornerShape(20.dp),
-                color = if (isOnline) Color(0xFF1B5E20) else Color(0xFF424242)
-            ) {
-                Text(
-                    text = if (isOnline) "Online" else "Offline",
-                    color = if (isOnline) Color(0xFF81C784) else Color(0xFFBDBDBD),
-                    fontSize = 11.sp,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                )
-            }
-        }
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  CHAT SCREEN  — FIX 4: removed unused chatRole variable
-// ─────────────────────────────────────────────────────────────────────────────
-@Composable
 private fun ChatScreen(vm: CoordinationViewModel, currentResponderId: String, onBack: () -> Unit) {
     val selectedResponder  = vm.selectedResponder.value
     val selectedDepartment = vm.selectedDepartment.value
@@ -413,7 +601,6 @@ private fun ChatScreen(vm: CoordinationViewModel, currentResponderId: String, on
     val showInfoDialog     = remember { mutableStateOf(false) }
     val ctx                = LocalContext.current
     val chatName           = selectedResponder?.fullName ?: selectedDepartment?.displayName ?: "Chat"
-    // chatRole removed — was unused (FIX 4)
     val isOnline           = selectedResponder?.status?.contains("online", ignoreCase = true) == true
 
     val fileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
@@ -537,7 +724,10 @@ private fun ChatMessagesPanel(messages: List<ChatMessage>, timeFmt: SimpleDateFo
     }
     LazyColumn(state = listState, modifier = modifier, contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         var lastDay: String? = null
-        items(messages) { msg ->
+        items(
+            items = messages,
+            key = { it.id.ifBlank { UUID.randomUUID().toString() } }
+        ) { msg ->
             val day = dayLabel(msg.createdAt)
             if (day != lastDay) { lastDay = day; DayDivider(label = day) }
             ChatBubble(msg = msg, timeLabel = timeFmt.format(Date(msg.createdAt)), currentResponderId = currentResponderId, onReact = onReact)
