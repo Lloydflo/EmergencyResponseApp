@@ -105,6 +105,7 @@ import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.PaddingValues
 import android.content.Context
 import android.location.LocationManager
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.navigationBars
@@ -625,6 +626,7 @@ fun HomeScreen(
 
     var incidentsList   by remember { mutableStateOf(listOf<Incident>()) }
     var activeIncidents by remember { mutableStateOf(listOf<Incident>()) }
+    var isLoading by remember { mutableStateOf(true) }
 
     fun loadIncidents()          { incidentsList = IncidentStore.incidents.toList() }
     fun filterActive(l: List<Incident>): List<Incident> {
@@ -632,14 +634,17 @@ fun HomeScreen(
         val now = System.currentTimeMillis()
         return l.filter { inc ->
             inc.status != IncidentStatus.RESOLVED &&
-                    (now - inc.timeReported.time) <= cap &&
-                    (departmentFilter == null || inc.type == departmentFilter)  // ← department filter
+                    (now - inc.timeReported.time) <= cap
         }
     }
     fun refreshActiveIncidents() { activeIncidents = filterActive(incidentsList) }
 
     LaunchedEffect(Unit) {
+        isLoading = true
         loadIncidents()
+        refreshActiveIncidents()
+        delay(800)
+        isLoading = false
 
         fun persistAssigned(id: String?) {
             lastAssignedIncidentId = id
@@ -1010,10 +1015,63 @@ fun HomeScreen(
                     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text("Assigned Incidents", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                         if (assignedListForRole.isEmpty()) {
-                            Card(modifier = Modifier.fillMaxWidth(), elevation = CardDefaults.cardElevation(1.dp), shape = RoundedCornerShape(12.dp)) {
-                                Column(modifier = Modifier.padding(16.dp)) { Text("No assigned incidents") }
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(18.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = Color.White
+                                ),
+                                border = BorderStroke(
+                                    1.dp,
+                                    Color(0xFFE0E0E0)
+                                )
+                            ){
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(24.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(10.dp)
+                                                .clip(CircleShape)
+                                                .background(Color(0xFF4CAF50))
+                                        )
+
+                                        Spacer(modifier = Modifier.width(6.dp))
+
+                                        Text(
+                                            "Available for Dispatch",
+                                            color = Color(0xFF4CAF50),
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.height(16.dp))
+
+                                    Icon(
+                                        imageVector = Icons.Default.Done,
+                                        contentDescription = null,
+                                        tint = Color(0xFF4CAF50),
+                                        modifier = Modifier.size(48.dp)
+                                    )
+
+                                    Spacer(modifier = Modifier.height(12.dp))
+
+                                    Text(
+                                        text = "You are currently available for dispatch. New incidents assigned to your department will appear here.",
+                                        textAlign = TextAlign.Center,
+                                        color = Color.Gray,
+                                        fontSize = 13.sp
+                                    )
+                                }
                             }
-                        } else {
+                        }
+                        else {
                             assignedListForRole.forEach { inc ->
                                 val diffMin   = ((System.currentTimeMillis() - inc.timeReported.time) / 60000).toInt()
                                 val timeLabel = when { diffMin < 1 -> "just now"; diffMin < 60 -> "${diffMin}m ago"; diffMin < 1440 -> "${diffMin / 60}h ago"; else -> java.text.SimpleDateFormat("h:mm a", Locale.getDefault()).format(inc.timeReported) }
@@ -1115,8 +1173,26 @@ fun HomeScreen(
                     // so Compose can reuse item positions across recompositions instead of
                     // treating it as a new list every time.
                     val activeListState = rememberLazyListState()
-
-                    if (activeListVisible.isEmpty()) {
+                    if (isLoading){
+                        Column (
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            repeat(3) {
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(90.dp),
+                                    shape = RoundedCornerShape(18.dp),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = Color(0xFFEAEAEA)
+                                    )
+                                ) {}
+                            }
+                        }
+                    } else if (activeListVisible.isEmpty()) {
                         Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), elevation = CardDefaults.cardElevation(0.dp), shape = RoundedCornerShape(14.dp)) {
                             Column(modifier = Modifier.padding(16.dp)) { Text("No active incidents") }
                         }

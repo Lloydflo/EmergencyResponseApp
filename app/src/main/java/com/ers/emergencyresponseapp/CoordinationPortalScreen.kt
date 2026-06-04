@@ -53,6 +53,8 @@ import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.UUID
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.material.icons.filled.*
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  COLORS
@@ -272,114 +274,201 @@ private fun InboxScreen(
     val totalUnread = responders.sumOf { it.unreadCount } + departments.sumOf { it.unreadCount }
     val fbVm: FirebaseResponderViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
 
-    Scaffold(
-        topBar = {
-            Column(modifier = Modifier.background(BgCard)) {
-                Row(
-                    modifier          = Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Coordination", fontWeight = FontWeight.Bold, fontSize = 24.sp, color = TextPrimary)
-                        if (totalUnread > 0) Text("$totalUnread unread", fontSize = 12.sp, color = BrandGreen)
-                    }
-                    Box(
-                        modifier = Modifier
-                            .size(40.dp)
-                            .clip(CircleShape)
-                            .background(BrandGreen.copy(alpha = 0.12f))
-                            .clickable { navController?.navigate("responder_list/$currentResponderId") },
-                        contentAlignment = Alignment.Center
+    Box(modifier = Modifier.fillMaxSize()) {
+
+        Scaffold(
+            topBar = {
+                Column(modifier = Modifier.background(BgCard)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().statusBarsPadding()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.Edit, contentDescription = "New message", tint = BrandGreen, modifier = Modifier.size(20.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (navController != null) {
+                                IconButton(onClick = { navController.navigateUp() }) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.ArrowBack,
+                                        contentDescription = "Back",
+                                        tint = TextPrimary
+                                    )
+                                }
+                            }
+                            Column {
+                                Text(
+                                    "Coordination",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 24.sp,
+                                    color = TextPrimary
+                                )
+                                if (totalUnread > 0) Text(
+                                    "$totalUnread unread",
+                                    fontSize = 12.sp,
+                                    color = BrandGreen
+                                )
+                            }
+                        }
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(BrandGreen.copy(alpha = 0.12f))
+                                .clickable { navController?.navigate("responder_list/$currentResponderId") },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Default.Edit,
+                                contentDescription = "New message",
+                                tint = BrandGreen,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
                     }
-                }
 
-                OutlinedTextField(
-                    value         = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    placeholder   = { Text("Search responders…", fontSize = 14.sp, color = TextSecondary) },
-                    leadingIcon   = { Icon(Icons.Default.Search, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(20.dp)) },
-                    trailingIcon  = if (searchQuery.isNotEmpty()) {
-                        { IconButton(onClick = { searchQuery = "" }) { Icon(Icons.Default.Close, contentDescription = "Clear", tint = TextSecondary, modifier = Modifier.size(18.dp)) } }
-                    } else null,
-                    modifier      = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 12.dp),
-                    shape         = RoundedCornerShape(24.dp),
-                    singleLine    = true,
-                    colors        = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor   = BgPage,
-                        unfocusedContainerColor = BgPage,
-                        focusedBorderColor      = BrandGreen,
-                        unfocusedBorderColor    = Color.Transparent
-                    )
-                )
-
-                TabRow(
-                    selectedTabIndex = tabIndex,
-                    containerColor   = BgCard,
-                    contentColor     = BrandGreen,
-                    indicator        = { tabPositions ->
-                        TabRowDefaults.SecondaryIndicator(
-                            modifier = Modifier.tabIndicatorOffset(tabPositions[tabIndex]),
-                            height   = 3.dp,
-                            color    = BrandGreen
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        placeholder = {
+                            Text(
+                                "Search responders…",
+                                fontSize = 14.sp,
+                                color = TextSecondary
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.Search,
+                                contentDescription = null,
+                                tint = TextSecondary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        },
+                        trailingIcon = if (searchQuery.isNotEmpty()) {
+                            {
+                                IconButton(onClick = { searchQuery = "" }) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Clear",
+                                        tint = TextSecondary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        } else null,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+                            .padding(bottom = 12.dp),
+                        shape = RoundedCornerShape(24.dp),
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = BgPage,
+                            unfocusedContainerColor = BgPage,
+                            focusedBorderColor = BrandGreen,
+                            unfocusedBorderColor = Color.Transparent
                         )
-                    },
-                    divider = { HorizontalDivider(color = DividerColor) }
-                ) {
-                    Tab(selected = tabIndex == 0, onClick = { tabIndex = 0 }, text = {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text("Chats", fontWeight = if (tabIndex == 0) FontWeight.Bold else FontWeight.Normal, fontSize = 14.sp)
-                            val rUnread = responders.sumOf { it.unreadCount }
-                            if (rUnread > 0) UnreadPill(count = rUnread)
-                        }
-                    })
-                    Tab(selected = tabIndex == 1, onClick = { tabIndex = 1 }, text = {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text("Departments", fontWeight = if (tabIndex == 1) FontWeight.Bold else FontWeight.Normal, fontSize = 14.sp)
-                            val dUnread = departments.sumOf { it.unreadCount }
-                            if (dUnread > 0) UnreadPill(count = dUnread)
-                        }
-                    })
-                    Tab(selected = tabIndex == 2, onClick = { tabIndex = 2 }, text = {
-                        Text("All Responders", fontWeight = if (tabIndex == 2) FontWeight.Bold else FontWeight.Normal, fontSize = 14.sp)
-                    })
-                }
-            }
-        },
-        containerColor = BgPage
-    ) { padding ->
-        when (tabIndex) {
-            0 -> {
-                val filtered = responders.filter {
-                    it.fullName.contains(searchQuery, ignoreCase = true) ||
-                            it.role.contains(searchQuery, ignoreCase = true)
-                }
-                if (filtered.isEmpty()) EmptySearch(modifier = Modifier.padding(padding))
-                else LazyColumn(modifier = Modifier.padding(padding), contentPadding = PaddingValues(vertical = 8.dp)) {
-                    items(
-                        items = filtered,
-                        key = { it.id.ifBlank { UUID.randomUUID().toString() } }
-                    ) { r -> ResponderRow(responder = r, onClick = { onOpenChat(r, null) }) }
-                }
-            }
-            1 -> {
-                val filtered = departments
-                    .filter {
-                        it.displayName.contains(searchQuery, ignoreCase = true) ||
-                                it.name.contains(searchQuery, ignoreCase = true)
+                    )
+
+                    TabRow(
+                        selectedTabIndex = tabIndex,
+                        containerColor = BgCard,
+                        contentColor = BrandGreen,
+                        indicator = { tabPositions ->
+                            TabRowDefaults.SecondaryIndicator(
+                                modifier = Modifier.tabIndicatorOffset(tabPositions[tabIndex]),
+                                height = 3.dp,
+                                color = BrandGreen
+                            )
+                        },
+                        divider = { HorizontalDivider(color = DividerColor) }
+                    ) {
+                        Tab(selected = tabIndex == 0, onClick = { tabIndex = 0 }, text = {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    "Chats",
+                                    fontWeight = if (tabIndex == 0) FontWeight.Bold else FontWeight.Normal,
+                                    fontSize = 14.sp
+                                )
+                                val rUnread = responders.sumOf { it.unreadCount }
+                                if (rUnread > 0) UnreadPill(count = rUnread)
+                            }
+                        })
+                        Tab(selected = tabIndex == 1, onClick = { tabIndex = 1 }, text = {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    "Departments",
+                                    fontWeight = if (tabIndex == 1) FontWeight.Bold else FontWeight.Normal,
+                                    fontSize = 14.sp
+                                )
+                                val dUnread = departments.sumOf { it.unreadCount }
+                                if (dUnread > 0) UnreadPill(count = dUnread)
+                            }
+                        })
+                        Tab(selected = tabIndex == 2, onClick = { tabIndex = 2 }, text = {
+                            Text(
+                                "All Responders",
+                                fontWeight = if (tabIndex == 2) FontWeight.Bold else FontWeight.Normal,
+                                fontSize = 14.sp
+                            )
+                        })
                     }
-                    .filter { it.name == currentResponderRole || currentResponderRole == "admin" }
-                if (filtered.isEmpty()) EmptySearch(modifier = Modifier.padding(padding))
-                else LazyColumn(modifier = Modifier.padding(padding), contentPadding = PaddingValues(vertical = 8.dp)) {
-                    items(
-                        items = filtered,
-                        key = { it.name.ifBlank { UUID.randomUUID().toString() } }
-                    ) { d -> DepartmentRow(dept = d, onClick = { onOpenChat(null, d) }) }
                 }
+            },
+            containerColor = BgPage
+        ) { padding ->
+            when (tabIndex) {
+                0 -> {
+                    val filtered = responders.filter {
+                        it.fullName.contains(searchQuery, ignoreCase = true) ||
+                                it.role.contains(searchQuery, ignoreCase = true)
+                    }
+                    if (filtered.isEmpty()) EmptySearch(modifier = Modifier.padding(padding))
+                    else LazyColumn(
+                        modifier = Modifier.padding(padding),
+                        contentPadding = PaddingValues(vertical = 8.dp)
+                    ) {
+                        items(
+                            items = filtered,
+                            key = { it.id.ifBlank { UUID.randomUUID().toString() } }
+                        ) { r -> ResponderRow(responder = r, onClick = { onOpenChat(r, null) }) }
+                    }
+                }
+
+                1 -> {
+                    val filtered = departments
+                        .filter {
+                            it.displayName.contains(searchQuery, ignoreCase = true) ||
+                                    it.name.contains(searchQuery, ignoreCase = true)
+                        }
+                        .filter { it.name == currentResponderRole || currentResponderRole == "admin" }
+                    if (filtered.isEmpty()) EmptySearch(modifier = Modifier.padding(padding))
+                    else LazyColumn(
+                        modifier = Modifier.padding(padding),
+                        contentPadding = PaddingValues(vertical = 8.dp)
+                    ) {
+                        items(
+                            items = filtered,
+                            key = { it.name.ifBlank { UUID.randomUUID().toString() } }
+                        ) { d -> DepartmentRow(dept = d, onClick = { onOpenChat(null, d) }) }
+                    }
+                }
+
+                2 -> AllRespondersTab(
+                    vm = fbVm,
+                    searchQuery = searchQuery,
+                    modifier = Modifier.padding(padding)
+                )
             }
-            2 -> AllRespondersTab(vm = fbVm, searchQuery = searchQuery, modifier = Modifier.padding(padding))
         }
+        // Floating notification overlay on top of everything
+        NotificationOverlay(
+            vm    = vm,
+            onTap = { responder, dept -> onOpenChat(responder, dept) }
+        )
     }
 }
 
@@ -682,7 +771,20 @@ private fun ChatScreen(vm: CoordinationViewModel, currentResponderId: String, on
                     Text("↓ ${unseenCount.intValue} new", color = Color.White, fontSize = 13.sp)
                 }
             }
-            ChatComposer(modifier = Modifier.align(Alignment.BottomCenter), text = messageInput.value, onTextChange = { messageInput.value = it }, onSend = { doSend() }, onAttachClick = { showAttach.value = true })
+            ChatComposer(
+                modifier      = Modifier.align(Alignment.BottomCenter),
+                text          = messageInput.value,
+                onTextChange  = { messageInput.value = it },
+                onSend        = { doSend() },
+                onAttachClick = { showAttach.value = true },
+                onLike        = {                              // <-- add this
+                    when {
+                        selectedResponder  != null -> vm.sendMockPrivateMessage(currentResponderId, selectedResponder, "👍")
+                        selectedDepartment != null -> vm.sendMockDepartmentMessage(currentResponderId, selectedDepartment.name, "👍")
+                        else -> Toast.makeText(ctx, "Select a chat first", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            )
         }
     }
 
@@ -695,11 +797,25 @@ private fun ChatScreen(vm: CoordinationViewModel, currentResponderId: String, on
     LaunchedEffect(latest) { if (latest != null) { delay(5000L); vm.clearNotification() } }
 
     if (showInfoDialog.value) {
-        AlertDialog(onDismissRequest = { showInfoDialog.value = false },
-            confirmButton = { TextButton(onClick = { showInfoDialog.value = false }) { Text("Close", color = BrandGreen) } },
-            title = { Text("Chat Info") },
-            text  = { when { selectedResponder != null -> ChatInfoContent(r = selectedResponder); selectedDepartment != null -> Text("Department: ${selectedDepartment.displayName}"); else -> Text("No info available") } },
-            shape = RoundedCornerShape(20.dp))
+        AlertDialog(
+            onDismissRequest = { showInfoDialog.value = false },
+            confirmButton = {
+                TextButton(onClick = { showInfoDialog.value = false }) {
+                    Text("Close", color = BrandGreen)
+                }
+            },
+            title = { Text("Chat Info", fontWeight = FontWeight.Medium) },
+            text  = {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    when {
+                        selectedResponder  != null -> ChatInfoContent(r = selectedResponder)
+                        selectedDepartment != null -> Text("Department: ${selectedDepartment.displayName}")
+                        else -> Text("No info available")
+                    }
+                }
+            },
+            shape = RoundedCornerShape(20.dp)
+        )
     }
     if (showAttach.value) {
         AttachSheet(onDismiss = { showAttach.value = false }, onPickImage = { showAttach.value = false; imageLauncher.launch("image/*") }, onPickFile = { showAttach.value = false; fileLauncher.launch("*/*") })
@@ -819,7 +935,7 @@ private fun ChatBubble(msg: ChatMessage, timeLabel: String, currentResponderId: 
 }
 
 @Composable
-private fun ChatComposer(modifier: Modifier = Modifier, text: String, onTextChange: (String) -> Unit, onSend: () -> Unit, onAttachClick: () -> Unit) {
+private fun ChatComposer(modifier: Modifier = Modifier, text: String, onTextChange: (String) -> Unit, onSend: () -> Unit, onAttachClick: () -> Unit, onLike: () -> Unit) {
     Surface(modifier = modifier.fillMaxWidth(), color = BgCard, shadowElevation = 8.dp) {
         Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp).navigationBarsPadding().imePadding(), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onAttachClick) { Icon(Icons.Default.AddCircleOutline, contentDescription = "Attach", tint = BrandGreen, modifier = Modifier.size(26.dp)) }
@@ -829,7 +945,14 @@ private fun ChatComposer(modifier: Modifier = Modifier, text: String, onTextChan
             val hasText = text.trim().isNotEmpty()
             AnimatedContent(targetState = hasText, label = "send_btn") { active ->
                 if (active) Box(modifier = Modifier.size(44.dp).clip(CircleShape).background(BrandGreen).clickable { onSend() }, contentAlignment = Alignment.Center) { Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send", tint = Color.White, modifier = Modifier.size(20.dp)) }
-                else Box(modifier = Modifier.size(44.dp).clip(CircleShape).background(Color(0xFFE4E6EA)), contentAlignment = Alignment.Center) { Icon(Icons.Default.ThumbUp, contentDescription = "Like", tint = TextSecondary, modifier = Modifier.size(20.dp)) }
+                else Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFFE4E6EA))
+                        .clickable { onLike() },   // <-- call onLike
+                    contentAlignment = Alignment.Center
+                ) { Icon(Icons.Default.ThumbUp, contentDescription = "Like", tint = TextSecondary, modifier = Modifier.size(20.dp)) }
             }
         }
     }
@@ -872,14 +995,349 @@ private fun ChatComposer(modifier: Modifier = Modifier, text: String, onTextChan
         }
     }
 }
+
+@Composable
+private fun NotificationOverlay(
+    vm: CoordinationViewModel,
+    onTap: (ResponderBrief?, DepartmentInfo?) -> Unit
+) {
+    val latest = vm.latestNotification.value
+
+    LaunchedEffect(latest) {
+        if (latest != null) {
+            delay(5000L)
+            vm.clearNotification()
+        }
+    }
+
+    AnimatedVisibility(
+        visible       = latest != null,
+        enter         = slideInVertically(
+            animationSpec  = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+            initialOffsetY = { -it }
+        ) + fadeIn(),
+        exit          = slideOutVertically(
+            animationSpec  = tween(250),
+            targetOffsetY  = { -it }
+        ) + fadeOut(),
+        modifier      = Modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .zIndex(10f)
+    ) {
+        if (latest != null) {
+            // Find which responder or dept this notification belongs to
+            val matchedResponder  = vm.responders.firstOrNull  { latest.contains(it.fullName, ignoreCase = true) }
+            val matchedDepartment = vm.departments.firstOrNull { latest.contains(it.displayName, ignoreCase = true) }
+
+            Card(
+                modifier  = Modifier.fillMaxWidth(),
+                shape     = RoundedCornerShape(16.dp),
+                colors    = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
+                elevation = CardDefaults.cardElevation(12.dp),
+                onClick   = {
+                    vm.clearNotification()
+                    onTap(matchedResponder, matchedDepartment)
+                }
+            ) {
+                Row(
+                    modifier          = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Animated green dot pulse
+                    Box(modifier = Modifier.size(36.dp), contentAlignment = Alignment.Center) {
+                        val pulse = rememberInfiniteTransition(label = "pulse")
+                        val scale by pulse.animateFloat(
+                            initialValue  = 0.8f,
+                            targetValue   = 1.3f,
+                            animationSpec = infiniteRepeatable(tween(700), RepeatMode.Reverse),
+                            label         = "scale"
+                        )
+                        Box(
+                            modifier = Modifier
+                                .size(28.dp * scale)
+                                .clip(CircleShape)
+                                .background(BrandGreen.copy(alpha = 0.18f))
+                        )
+                        Icon(
+                            Icons.Default.Notifications,
+                            contentDescription = null,
+                            tint               = BrandGreen,
+                            modifier           = Modifier.size(18.dp)
+                        )
+                    }
+
+                    Spacer(Modifier.width(10.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "New message",
+                            fontSize   = 11.sp,
+                            color      = BrandGreen,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            latest,
+                            color    = Color.White,
+                            fontSize = 13.sp,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    Spacer(Modifier.width(8.dp))
+
+                    // Tap-to-open hint
+                    Surface(
+                        color = Color.White.copy(alpha = 0.1f),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text(
+                            "Open",
+                            color    = Color.White.copy(alpha = 0.8f),
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+
+                    Spacer(Modifier.width(4.dp))
+
+                    IconButton(
+                        onClick  = { vm.clearNotification() },
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Dismiss",
+                            tint               = Color.White.copy(alpha = 0.5f),
+                            modifier           = Modifier.size(14.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable private fun ChatInfoContent(r: ResponderBrief) {
-    val online = r.status.contains("online", ignoreCase = true)
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-        AvatarCircle(name = r.fullName, role = r.role, size = 72.dp); Spacer(Modifier.height(10.dp))
-        Text(r.fullName, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-        Text("${r.role.replaceFirstChar { it.uppercase() }} Responder", color = TextSecondary, fontSize = 13.sp); Spacer(Modifier.height(8.dp))
-        Surface(color = if (online) Color(0xFFDFF7EB) else Color(0xFFF0F0F0), shape = RoundedCornerShape(20.dp)) {
-            Text(if (online) "● Active now" else "○ Offline", color = if (online) Color(0xFF0F6E56) else TextSecondary, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp))
+    val online  = r.status.contains("online", ignoreCase = true)
+    val ctx     = LocalContext.current
+    var muted    by remember { mutableStateOf(false) }
+    var priority by remember { mutableStateOf(false) }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+
+        // ── HEADER BANNER + FLOATING AVATAR ────────────────────────────
+        Box(modifier = Modifier.fillMaxWidth().height(100.dp)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(72.dp)
+                    .background(
+                        Brush.horizontalGradient(listOf(Color(0xFF1D9E75), Color(0xFF0F6E56))),
+                        RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)
+                    )
+            )
+            Box(
+                modifier = Modifier
+                    .size(64.dp)
+                    .align(Alignment.BottomCenter)
+                    .clip(CircleShape)
+                    .background(roleColor(r.role))
+                    .border(3.dp, BgCard, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    roleInitials(r.fullName).ifEmpty { "?" },
+                    fontSize   = 22.sp,
+                    fontWeight = FontWeight.Medium,
+                    color      = Color.White
+                )
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // ── NAME + ROLE + STATUS ────────────────────────────────────────
+        Column(horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.fillMaxWidth()) {
+            Text(r.fullName, fontWeight = FontWeight.Medium, fontSize = 18.sp, color = TextPrimary)
+            Spacer(Modifier.height(2.dp))
+            Text("${r.role.replaceFirstChar { it.uppercase() }} Responder",
+                fontSize = 13.sp, color = TextSecondary)
+            Spacer(Modifier.height(8.dp))
+            Surface(
+                color = if (online) Color(0xFFDFF7EB) else Color(0xFFFFEBEB),
+                shape = RoundedCornerShape(20.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                ) {
+                    Box(modifier = Modifier.size(6.dp).clip(CircleShape)
+                        .background(if (online) Color(0xFF1D9E75) else Color(0xFFE24B4A)))
+                    Spacer(Modifier.width(5.dp))
+                    Text(
+                        if (online) "Active now" else "Offline",
+                        fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                        color    = if (online) Color(0xFF0F6E56) else Color(0xFFA32D2D)
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // ── STATS ROW ───────────────────────────────────────────────────
+        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)) {
+            listOf(
+                "Messages" to "—",
+                "Files"    to "—",
+                "Chat age" to "—"
+            ).forEachIndexed { i, (label, value) ->
+                if (i > 0) VerticalDivider(modifier = Modifier.height(36.dp).padding(top = 4.dp), color = DividerColor)
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.weight(1f).background(Color(0xFFF7F8FA), RoundedCornerShape(8.dp)).padding(vertical = 10.dp)
+                ) {
+                    Text(value, fontSize = 17.sp, fontWeight = FontWeight.Medium, color = TextPrimary)
+                    Text(label, fontSize = 11.sp, color = TextSecondary)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // ── RESPONDER INFO SECTION ──────────────────────────────────────
+        SectionLabel("Responder info")
+        InfoGroup {
+            InfoRow(icon = Icons.Default.Badge, label = "Responder ID", value = r.id.ifBlank { "—" })
+            InfoRowDivider()
+            InfoRowDept(dept = r.role)
+            if (!online) {
+                InfoRowDivider()
+                InfoRow(icon = Icons.Default.AccessTime, label = "Last seen", value = "Unknown")
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // ── QUICK ACTIONS SECTION ───────────────────────────────────────
+        SectionLabel("Quick actions")
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Copy
+            ActionTile(
+                icon  = Icons.Default.ContentCopy,
+                label = "Copy name",
+                tint  = TextSecondary,
+                modifier = Modifier.weight(1f),
+                onClick = {
+                    val clip = android.content.ClipData.newPlainText("Responder", r.fullName)
+                    (ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                            as android.content.ClipboardManager).setPrimaryClip(clip)
+                    Toast.makeText(ctx, "Copied", Toast.LENGTH_SHORT).show()
+                }
+            )
+            // Priority
+            ActionTile(
+                icon  = if (priority) Icons.Default.Star else Icons.Default.StarBorder,
+                label = if (priority) "Priority ★" else "Priority",
+                tint  = if (priority) Color(0xFFBA7517) else TextSecondary,
+                bg    = if (priority) Color(0xFFFAEEDA) else Color(0xFFF7F8FA),
+                modifier = Modifier.weight(1f),
+                onClick = { priority = !priority }
+            )
+            // Search
+            ActionTile(
+                icon  = Icons.Default.Search,
+                label = "Search",
+                tint  = TextSecondary,
+                modifier = Modifier.weight(1f),
+                onClick = { Toast.makeText(ctx, "Search coming soon", Toast.LENGTH_SHORT).show() }
+            )
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // ── DANGER ZONE ─────────────────────────────────────────────────
+        Surface(
+            color    = Color(0xFFFFEBEB),
+            shape    = RoundedCornerShape(12.dp),
+            modifier = Modifier.fillMaxWidth().clickable {
+                Toast.makeText(ctx, "Block feature coming soon", Toast.LENGTH_SHORT).show()
+            }
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)
+            ) {
+                Icon(Icons.Default.PersonOff, contentDescription = null,
+                    tint = Color(0xFFA32D2D), modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(12.dp))
+                Text("Block responder", fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium, color = Color(0xFFA32D2D))
+            }
+        }
+    }
+}
+
+// ── HELPER COMPOSABLES ──────────────────────────────────────────────────────
+
+@Composable private fun SectionLabel(text: String) {
+    Text(
+        text.uppercase(), fontSize = 11.sp, fontWeight = FontWeight.Medium,
+        color = TextSecondary, letterSpacing = 0.6.sp,
+        modifier = Modifier.padding(bottom = 6.dp)
+    )
+}
+
+@Composable private fun InfoGroup(content: @Composable ColumnScope.() -> Unit) {
+    Surface(color = Color(0xFFF7F8FA), shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(horizontal = 14.dp), content = content)
+    }
+}
+
+@Composable private fun InfoRow(icon: ImageVector, label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, contentDescription = null, tint = BrandGreen, modifier = Modifier.size(17.dp))
+        Spacer(Modifier.width(12.dp))
+        Text(label, fontSize = 12.sp, color = TextSecondary, modifier = Modifier.weight(1f))
+        Text(value, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = TextPrimary)
+    }
+}
+
+@Composable private fun InfoRowDept(dept: String) {
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Icon(Icons.Default.Shield, contentDescription = null,
+            tint = roleColor(dept), modifier = Modifier.size(17.dp))
+        Spacer(Modifier.width(12.dp))
+        Text("Department", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.weight(1f))
+        RoleBadge(role = dept)
+    }
+}
+
+@Composable private fun InfoRowDivider() {
+    HorizontalDivider(modifier = Modifier.padding(start = 29.dp), color = DividerColor, thickness = 0.5.dp)
+}
+
+@Composable private fun ActionTile(
+    icon: ImageVector, label: String, tint: Color,
+    modifier: Modifier = Modifier,
+    bg: Color = Color(0xFFF7F8FA),
+    onClick: () -> Unit
+) {
+    Surface(color = bg, shape = RoundedCornerShape(12.dp),
+        modifier = modifier.clickable(onClick = onClick)) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(vertical = 12.dp, horizontal = 4.dp)) {
+            Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.height(5.dp))
+            Text(label, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+                color = TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
