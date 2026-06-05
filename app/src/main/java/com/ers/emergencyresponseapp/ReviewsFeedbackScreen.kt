@@ -122,12 +122,6 @@ private enum class ResCategory(
             "Nurse", "Doctor", "Psychosocial Support", "Volunteer Responder"),
         maxQty = 30
     ),
-    COMMUNICATION(
-        "Communication", Icons.Default.Phone,
-        listOf("Handheld Radio", "Satellite Phone", "Megaphone",
-            "Mobile Command Unit", "Signal Repeater"),
-        maxQty = 10
-    ),
     OTHER(
         "Other", Icons.Default.Inventory,
         listOf("Food Pack", "Water (Gallon)", "Blanket", "Tent",

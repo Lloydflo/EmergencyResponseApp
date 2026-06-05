@@ -49,7 +49,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FabPosition
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -124,9 +123,11 @@ import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.ExperimentalFoundationApi
-// FIX 1: Import derivedStateOf and State for stable derived computations
 import androidx.compose.runtime.derivedStateOf
-import androidx.compose.runtime.State
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -352,6 +353,7 @@ private fun ResponderAvatar(
             modifier = Modifier
                 .size(10.dp)
                 .align(Alignment.BottomEnd)
+                .offset(x = 4.dp, y = 4.dp)
                 .padding(2.dp)
                 .clip(CircleShape)
                 .background(dotColor)
@@ -608,6 +610,9 @@ fun HomeScreen(
     var proofNotes             by remember { mutableStateOf("") }
     var selectedProofUri       by remember { mutableStateOf<String?>(null) }
 
+    var notificationCount by remember { mutableStateOf(0) }
+
+
     fun saveBitmapToCache(bitmap: Bitmap, ctx: Context): String? {
         return try {
             val file = File(ctx.cacheDir, "proof_${System.currentTimeMillis()}.jpg")
@@ -627,6 +632,9 @@ fun HomeScreen(
     var incidentsList   by remember { mutableStateOf(listOf<Incident>()) }
     var activeIncidents by remember { mutableStateOf(listOf<Incident>()) }
     var isLoading by remember { mutableStateOf(true) }
+    var isRefreshing by remember { mutableStateOf(false) }
+    var pullDistance by remember { mutableStateOf(0f) }
+
 
     fun loadIncidents()          { incidentsList = IncidentStore.incidents.toList() }
     fun filterActive(l: List<Incident>): List<Incident> {
@@ -638,6 +646,14 @@ fun HomeScreen(
         }
     }
     fun refreshActiveIncidents() { activeIncidents = filterActive(incidentsList) }
+    fun refreshHomeData() {
+        isRefreshing = true
+
+        loadIncidents()
+        refreshActiveIncidents()
+
+        isRefreshing = false
+    }
 
     LaunchedEffect(Unit) {
         isLoading = true
@@ -654,11 +670,13 @@ fun HomeScreen(
         val savedAssigned = lastAssignedIncidentId?.let { id -> IncidentStore.incidents.firstOrNull { it.id == id && it.status != IncidentStatus.RESOLVED } }
         if (savedAssigned != null) {
             if (savedAssigned.assignedTo != responderName) { IncidentStore.assignIncident(savedAssigned.id, responderName); incidentsList = IncidentStore.incidents.toList() }
-        } else if (incidentsList.none { it.assignedTo == responderName && it.status != IncidentStatus.RESOLVED }) {
+        }
+        /*
+        else if (incidentsList.none { it.assignedTo == responderName && it.status != IncidentStatus.RESOLVED }) {
             incidentsList.firstOrNull { it.status != IncidentStatus.RESOLVED }?.let { inc ->
                 IncidentStore.assignIncident(inc.id, responderName); incidentsList = IncidentStore.incidents.toList(); persistAssigned(inc.id)
             }
-        }
+        }*/
         if (incomingRequests.isEmpty()) demoFeedIncomingRequests(incomingRequests)
         refreshActiveIncidents()
         while (true) { delay(60_000L); refreshActiveIncidents() }
@@ -666,6 +684,14 @@ fun HomeScreen(
 
     // Location
     var isLocationShared by remember { mutableStateOf(false) }
+    var hasLocationPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        )
+    }
     var currentLatitude  by remember { mutableStateOf<Double?>(null) }
     var currentLongitude by remember { mutableStateOf<Double?>(null) }
     val fusedClient       = remember { LocationServices.getFusedLocationProviderClient(context) }
@@ -784,6 +810,7 @@ fun HomeScreen(
 
     val locationPermLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) {
+            hasLocationPermission = true
             if (isDeviceLocationEnabled(context)) {
                 Toast.makeText(context, "Turn on Location to start live monitoring", Toast.LENGTH_LONG).show()
                 locationSettingsLauncher.launch(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
@@ -792,6 +819,7 @@ fun HomeScreen(
             prefs.edit().putBoolean(locationMonitoringEnabledKey, true).apply()
             startLocationUpdates(); showAlwaysLocationNotice = !hasAlwaysLocationPermission()
         } else {
+            hasLocationPermission = false
             isLocationShared = false; isLocationMonitoringEnabled = false
             prefs.edit().putBoolean(locationMonitoringEnabledKey, false).apply()
             Toast.makeText(context, "Location permission denied", Toast.LENGTH_SHORT).show()
@@ -833,30 +861,53 @@ fun HomeScreen(
         }
     }
 
+    val gpsEnabled = isDeviceLocationEnabled(context)
+
+    val gpsStatusText = when {
+        gpsEnabled && hasLocationPermission && isLocationMonitoringEnabled -> "GPS Active"
+        gpsEnabled && hasLocationPermission && !isLocationMonitoringEnabled -> "GPS Available"
+        else -> "GPS Disabled"
+    }
+
+    val gpsStatusColor = when {
+        gpsEnabled && hasLocationPermission && isLocationMonitoringEnabled -> Color(0xFF4CAF50)
+        gpsEnabled && hasLocationPermission && !isLocationMonitoringEnabled -> Color(0xFFFFC107)
+        else -> Color.Red
+    }
+
 
     // ─────────────────────────────────────────────────────────────────────────
     // SCAFFOLD
     // ─────────────────────────────────────────────────────────────────────────
-
+    val listState = rememberLazyListState()
     Scaffold(
         topBar = {},
-        floatingActionButtonPosition = FabPosition.End,
-        floatingActionButton = {
-            Column(
-                modifier = Modifier.padding(end = 12.dp, bottom = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-                horizontalAlignment = Alignment.End
-            ) {
-                androidx.compose.material3.FloatingActionButton(
-                    onClick = { showDepartmentSelection = true },
-                    containerColor = AppColors.Primary
-                ) {
-                    Icon(Icons.Default.LocalHospital, contentDescription = "Request Backup", tint = Color.White)
-                }
-            }
-        }
+        floatingActionButton = {}
     ) { paddingValues ->
-        Box(modifier = Modifier.fillMaxSize().padding(paddingValues)) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .pointerInput(Unit) {
+                    detectVerticalDragGestures(
+                        onVerticalDrag = { _, dragAmount ->
+                            if (listState.firstVisibleItemIndex == 0 &&
+                                listState.firstVisibleItemScrollOffset == 0 &&
+                                dragAmount > 0
+                            ) {
+                                pullDistance += dragAmount
+                            }
+                        },
+                        onDragEnd = {
+                            if (pullDistance > 120f) {
+                                refreshHomeData()
+                                Toast.makeText(context, "Incidents refreshed", Toast.LENGTH_SHORT).show()
+                            }
+                            pullDistance = 0f
+                        }
+                    )
+                }
+        ) {
 
             if (showAlwaysLocationNotice) {
                 Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
@@ -913,7 +964,9 @@ fun HomeScreen(
                 lastNotifiedIncidentId = inc.id
                 try { prefs.edit().putString("last_notified_incident_id", inc.id).apply() } catch (_: Exception) {}
                 newIncidentMessage = "New ${inc.type.displayName} incident assigned: ${inc.location.ifBlank { "Unknown location" }}"
-                showAssignedAfterNotification = false; showNewIncidentNotification = true
+                notificationCount += 1
+                showAssignedAfterNotification = false
+                showNewIncidentNotification = true
                 delay(3000L); showNewIncidentNotification = false; showAssignedAfterNotification = true
             }
 
@@ -921,7 +974,7 @@ fun HomeScreen(
             // by an identical `remember` inside the LazyColumn item below.
             // There is now only ONE derivation, inside the item where it is used.
 
-            val listState = rememberLazyListState()
+
 
             LazyColumn(
                 state = listState,
@@ -939,7 +992,7 @@ fun HomeScreen(
                 item {
                     Card(
                         modifier = Modifier
-                            .fillMaxWidth().height(175.dp)
+                            .fillMaxWidth().height(155.dp)
                             .padding(horizontal = 12.dp, vertical = 8.dp),
                         shape = RoundedCornerShape(28.dp),
                         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
@@ -949,64 +1002,180 @@ fun HomeScreen(
                         Box(modifier = Modifier.fillMaxSize().background(HeaderBrush)) {
                             Row(modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 18.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text("Hello", color = Color.White.copy(alpha = 0.85f), fontSize = 14.sp)
-                                    Spacer(Modifier.height(6.dp))
-                                    Text(responderName.ifBlank { "Responder" }, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 24.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    Spacer(Modifier.height(6.dp))
-                                    Text("Ready for dispatch", color = Color.White.copy(alpha = 0.80f), fontSize = 12.sp)
-                                }
-                                Box(modifier = Modifier.size(64.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.18f)).padding(3.dp)) {
-                                    ResponderAvatar(
-                                        modifier = Modifier.fillMaxSize().clip(CircleShape).border(1.dp, Color.White.copy(alpha = 0.65f), CircleShape),
-                                        imageUri = responderImageUri, drawableRes = responderDrawable,
-                                        status = if (onlineStatus == ResponderOnlineStatus.Online) ResponderOnlineStatus.Online else ResponderOnlineStatus.Offline
+
+                                    Text(
+                                        "Hello",
+                                        color = Color.White.copy(alpha = 0.85f),
+                                        fontSize = 14.sp
                                     )
+
+                                    Spacer(Modifier.height(4.dp))
+
+                                    Text(
+                                        responderName.ifBlank { "Responder" },
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 28.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+
+                                    Spacer(Modifier.height(6.dp))
+
+                                    Text(
+                                        text = "${effectiveRole ?: "Responder"} • ${onlineStatus.name}",
+                                        color = Color.White.copy(alpha = 0.90f),
+                                        fontSize = 13.sp
+                                    )
+
+                                    Spacer(Modifier.height(6.dp))
+
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(8.dp)
+                                                .clip(CircleShape)
+                                                .background(gpsStatusColor)
+                                        )
+
+                                        Spacer(Modifier.width(6.dp))
+
+                                        Text(
+                                            text = gpsStatusText,
+                                            color = Color.White,
+                                            fontSize = 12.sp,
+                                            modifier = Modifier.clickable {
+                                                if (!gpsEnabled) {
+                                                    locationSettingsLauncher.launch(
+                                                        Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)
+                                                    )
+                                                } else if (!hasLocationPermission) {
+                                                    locationPermLauncher.launch(
+                                                        Manifest.permission.ACCESS_FINE_LOCATION
+                                                    )
+                                                } else {
+                                                    isLocationMonitoringEnabled = !isLocationMonitoringEnabled
+
+                                                    prefs.edit()
+                                                        .putBoolean(locationMonitoringEnabledKey, isLocationMonitoringEnabled)
+                                                        .apply()
+
+                                                    if (isLocationMonitoringEnabled) {
+                                                        startLocationUpdates()
+                                                    } else {
+                                                        stopLocationUpdates()
+                                                    }
+                                                }
+                                            }
+                                        )
+                                    }
                                 }
-                            }
-                        }
-                    }
-                }
-
-                // COUNTS
-                item {
-                    // FIX 3: Use stable top-level brush lists instead of inline Brush.* calls.
-                    // FIX 9: Static label/icon/accent lists moved to remember{} so they are not
-                    // re-allocated on every recomposition of this item.
-                    val typeLabels  = remember { listOf("Fire", "Medical", "Crime") }
-                    val typeAccents = remember { listOf(Color(0xFFE53935), Color(0xFF1E88E5), Color(0xFF6D4C41)) }
-                    val typeIcons   = remember { listOf(Icons.Default.LocalFireDepartment, Icons.Default.LocalHospital, Icons.Default.Security) }
-                    // typeCounts references derivedStateOf vars — no extra remember needed
-                    val typeCounts  = listOf(fireCount, medicalCount, crimeCount)
-
-                    Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        typeAccents.forEachIndexed { i, accent ->
-                            Card(
-                                modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(22.dp),
-                                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-                                colors = CardDefaults.cardColors(containerColor = Color.White),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, accent.copy(0.13f))
-                            ) {
-                                Column(
-                                    // FIX 3: cardBrushesStable[i] replaces inline Brush.verticalGradient
-                                    modifier = Modifier.fillMaxWidth().background(cardBrushesStable[i]).padding(horizontal = 10.dp, vertical = 14.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
-                                    Box(modifier = Modifier.size(34.dp).clip(RoundedCornerShape(10.dp)).background(accent.copy(0.12f)), contentAlignment = Alignment.Center) {
-                                        Icon(typeIcons[i], typeLabels[i], tint = accent, modifier = Modifier.size(18.dp))
+
+                                    Box(
+                                        modifier = Modifier
+                                            .size(42.dp)
+                                            .clip(CircleShape)
+                                            .background(Color.White.copy(alpha = 0.15f))
+                                            .clickable {
+                                                Toast.makeText(
+                                                    context,
+                                                    if (notificationCount > 0)
+                                                        "$notificationCount new notification(s)"
+                                                    else
+                                                        "No new notifications",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+
+                                                notificationCount = 0
+                                            },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+
+                                        Icon(
+                                            Icons.Default.Notifications,
+                                            contentDescription = "Notifications",
+                                            tint = Color.White
+                                        )
+
+                                        if (notificationCount > 0) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(18.dp)
+                                                    .align(Alignment.TopEnd)
+                                                    .offset(x = 4.dp, y = (-4).dp)
+                                                    .clip(CircleShape)
+                                                    .background(Color.Red),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    notificationCount.toString(),
+                                                    color = Color.White,
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                        }
                                     }
-                                    Text(typeCounts[i].toString(), fontWeight = FontWeight.ExtraBold, fontSize = 26.sp, color = AppColors.Text, textAlign = TextAlign.Center)
-                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                        Text(typeLabels[i], fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = AppColors.Text, textAlign = TextAlign.Center)
-                                        Text("today", fontSize = 10.sp, color = AppColors.TextSecondary, textAlign = TextAlign.Center)
+
+                                    Box(
+                                        modifier = Modifier
+                                            .size(64.dp)
+                                            .clip(CircleShape)
+                                            .background(Color.White.copy(alpha = 0.18f))
+                                            .clickable { showSettingsDialog = true }
+                                            .padding(3.dp)
+                                    ) {
+
+                                        ResponderAvatar(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .clip(CircleShape)
+                                                .border(
+                                                    1.dp,
+                                                    Color.White.copy(alpha = 0.65f),
+                                                    CircleShape
+                                                ),
+                                            imageUri = responderImageUri,
+                                            drawableRes = responderDrawable,
+                                            status = if (onlineStatus == ResponderOnlineStatus.Online)
+                                                ResponderOnlineStatus.Online
+                                            else
+                                                ResponderOnlineStatus.Offline,
+                                            contentDescription = "Open account settings"
+                                        )
+
+                                        Box(
+                                            modifier = Modifier
+                                                .size(20.dp)
+                                                .align(Alignment.BottomEnd)
+                                                .clip(CircleShape)
+                                                .background(Color(0xFF1976D2))
+                                                .border(
+                                                    1.dp,
+                                                    Color.White,
+                                                    CircleShape
+                                                ),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                "⚙",
+                                                color = Color.White,
+                                                fontSize = 10.sp
+                                            )
+                                        }
                                     }
-                                    // FIX 3: barBrushesStable[i] replaces inline Brush.horizontalGradient
-                                    Box(modifier = Modifier.height(3.dp).fillMaxWidth(0.55f).clip(RoundedCornerShape(999.dp)).background(barBrushesStable[i]))
                                 }
                             }
                         }
                     }
                 }
+
 
                 item { Spacer(Modifier.height(4.dp)) }
 
@@ -1029,7 +1198,7 @@ fun HomeScreen(
                                 Column(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(24.dp),
+                                        .padding(14.dp),
                                     horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
                                     Row(
@@ -1051,19 +1220,8 @@ fun HomeScreen(
                                         )
                                     }
 
-                                    Spacer(modifier = Modifier.height(16.dp))
-
-                                    Icon(
-                                        imageVector = Icons.Default.Done,
-                                        contentDescription = null,
-                                        tint = Color(0xFF4CAF50),
-                                        modifier = Modifier.size(48.dp)
-                                    )
-
-                                    Spacer(modifier = Modifier.height(12.dp))
-
                                     Text(
-                                        text = "You are currently available for dispatch. New incidents assigned to your department will appear here.",
+                                        text = "No active assignment. Waiting for dispatch center.",
                                         textAlign = TextAlign.Center,
                                         color = Color.Gray,
                                         fontSize = 13.sp
@@ -1078,7 +1236,7 @@ fun HomeScreen(
                                 val priorityColor = when (inc.priority) { IncidentPriority.HIGH -> Color(0xFFD32F2F); IncidentPriority.MEDIUM -> Color(0xFFFFA000); IncidentPriority.LOW -> Color(0xFFFFEB3B) }
                                 Card(
                                     modifier = Modifier.fillMaxWidth(),
-                                    shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Color.White),
+                                    shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = Color.White),
                                     elevation = CardDefaults.cardElevation(0.dp),
                                     border = androidx.compose.foundation.BorderStroke(1.dp, AppColors.Border)
                                 ) {
@@ -1124,6 +1282,28 @@ fun HomeScreen(
                                 }
                             }
                         }
+                        OutlinedButton(
+                            onClick = { showDepartmentSelection = true },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(14.dp),
+                            border = BorderStroke(1.dp, AppColors.Primary.copy(alpha = 0.45f)),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = AppColors.Primary
+                            )
+                        ) {
+                            Icon(
+                                Icons.Default.LocalHospital,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+
+                            Spacer(Modifier.width(8.dp))
+
+                            Text(
+                                "Request Backup",
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
                     }
                 }
 
@@ -1134,7 +1314,12 @@ fun HomeScreen(
                     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("Active Incidents", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                            Text("Sorted by priority", color = AppColors.TextSecondary, fontSize = 12.sp)
+                            Text(
+                                "Live updates",
+                                color = AppColors.Primary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
                         }
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             @Composable
@@ -1226,17 +1411,90 @@ fun HomeScreen(
                                                 Box(modifier = Modifier.width(6.dp).height(54.dp).clip(RoundedCornerShape(999.dp)).background(accent.copy(0.9f)))
                                                 Spacer(Modifier.width(12.dp))
                                                 Column(modifier = Modifier.weight(1f)) {
-                                                    Text(inc.type.displayName, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = AppColors.Text)
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        val incidentIcon = when (inc.type) {
+                                                            IncidentType.FIRE -> Icons.Default.LocalFireDepartment
+                                                            IncidentType.MEDICAL -> Icons.Default.LocalHospital
+                                                            IncidentType.CRIME -> Icons.Default.Security
+                                                            IncidentType.DISASTER -> Icons.Default.Warning
+                                                        }
+
+                                                        Icon(
+                                                            imageVector = incidentIcon,
+                                                            contentDescription = inc.type.displayName,
+                                                            tint = accent,
+                                                            modifier = Modifier.size(18.dp)
+                                                        )
+
+                                                        Spacer(Modifier.width(6.dp))
+
+                                                        Text(
+                                                            inc.type.displayName,
+                                                            fontWeight = FontWeight.SemiBold,
+                                                            fontSize = 16.sp,
+                                                            color = AppColors.Text
+                                                        )
+                                                    }
                                                     Spacer(Modifier.height(4.dp))
                                                     Text(inc.location.ifBlank { "Unknown location" }, fontSize = 13.sp, color = AppColors.TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                                 }
-                                                Box(modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(priorityColor.copy(0.12f)).border(1.dp, priorityColor.copy(0.55f), RoundedCornerShape(999.dp)).padding(horizontal = 10.dp, vertical = 6.dp)) {
-                                                    Text(inc.priority.name, color = priorityColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+
+                                                    val isNewIncident =
+                                                        (System.currentTimeMillis() - inc.timeReported.time) < 300000
+
+                                                    if (isNewIncident) {
+
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .clip(RoundedCornerShape(999.dp))
+                                                                .background(Color(0xFF4CAF50))
+                                                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                                                        ) {
+                                                            Text(
+                                                                "NEW",
+                                                                color = Color.White,
+                                                                fontSize = 10.sp,
+                                                                fontWeight = FontWeight.Bold
+                                                            )
+                                                        }
+                                                    }
+
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .clip(RoundedCornerShape(999.dp))
+                                                            .background(priorityColor.copy(0.12f))
+                                                            .border(
+                                                                1.dp,
+                                                                priorityColor.copy(0.55f),
+                                                                RoundedCornerShape(999.dp)
+                                                            )
+                                                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                                                    ) {
+                                                        Text(
+                                                            inc.priority.name.uppercase(),
+                                                            color = priorityColor,
+                                                            fontSize = 11.sp,
+                                                            fontWeight = FontWeight.Bold
+                                                        )
+                                                    }
                                                 }
                                             }
-                                            Text(timeAgoLabel(inc.timeReported), fontSize = 12.sp, color = AppColors.TextSecondary)
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text("Reported ${timeAgoLabel(inc.timeReported)}", fontSize = 12.sp, color = AppColors.TextSecondary)
+                                            }
                                             Text(inc.description, fontSize = 13.sp, color = AppColors.Text.copy(0.85f), maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                            Text("Tap to view", color = AppColors.Primary, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                                            Text(
+                                                "View details",
+                                                color = AppColors.Primary,
+                                                fontWeight = FontWeight.SemiBold,
+                                                fontSize = 12.sp
+                                            )
                                         }
                                     }
                                 }
@@ -1245,12 +1503,93 @@ fun HomeScreen(
                     }
                 }
 
-                // SETTINGS BUTTON
+                item { Spacer(Modifier.height(12.dp)) }
+
+                // COUNTS
                 item {
-                    OutlinedButton(onClick = { showSettingsDialog = true }, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), shape = RoundedCornerShape(12.dp)) { Text("Settings") }
-                    Spacer(Modifier.height(2.dp))
+                    // FIX 3: Use stable top-level brush lists instead of inline Brush.* calls.
+                    // FIX 9: Static label/icon/accent lists moved to remember{} so they are not
+                    // re-allocated on every recomposition of this item.
+                    val typeLabels  = remember { listOf("Fire", "Medical", "Crime") }
+                    val typeAccents = remember { listOf(Color(0xFFE53935), Color(0xFF1E88E5), Color(0xFF6D4C41)) }
+                    val typeIcons   = remember { listOf(Icons.Default.LocalFireDepartment, Icons.Default.LocalHospital, Icons.Default.Security) }
+                    // typeCounts references derivedStateOf vars — no extra remember needed
+                    val typeCounts  = listOf(fireCount, medicalCount, crimeCount)
+
+                    Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        typeAccents.forEachIndexed { i, accent ->
+                            Card(
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(22.dp),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color.White),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, accent.copy(0.13f))
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(cardBrushesStable[i])
+                                        .padding(horizontal = 10.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(30.dp)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(accent.copy(0.12f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            typeIcons[i],
+                                            typeLabels[i],
+                                            tint = accent,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+
+                                    Spacer(Modifier.width(8.dp))
+
+                                    Column {
+                                        Text(
+                                            typeCounts[i].toString(),
+                                            fontWeight = FontWeight.ExtraBold,
+                                            fontSize = 20.sp,
+                                            color = AppColors.Text
+                                        )
+
+                                        Text(
+                                            typeLabels[i],
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = AppColors.TextSecondary
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             } // end LazyColumn
+
+            if (pullDistance > 20f || isRefreshing) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 12.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(Color.White)
+                        .border(1.dp, AppColors.Border, RoundedCornerShape(999.dp))
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        text = if (isRefreshing) "Refreshing..." else "Release to refresh",
+                        color = AppColors.Primary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
 
             // ── ALL ACTIVE DIALOG ──
             if (showAllActiveDialog) {
