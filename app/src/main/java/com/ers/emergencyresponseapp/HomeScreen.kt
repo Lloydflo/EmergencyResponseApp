@@ -645,14 +645,21 @@ fun HomeScreen(
                     (now - inc.timeReported.time) <= cap
         }
     }
+    val scope = rememberCoroutineScope()
     fun refreshActiveIncidents() { activeIncidents = filterActive(incidentsList) }
     fun refreshHomeData() {
-        isRefreshing = true
+        if (isRefreshing) return
 
-        loadIncidents()
-        refreshActiveIncidents()
+        scope.launch {
+            isRefreshing = true
 
-        isRefreshing = false
+            delay(900)
+
+            loadIncidents()
+            refreshActiveIncidents()
+
+            isRefreshing = false
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -831,7 +838,7 @@ fun HomeScreen(
         else Toast.makeText(context, "Location permission denied", Toast.LENGTH_SHORT).show()
     }
 
-    val scope = rememberCoroutineScope()
+
 
     fun sendBackupRequest(request: BackupRequest) {
         val deptName = when (request.department.shortCode) {
@@ -1315,10 +1322,14 @@ fun HomeScreen(
                         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("Active Incidents", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                             Text(
-                                "Live updates",
+                                text = if (isRefreshing) "Refreshing..." else "Live updates",
                                 color = AppColors.Primary,
                                 fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.clickable {
+                                    refreshHomeData()
+                                    Toast.makeText(context, "Refreshing incidents...", Toast.LENGTH_SHORT).show()
+                                }
                             )
                         }
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1379,7 +1390,34 @@ fun HomeScreen(
                         }
                     } else if (activeListVisible.isEmpty()) {
                         Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), elevation = CardDefaults.cardElevation(0.dp), shape = RoundedCornerShape(14.dp)) {
-                            Column(modifier = Modifier.padding(16.dp)) { Text("No active incidents") }
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(24.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Icon(
+                                    Icons.Default.Done,
+                                    contentDescription = null,
+                                    tint = AppColors.Primary,
+                                    modifier = Modifier.size(34.dp)
+                                )
+
+                                Spacer(Modifier.height(8.dp))
+
+                                Text(
+                                    "No active incidents",
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = AppColors.Text
+                                )
+
+                                Text(
+                                    "New emergency reports will appear here.",
+                                    fontSize = 12.sp,
+                                    color = AppColors.TextSecondary,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
                         }
                     } else {
                         Card(
@@ -1576,14 +1614,18 @@ fun HomeScreen(
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
-                        .padding(top = 12.dp)
+                        .padding(top = (12 + (pullDistance / 8).toInt().coerceAtMost(24)).dp)
                         .clip(RoundedCornerShape(999.dp))
                         .background(Color.White)
                         .border(1.dp, AppColors.Border, RoundedCornerShape(999.dp))
                         .padding(horizontal = 14.dp, vertical = 8.dp)
                 ) {
                     Text(
-                        text = if (isRefreshing) "Refreshing..." else "Release to refresh",
+                        text = when {
+                            isRefreshing -> "Refreshing..."
+                            pullDistance > 70f -> "Release to refresh"
+                            else -> "Pull to refresh"
+                        },
                         color = AppColors.Primary,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold
