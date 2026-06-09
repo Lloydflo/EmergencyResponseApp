@@ -126,8 +126,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.material.icons.filled.Refresh
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -392,93 +391,198 @@ private fun AssignedActionButtons(
     val showSceneLabel = remember(inc.id to "scene") { mutableStateOf(false) }
     val showMarkLabel  = remember(inc.id to "mark")  { mutableStateOf(false) }
 
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.End
+    ) {
+        Column {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
 
-            // NAVIGATE
-            OutlinedButton(
-                onClick = {
-                    context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
-                        .edit().putString("last_nav_incident_id", inc.id).apply()
-                    setOnSceneEnabled(false)
-                    setNavTarget(inc.id, inc.latitude, inc.longitude)
-                    startRouteUpdateMonitoring(context, inc.id, inc.latitude, inc.longitude, inc.location)
-                    navigateToLocation(inc.latitude, inc.longitude, inc.location)
-                    if (currentLatitude != null && currentLongitude != null && inc.latitude != null && inc.longitude != null) {
-                        RouteHistoryStore.startRoute(context, inc.id, currentLatitude, currentLongitude, inc.latitude, inc.longitude)
-                    }
-                    if (inc.latitude != null && inc.longitude != null) {
-                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-                            startOnSceneTracking()
-                        } else {
-                            requestOnScenePermission()
-                        }
-                    }
-                },
-                // FIX 6: Removed the redundant inner combinedClickable wrapping an empty onClick.
-                // The OutlinedButton already handles click; combinedClickable here only adds
-                // a second gesture detector that competed with the button's own ripple.
-                // Long-press is wired directly to the button's modifier instead.
-                modifier = Modifier.size(42.dp).combinedClickable(
+                // NAVIGATE
+                OutlinedButton(
                     onClick = {
                         context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
                             .edit().putString("last_nav_incident_id", inc.id).apply()
                         setOnSceneEnabled(false)
                         setNavTarget(inc.id, inc.latitude, inc.longitude)
-                        startRouteUpdateMonitoring(context, inc.id, inc.latitude, inc.longitude, inc.location)
+                        startRouteUpdateMonitoring(
+                            context,
+                            inc.id,
+                            inc.latitude,
+                            inc.longitude,
+                            inc.location
+                        )
                         navigateToLocation(inc.latitude, inc.longitude, inc.location)
                         if (currentLatitude != null && currentLongitude != null && inc.latitude != null && inc.longitude != null) {
-                            RouteHistoryStore.startRoute(context, inc.id, currentLatitude, currentLongitude, inc.latitude, inc.longitude)
+                            RouteHistoryStore.startRoute(
+                                context,
+                                inc.id,
+                                currentLatitude,
+                                currentLongitude,
+                                inc.latitude,
+                                inc.longitude
+                            )
                         }
                         if (inc.latitude != null && inc.longitude != null) {
-                            if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+                            if (ContextCompat.checkSelfPermission(
+                                    context,
+                                    Manifest.permission.ACCESS_FINE_LOCATION
+                                ) == PackageManager.PERMISSION_GRANTED
+                            ) {
                                 startOnSceneTracking()
                             } else {
                                 requestOnScenePermission()
                             }
                         }
                     },
-                    onLongClick = {
-                        showNavLabel.value = true
-                        buttonScope.launch { delay(900); showNavLabel.value = false }
-                    }
-                ),
-                shape = RoundedCornerShape(12.dp),
-                contentPadding = PaddingValues(0.dp)
-            ) { Icon(Icons.Default.LocationOn, contentDescription = "Navigate", modifier = Modifier.size(20.dp)) }
+                    // FIX 6: Removed the redundant inner combinedClickable wrapping an empty onClick.
+                    // The OutlinedButton already handles click; combinedClickable here only adds
+                    // a second gesture detector that competed with the button's own ripple.
+                    // Long-press is wired directly to the button's modifier instead.
+                    modifier = Modifier.size(42.dp).combinedClickable(
+                        onClick = {
+                            context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
+                                .edit().putString("last_nav_incident_id", inc.id).apply()
+                            setOnSceneEnabled(false)
+                            setNavTarget(inc.id, inc.latitude, inc.longitude)
+                            startRouteUpdateMonitoring(
+                                context,
+                                inc.id,
+                                inc.latitude,
+                                inc.longitude,
+                                inc.location
+                            )
+                            navigateToLocation(inc.latitude, inc.longitude, inc.location)
+                            if (currentLatitude != null && currentLongitude != null && inc.latitude != null && inc.longitude != null) {
+                                RouteHistoryStore.startRoute(
+                                    context,
+                                    inc.id,
+                                    currentLatitude,
+                                    currentLongitude,
+                                    inc.latitude,
+                                    inc.longitude
+                                )
+                            }
+                            if (inc.latitude != null && inc.longitude != null) {
+                                if (ContextCompat.checkSelfPermission(
+                                        context,
+                                        Manifest.permission.ACCESS_FINE_LOCATION
+                                    ) == PackageManager.PERMISSION_GRANTED
+                                ) {
+                                    startOnSceneTracking()
+                                } else {
+                                    requestOnScenePermission()
+                                }
+                            }
+                        },
+                        onLongClick = {
+                            showNavLabel.value = true
+                            buttonScope.launch { delay(900); showNavLabel.value = false }
+                        }
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(0.dp)
+                ) {
+                    Icon(
+                        Icons.Default.LocationOn,
+                        contentDescription = "Navigate",
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
 
-            // ON-SCENE
-            OutlinedButton(
-                onClick = { sendOnSceneReport(inc) },
-                enabled = onSceneEnabled,
-                modifier = Modifier.size(42.dp).combinedClickable(
-                    onClick = { if (onSceneEnabled) sendOnSceneReport(inc) },
-                    onLongClick = {
-                        showSceneLabel.value = true
-                        buttonScope.launch { delay(900); showSceneLabel.value = false }
-                    }
-                ),
-                shape = RoundedCornerShape(12.dp),
-                contentPadding = PaddingValues(0.dp)
-            ) { Icon(Icons.Default.MyLocation, contentDescription = "On Scene", modifier = Modifier.size(20.dp)) }
+                // ON-SCENE
+                OutlinedButton(
+                    onClick = { sendOnSceneReport(inc) },
+                    enabled = onSceneEnabled,
+                    modifier = Modifier.size(42.dp).combinedClickable(
+                        onClick = { if (onSceneEnabled) sendOnSceneReport(inc) },
+                        onLongClick = {
+                            showSceneLabel.value = true
+                            buttonScope.launch { delay(900); showSceneLabel.value = false }
+                        }
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(0.dp)
+                ) {
+                    Icon(
+                        Icons.Default.MyLocation,
+                        contentDescription = "On Scene",
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
 
-            // MARK DONE
-            Button(
-                onClick = { openMarkDone(inc) },
-                modifier = Modifier.size(42.dp).combinedClickable(
+                // MARK DONE
+                Button(
                     onClick = { openMarkDone(inc) },
-                    onLongClick = {
-                        showMarkLabel.value = true
-                        buttonScope.launch { delay(900); showMarkLabel.value = false }
-                    }
-                ),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32), contentColor = Color.White),
-                shape = RoundedCornerShape(12.dp),
-                contentPadding = PaddingValues(0.dp)
-            ) { Icon(Icons.Default.Done, contentDescription = "Mark Done", modifier = Modifier.size(20.dp)) }
+                    modifier = Modifier.size(42.dp).combinedClickable(
+                        onClick = { openMarkDone(inc) },
+                        onLongClick = {
+                            showMarkLabel.value = true
+                            buttonScope.launch { delay(900); showMarkLabel.value = false }
+                        }
+                    ),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF2E7D32),
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(0.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Done,
+                        contentDescription = "Mark Done",
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(4.dp))
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+
+            Box(
+                modifier = Modifier.size(42.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "Nav",
+                    fontSize = 10.sp,
+                    color = AppColors.TextSecondary
+                )
+            }
+
+            Box(
+                modifier = Modifier.size(42.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "Scene",
+                    fontSize = 10.sp,
+                    color = AppColors.TextSecondary
+                )
+            }
+
+            Box(
+                modifier = Modifier.size(42.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "Done",
+                    fontSize = 10.sp,
+                    color = AppColors.TextSecondary
+                )
+            }
         }
     }
 }
+
+
+
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -539,9 +643,7 @@ fun HomeScreen(
     val context = LocalContext.current
     var isLocationMonitoringEnabled by remember { mutableStateOf(false) }
 
-    val locationSettingsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        isLocationMonitoringEnabled = isDeviceLocationEnabled(context)
-    }
+
 
     val storedPrefs      = context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
     val storedDepartment = storedPrefs.getString("department", null)
@@ -633,7 +735,7 @@ fun HomeScreen(
     var activeIncidents by remember { mutableStateOf(listOf<Incident>()) }
     var isLoading by remember { mutableStateOf(true) }
     var isRefreshing by remember { mutableStateOf(false) }
-    var pullDistance by remember { mutableStateOf(0f) }
+    var showNotificationsDialog by remember { mutableStateOf(false) }
 
 
     fun loadIncidents()          { incidentsList = IncidentStore.incidents.toList() }
@@ -652,11 +754,11 @@ fun HomeScreen(
 
         scope.launch {
             isRefreshing = true
+            delay(700)
 
-            delay(900)
-
-            loadIncidents()
-            refreshActiveIncidents()
+            val freshList = IncidentStore.incidents.toList()
+            incidentsList = freshList
+            activeIncidents = filterActive(freshList)
 
             isRefreshing = false
         }
@@ -721,6 +823,28 @@ fun HomeScreen(
                 Location.distanceBetween(current.latitude, current.longitude, destLat, destLng, res)
                 onSceneEnabledMap[destId] = res[0] <= 20f
             }
+        }
+    }
+    var deviceLocationEnabled by remember {
+        mutableStateOf(isDeviceLocationEnabled(context))
+    }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            val enabledNow = isDeviceLocationEnabled(context)
+
+            deviceLocationEnabled = enabledNow
+
+            if (!enabledNow) {
+                isLocationMonitoringEnabled = false
+                isLocationShared = false
+
+                prefs.edit()
+                    .putBoolean(locationMonitoringEnabledKey, false)
+                    .apply()
+            }
+
+            delay(1000)
         }
     }
 
@@ -815,6 +939,29 @@ fun HomeScreen(
         Toast.makeText(context, if (granted) "Always-on location enabled" else "Please enable 'Allow all the time' in App settings", if (granted) Toast.LENGTH_SHORT else Toast.LENGTH_LONG).show()
     }
 
+    val locationSettingsLauncher =
+        rememberLauncherForActivityResult(
+            ActivityResultContracts.StartActivityForResult()
+        ) {
+
+            deviceLocationEnabled =
+                isDeviceLocationEnabled(context)
+
+            if (deviceLocationEnabled && hasLocationPermission) {
+
+                showAlwaysLocationNotice = false
+
+                isLocationMonitoringEnabled = true
+                isLocationShared = true
+
+                prefs.edit()
+                    .putBoolean(locationMonitoringEnabledKey, true)
+                    .apply()
+
+                startLocationUpdates()
+            }
+        }
+
     val locationPermLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) {
             hasLocationPermission = true
@@ -868,7 +1015,7 @@ fun HomeScreen(
         }
     }
 
-    val gpsEnabled = isDeviceLocationEnabled(context)
+    val gpsEnabled = deviceLocationEnabled
 
     val gpsStatusText = when {
         gpsEnabled && hasLocationPermission && isLocationMonitoringEnabled -> "GPS Active"
@@ -895,39 +1042,73 @@ fun HomeScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .pointerInput(Unit) {
-                    detectVerticalDragGestures(
-                        onVerticalDrag = { _, dragAmount ->
-                            if (listState.firstVisibleItemIndex == 0 &&
-                                listState.firstVisibleItemScrollOffset == 0 &&
-                                dragAmount > 0
-                            ) {
-                                pullDistance += dragAmount
-                            }
-                        },
-                        onDragEnd = {
-                            if (pullDistance > 120f) {
-                                refreshHomeData()
-                                Toast.makeText(context, "Incidents refreshed", Toast.LENGTH_SHORT).show()
-                            }
-                            pullDistance = 0f
-                        }
-                    )
-                }
         ) {
 
             if (showAlwaysLocationNotice) {
                 Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
-                    Card(modifier = Modifier.fillMaxWidth(0.96f).padding(vertical = 8.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)) {
-                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text("Allow location all the time", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                            Text("For faster dispatch and safer tracking, set location access to 'Allow all the time'.", style = MaterialTheme.typography.bodySmall)
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                OutlinedButton(onClick = { showAlwaysLocationNotice = false }) { Text("Later") }
-                                Button(onClick = {
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)))
-                                    else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) backgroundLocationPermLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
-                                }) { Text("Open settings") }
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color(0xFFFFEEF3)
+                        ),
+                        border = BorderStroke(
+                            1.dp,
+                            Color(0xFFFFC2D1)
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(
+                                    "Enable background location",
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 13.sp,
+                                    color = AppColors.Text
+                                )
+
+                                Text(
+                                    "Recommended for safer tracking.",
+                                    fontSize = 11.sp,
+                                    color = AppColors.TextSecondary
+                                )
+                            }
+
+                            TextButton(
+                                onClick = { showAlwaysLocationNotice = false }
+                            ) {
+                                Text("Later")
+                            }
+
+                            Button(
+                                onClick = {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                        context.startActivity(
+                                            Intent(
+                                                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                                Uri.fromParts("package", context.packageName, null)
+                                            )
+                                        )
+                                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                        backgroundLocationPermLauncher.launch(
+                                            Manifest.permission.ACCESS_BACKGROUND_LOCATION
+                                        )
+                                    }
+                                },
+                                shape = RoundedCornerShape(999.dp)
+                            ) {
+                                Text(
+                                    "Open",
+                                    fontSize = 12.sp
+                                )
                             }
                         }
                     }
@@ -989,7 +1170,7 @@ fun HomeScreen(
                     .fillMaxSize()
                     .windowInsetsPadding(WindowInsets.navigationBars),
                 contentPadding = PaddingValues(
-                    top = if (showAlwaysLocationNotice) 132.dp else 0.dp,
+                    top = if (showAlwaysLocationNotice) 76.dp else 0.dp,
                     bottom = 10.dp
                 ),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -1050,29 +1231,60 @@ fun HomeScreen(
                                         Spacer(Modifier.width(6.dp))
 
                                         Text(
-                                            text = gpsStatusText,
+                                            text = when {
+                                                !gpsEnabled -> "GPS Disabled • Tap to open settings"
+                                                !hasLocationPermission -> "GPS Permission Needed"
+                                                isLocationMonitoringEnabled -> "GPS Active • Tap to disable"
+                                                else -> "GPS Available • Tap to enable"
+                                            },
                                             color = Color.White,
                                             fontSize = 12.sp,
                                             modifier = Modifier.clickable {
-                                                if (!gpsEnabled) {
-                                                    locationSettingsLauncher.launch(
-                                                        Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)
-                                                    )
-                                                } else if (!hasLocationPermission) {
-                                                    locationPermLauncher.launch(
-                                                        Manifest.permission.ACCESS_FINE_LOCATION
-                                                    )
-                                                } else {
-                                                    isLocationMonitoringEnabled = !isLocationMonitoringEnabled
+                                                when {
+                                                    !gpsEnabled -> {
+                                                        locationSettingsLauncher.launch(
+                                                            Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)
+                                                        )
+                                                    }
 
-                                                    prefs.edit()
-                                                        .putBoolean(locationMonitoringEnabledKey, isLocationMonitoringEnabled)
-                                                        .apply()
+                                                    !hasLocationPermission -> {
+                                                        locationPermLauncher.launch(
+                                                            Manifest.permission.ACCESS_FINE_LOCATION
+                                                        )
+                                                    }
 
-                                                    if (isLocationMonitoringEnabled) {
-                                                        startLocationUpdates()
-                                                    } else {
+                                                    isLocationMonitoringEnabled -> {
+                                                        isLocationMonitoringEnabled = false
+                                                        isLocationShared = false
+
+                                                        prefs.edit()
+                                                            .putBoolean(locationMonitoringEnabledKey, false)
+                                                            .apply()
+
                                                         stopLocationUpdates()
+
+                                                        Toast.makeText(
+                                                            context,
+                                                            "GPS monitoring disabled",
+                                                            Toast.LENGTH_SHORT
+                                                        ).show()
+                                                    }
+
+                                                    else -> {
+                                                        isLocationMonitoringEnabled = true
+                                                        isLocationShared = true
+
+                                                        prefs.edit()
+                                                            .putBoolean(locationMonitoringEnabledKey, true)
+                                                            .apply()
+
+                                                        startLocationUpdates()
+
+                                                        Toast.makeText(
+                                                            context,
+                                                            "GPS monitoring enabled",
+                                                            Toast.LENGTH_SHORT
+                                                        ).show()
                                                     }
                                                 }
                                             }
@@ -1083,91 +1295,64 @@ fun HomeScreen(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
-
                                     Box(
                                         modifier = Modifier
                                             .size(42.dp)
                                             .clip(CircleShape)
                                             .background(Color.White.copy(alpha = 0.15f))
                                             .clickable {
-                                                Toast.makeText(
-                                                    context,
-                                                    if (notificationCount > 0)
-                                                        "$notificationCount new notification(s)"
-                                                    else
-                                                        "No new notifications",
-                                                    Toast.LENGTH_SHORT
-                                                ).show()
+                                                showNotificationsDialog = true
 
                                                 notificationCount = 0
                                             },
                                         contentAlignment = Alignment.Center
                                     ) {
-
                                         Icon(
                                             Icons.Default.Notifications,
                                             contentDescription = "Notifications",
                                             tint = Color.White
                                         )
-
-                                        if (notificationCount > 0) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(18.dp)
-                                                    .align(Alignment.TopEnd)
-                                                    .offset(x = 4.dp, y = (-4).dp)
-                                                    .clip(CircleShape)
-                                                    .background(Color.Red),
-                                                contentAlignment = Alignment.Center
-                                            ) {
-                                                Text(
-                                                    notificationCount.toString(),
-                                                    color = Color.White,
-                                                    fontSize = 9.sp,
-                                                    fontWeight = FontWeight.Bold
-                                                )
-                                            }
-                                        }
                                     }
 
                                     Box(
-                                        modifier = Modifier
-                                            .size(64.dp)
-                                            .clip(CircleShape)
-                                            .background(Color.White.copy(alpha = 0.18f))
-                                            .clickable { showSettingsDialog = true }
-                                            .padding(3.dp)
+                                        modifier = Modifier.size(70.dp),
+                                        contentAlignment = Alignment.Center
                                     ) {
-
-                                        ResponderAvatar(
+                                        Box(
                                             modifier = Modifier
-                                                .fillMaxSize()
+                                                .size(64.dp)
                                                 .clip(CircleShape)
-                                                .border(
-                                                    1.dp,
-                                                    Color.White.copy(alpha = 0.65f),
-                                                    CircleShape
-                                                ),
-                                            imageUri = responderImageUri,
-                                            drawableRes = responderDrawable,
-                                            status = if (onlineStatus == ResponderOnlineStatus.Online)
-                                                ResponderOnlineStatus.Online
-                                            else
-                                                ResponderOnlineStatus.Offline,
-                                            contentDescription = "Open account settings"
-                                        )
+                                                .background(Color.White.copy(alpha = 0.18f))
+                                                .clickable { showSettingsDialog = true }
+                                                .padding(3.dp)
+                                        ) {
+                                            ResponderAvatar(
+                                                modifier = Modifier
+                                                    .fillMaxSize()
+                                                    .clip(CircleShape)
+                                                    .border(
+                                                        1.dp,
+                                                        Color.White.copy(alpha = 0.65f),
+                                                        CircleShape
+                                                    ),
+                                                imageUri = responderImageUri,
+                                                drawableRes = responderDrawable,
+                                                status = if (onlineStatus == ResponderOnlineStatus.Online)
+                                                    ResponderOnlineStatus.Online
+                                                else
+                                                    ResponderOnlineStatus.Offline,
+                                                contentDescription = "Open account settings"
+                                            )
+                                        }
 
                                         Box(
                                             modifier = Modifier
-                                                .size(20.dp)
+                                                .size(22.dp)
                                                 .align(Alignment.BottomEnd)
+                                                .offset(x = 1.dp, y = 1.dp)
                                                 .clip(CircleShape)
                                                 .background(Color(0xFF1976D2))
-                                                .border(
-                                                    1.dp,
-                                                    Color.White,
-                                                    CircleShape
-                                                ),
+                                                .border(1.dp, Color.White, CircleShape),
                                             contentAlignment = Alignment.Center
                                         ) {
                                             Text(
@@ -1321,16 +1506,29 @@ fun HomeScreen(
                     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("Active Incidents", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                            Text(
-                                text = if (isRefreshing) "Refreshing..." else "Live updates",
-                                color = AppColors.Primary,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold,
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier.clickable {
                                     refreshHomeData()
                                     Toast.makeText(context, "Refreshing incidents...", Toast.LENGTH_SHORT).show()
                                 }
-                            )
+                            ) {
+                                Icon(
+                                    Icons.Default.Refresh,
+                                    contentDescription = "Refresh incidents",
+                                    tint = AppColors.Primary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+
+                                Spacer(Modifier.width(4.dp))
+
+                                Text(
+                                    text = if (isRefreshing) "Refreshing..." else "Refresh",
+                                    color = AppColors.Primary,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
                         }
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             @Composable
@@ -1610,28 +1808,6 @@ fun HomeScreen(
                 }
             } // end LazyColumn
 
-            if (pullDistance > 20f || isRefreshing) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .padding(top = (12 + (pullDistance / 8).toInt().coerceAtMost(24)).dp)
-                        .clip(RoundedCornerShape(999.dp))
-                        .background(Color.White)
-                        .border(1.dp, AppColors.Border, RoundedCornerShape(999.dp))
-                        .padding(horizontal = 14.dp, vertical = 8.dp)
-                ) {
-                    Text(
-                        text = when {
-                            isRefreshing -> "Refreshing..."
-                            pullDistance > 70f -> "Release to refresh"
-                            else -> "Pull to refresh"
-                        },
-                        color = AppColors.Primary,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-            }
 
             // ── ALL ACTIVE DIALOG ──
             if (showAllActiveDialog) {
@@ -1707,21 +1883,223 @@ fun HomeScreen(
                 )
             }
 
+            if (showNotificationsDialog) {
+                AlertDialog(
+                    onDismissRequest = { showNotificationsDialog = false },
+                    title = { Text("Notifications") },
+                    text = {
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text("• New incidents will appear here.")
+                            Text("• Backup request updates will appear here.")
+                            Text("• GPS and dispatch alerts will appear here.")
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = { showNotificationsDialog = false }
+                        ) {
+                            Text("Close")
+                        }
+                    }
+                )
+            }
+
             // ── ACTIVE DETAILS SHEET ──
             if (showActiveDetailsSheet && selectedActiveIncident != null) {
                 val inc = selectedActiveIncident!!
-                ModalBottomSheet(onDismissRequest = { showActiveDetailsSheet = false; selectedActiveIncident = null }, sheetState = sheetState) {
-                    Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(inc.type.displayName, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                        Text(inc.location.ifBlank { "Unknown location" }, color = AppColors.TextSecondary)
-                        HorizontalDivider()
-                        Text("Description", fontWeight = FontWeight.SemiBold)
-                        Text(inc.description.ifBlank { "No description" }, color = AppColors.Text.copy(0.9f))
-                        HorizontalDivider()
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            OutlinedButton(onClick = { navigateToLocation(inc.latitude, inc.longitude, inc.location) }, modifier = Modifier.weight(1f)) { Text("Navigate") }
-                            Button(onClick = { showActiveDetailsSheet = false; selectedActiveIncident = null }, modifier = Modifier.weight(1f)) { Text("Close") }
+
+                val accent = when (inc.type) {
+                    IncidentType.FIRE -> Color(0xFFE53935)
+                    IncidentType.MEDICAL -> Color(0xFF1E88E5)
+                    IncidentType.CRIME -> Color(0xFF6D4C41)
+                    IncidentType.DISASTER -> Color(0xFF8E24AA)
+                }
+
+                val incidentIcon = when (inc.type) {
+                    IncidentType.FIRE -> Icons.Default.LocalFireDepartment
+                    IncidentType.MEDICAL -> Icons.Default.LocalHospital
+                    IncidentType.CRIME -> Icons.Default.Security
+                    IncidentType.DISASTER -> Icons.Default.Warning
+                }
+
+                val priorityColor = when (inc.priority) {
+                    IncidentPriority.HIGH -> Color(0xFFD32F2F)
+                    IncidentPriority.MEDIUM -> Color(0xFFFFA000)
+                    IncidentPriority.LOW -> Color(0xFF388E3C)
+                }
+
+                ModalBottomSheet(
+                    onDismissRequest = {
+                        showActiveDetailsSheet = false
+                        selectedActiveIncident = null
+                    },
+                    sheetState = sheetState
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(46.dp)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(accent.copy(alpha = 0.12f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    incidentIcon,
+                                    contentDescription = null,
+                                    tint = accent,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+
+                            Spacer(Modifier.width(12.dp))
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "${inc.type.displayName} Incident",
+                                    fontSize = 22.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = AppColors.Text
+                                )
+
+                                Text(
+                                    "Reported ${timeAgoLabel(inc.timeReported)}",
+                                    fontSize = 12.sp,
+                                    color = AppColors.TextSecondary
+                                )
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(priorityColor.copy(alpha = 0.12f))
+                                    .border(
+                                        1.dp,
+                                        priorityColor.copy(alpha = 0.55f),
+                                        RoundedCornerShape(999.dp)
+                                    )
+                                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    inc.priority.name.uppercase(),
+                                    color = priorityColor,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
                         }
+
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = Color(0xFFF7F7F7)
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    "Location",
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = AppColors.Text
+                                )
+
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        Icons.Default.LocationOn,
+                                        contentDescription = null,
+                                        tint = AppColors.Primary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+
+                                    Spacer(Modifier.width(6.dp))
+
+                                    Text(
+                                        inc.location.ifBlank { "Unknown location" },
+                                        color = AppColors.TextSecondary
+                                    )
+                                }
+                            }
+                        }
+
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = Color(0xFFF7F7F7)
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    "Description",
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = AppColors.Text
+                                )
+
+                                Text(
+                                    inc.description.ifBlank { "No description provided." },
+                                    color = AppColors.Text.copy(alpha = 0.9f)
+                                )
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    navigateToLocation(
+                                        inc.latitude,
+                                        inc.longitude,
+                                        inc.location
+                                    )
+                                },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(14.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.LocationOn,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+
+                                Spacer(Modifier.width(6.dp))
+
+                                Text("Navigate")
+                            }
+
+                            Button(
+                                onClick = {
+                                    showActiveDetailsSheet = false
+                                    selectedActiveIncident = null
+                                },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = AppColors.Primary
+                                )
+                            ) {
+                                Text("Close")
+                            }
+                        }
+
                         Spacer(Modifier.height(12.dp))
                     }
                 }

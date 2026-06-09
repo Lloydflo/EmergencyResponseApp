@@ -200,6 +200,18 @@ private fun deptColor(dept: String): Color = when (dept.lowercase()) {
     else      -> Color(0xFF8A8A8A)
 }
 
+private fun FirebaseResponder.toResponderBrief(): ResponderBrief {
+    return ResponderBrief(
+        id = uid.ifBlank { userId },
+        fullName = fullName.ifBlank { email.ifBlank { "Unknown" } },
+        username = email.ifBlank { fullName },
+        role = department.lowercase(),
+        status = if (isOnline) "online" else "offline",
+        lastMessage = "Tap to coordinate",
+        unreadCount = 0
+    )
+}
+
 private fun roleInitials(name: String) =
     name.split(" ").take(2).mapNotNull { it.firstOrNull()?.uppercaseChar() }.joinToString("")
 
@@ -269,10 +281,12 @@ private fun InboxScreen(
 ) {
     var tabIndex    by remember { mutableIntStateOf(0) }
     var searchQuery by remember { mutableStateOf("") }
+    var showBroadcast by remember { mutableStateOf(true) }
     val responders  = vm.responders
     val departments = vm.departments
     val totalUnread = responders.sumOf { it.unreadCount } + departments.sumOf { it.unreadCount }
     val fbVm: FirebaseResponderViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+    val firebaseResponders by fbVm.responders.collectAsState()
 
     Box(modifier = Modifier.fillMaxSize()) {
 
@@ -365,6 +379,73 @@ private fun InboxScreen(
                             focusedBorderColor = BrandGreen,
                             unfocusedBorderColor = Color.Transparent
                         )
+                    )
+
+                    if (showBroadcast) {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = Color(0xFFFFF3E0)
+                            ),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("🚨", fontSize = 28.sp)
+
+                                Spacer(Modifier.width(12.dp))
+
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        "Active Broadcast",
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFFE65100)
+                                    )
+
+                                    Text("Fire Incident • Commonwealth Ave", fontSize = 13.sp)
+
+                                    Text(
+                                        "Need 2 Fire Trucks and 1 Ambulance",
+                                        fontSize = 12.sp,
+                                        color = TextSecondary
+                                    )
+                                }
+
+                                Row {
+                                    TextButton(
+                                        onClick = { }
+                                    ) {
+                                        Text("View")
+                                    }
+
+                                    IconButton(
+                                        onClick = {
+                                            showBroadcast = false
+                                        }
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Close,
+                                            contentDescription = "Close"
+                                        )
+                                    }
+                                }
+
+                                IconButton(onClick = { showBroadcast = false }) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Close"
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    DepartmentStatusCard(
+                        responders = firebaseResponders
                     )
 
                     TabRow(
@@ -460,7 +541,13 @@ private fun InboxScreen(
                 2 -> AllRespondersTab(
                     vm = fbVm,
                     searchQuery = searchQuery,
-                    modifier = Modifier.padding(padding)
+                    modifier = Modifier.padding(padding),
+                    onResponderClick = { responder ->
+                        onOpenChat(
+                            responder.toResponderBrief(),
+                            null
+                        )
+                    }
                 )
             }
         }
@@ -479,7 +566,8 @@ private fun InboxScreen(
 private fun AllRespondersTab(
     vm          : FirebaseResponderViewModel,
     searchQuery : String,
-    modifier    : Modifier = Modifier
+    modifier    : Modifier = Modifier,
+    onResponderClick: (FirebaseResponder) -> Unit
 ) {
     val allResponders by vm.responders.collectAsState()
     val isLoading     by vm.isLoading.collectAsState()
@@ -519,7 +607,10 @@ private fun AllRespondersTab(
                     items = filtered,
                     key = { it.uid.ifBlank { UUID.randomUUID().toString() } }
                 ) { responder ->
-                    FirebaseResponderRow(responder = responder)
+                    FirebaseResponderRow(
+                        responder = responder,
+                        onClick = { onResponderClick(responder) }
+                    )
                 }
             }
         }
@@ -527,7 +618,10 @@ private fun AllRespondersTab(
 }
 
 @Composable
-private fun FirebaseResponderRow(responder: FirebaseResponder) {
+private fun FirebaseResponderRow(
+    responder: FirebaseResponder,
+    onClick: () -> Unit
+) {
     val lastSeenText = remember(responder.lastSeen) {
 
         try {
@@ -552,7 +646,12 @@ private fun FirebaseResponderRow(responder: FirebaseResponder) {
         }
     }
 
-    Surface(modifier = Modifier.fillMaxWidth(), color = BgCard) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() },
+        color = BgCard
+    ) {
         Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(modifier = Modifier.size(52.dp)) {
                 Box(
@@ -630,7 +729,31 @@ private fun ResponderRow(responder: ResponderBrief, onClick: () -> Unit) {
             }
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text(responder.fullName, fontWeight = if (responder.unreadCount > 0) FontWeight.Bold else FontWeight.SemiBold, fontSize = 15.sp, color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+
+                    Text(
+                        responder.fullName,
+                        fontWeight = if (responder.unreadCount > 0)
+                            FontWeight.Bold
+                        else
+                            FontWeight.SemiBold,
+                        fontSize = 15.sp,
+                        color = TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+
+                    Text(
+                        "Now",
+                        fontSize = 11.sp,
+                        color = TextSecondary
+                    )
+                }
                 Spacer(Modifier.height(2.dp))
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     RoleBadge(role = responder.role)
@@ -981,9 +1104,50 @@ private fun ChatComposer(modifier: Modifier = Modifier, text: String, onTextChan
         Spacer(Modifier.width(4.dp)); Text("typing…", fontSize = 12.sp, color = BrandGreen)
     }
 }
-@Composable private fun EmptySearch(modifier: Modifier = Modifier) {
-    Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) { Icon(Icons.Default.SearchOff, contentDescription = null, tint = Color(0xFFCCCCCC), modifier = Modifier.size(56.dp)); Spacer(Modifier.height(12.dp)); Text("No results found", fontSize = 15.sp, color = TextSecondary) }
+@Composable
+private fun EmptySearch(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(72.dp)
+                    .clip(CircleShape)
+                    .background(BrandGreen.copy(alpha = 0.10f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.ChatBubbleOutline,
+                    contentDescription = null,
+                    tint = BrandGreen,
+                    modifier = Modifier.size(34.dp)
+                )
+            }
+
+            Spacer(Modifier.height(14.dp))
+
+            Text(
+                "No conversations found",
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 16.sp,
+                color = TextPrimary
+            )
+
+            Spacer(Modifier.height(4.dp))
+
+            Text(
+                "Try searching another responder, department, or email.",
+                fontSize = 13.sp,
+                color = TextSecondary,
+                textAlign = TextAlign.Center
+            )
+        }
     }
 }
 @Composable private fun NotificationToast(text: String, onDismiss: () -> Unit) {
@@ -1366,4 +1530,101 @@ private fun NotificationOverlay(
     LaunchedEffect(uriString) { withContext(Dispatchers.IO) { try { val stream = ctx.contentResolver.openInputStream(Uri.parse(uriString)); bitmap = BitmapFactory.decodeStream(stream); stream?.close() } catch (_: Exception) {} } }
     if (bitmap != null) Image(bitmap = bitmap!!.asImageBitmap(), contentDescription = contentDescription, contentScale = contentScale, modifier = modifier)
     else Box(modifier = modifier.background(Color(0xFFEEEEEE)), contentAlignment = Alignment.Center) { Icon(Icons.Default.Image, contentDescription = null, tint = Color(0xFFBBBBBB), modifier = Modifier.size(32.dp)) }
+}
+
+@Composable
+private fun DepartmentStatusCard(
+    responders: List<FirebaseResponder>
+) {
+
+    val onlineCount = responders.count { it.isOnline }
+
+    val fireCount = responders.count {
+        it.isOnline &&
+                it.department.contains("fire", true)
+    }
+
+    val medicalCount = responders.count {
+        it.isOnline &&
+                (
+                        it.department.contains("medical", true) ||
+                                it.department.contains("ems", true)
+                        )
+    }
+
+    val policeCount = responders.count {
+        it.isOnline &&
+                (
+                        it.department.contains("police", true) ||
+                                it.department.contains("crime", true)
+                        )
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color.White
+        )
+    ) {
+
+        Column(
+            modifier = Modifier.padding(16.dp)
+        ) {
+
+            Text(
+                text = "Responder Status",
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp
+            )
+
+            Spacer(Modifier.height(12.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+
+                StatusItem("🟢", onlineCount.toString(), "Online")
+
+                StatusItem("👨‍🚒", fireCount.toString(), "Fire")
+
+                StatusItem("🚑", medicalCount.toString(), "Medical")
+
+                StatusItem("👮", policeCount.toString(), "Police")
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatusItem(
+    icon: String,
+    count: String,
+    label: String
+) {
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+
+        Text(
+            icon,
+            fontSize = 22.sp
+        )
+
+        Text(
+            count,
+            fontWeight = FontWeight.Bold,
+            fontSize = 18.sp
+        )
+
+        Text(
+            label,
+            fontSize = 12.sp,
+            color = TextSecondary
+        )
+    }
 }
