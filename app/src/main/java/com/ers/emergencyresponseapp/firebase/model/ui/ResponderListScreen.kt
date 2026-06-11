@@ -22,14 +22,18 @@ import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ValueEventListener
+import androidx.compose.material3.FilterChip
 
 // ── Data model for the responder list ────────────────────────────────────────
 data class ResponderListItem(
     val userId     : String,
     val fullName   : String,
     val department : String,
-    val isOnline   : Boolean = false
+    val isOnline   : Boolean = false,
+    val unreadCount: Int = 0
 )
+
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  RESPONDER LIST SCREEN
@@ -43,6 +47,8 @@ fun ResponderListScreen(
     var responders by remember { mutableStateOf<List<ResponderListItem>>(emptyList()) }
     var isLoading  by remember { mutableStateOf(true) }
     var errorMsg   by remember { mutableStateOf<String?>(null) }
+    var unreadMap by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
+    var selectedDepartment by remember { mutableStateOf("All") }
 
     // ✅ FIX 2: Use ValueEventListener with explicit types — fixes
     //    "Cannot infer a type for this parameter" at lines 77/78/104/106
@@ -75,11 +81,29 @@ fun ResponderListScreen(
                         "User found → id=$userId | name=$fullName | online=$isOnline"
                     )
 
-                    loaded.add(ResponderListItem(userId, fullName, department, isOnline))
+                    if (
+                        fullName.isNotBlank() &&
+                        !fullName.equals("Unknown", ignoreCase = true) &&
+                        department.isNotBlank() &&
+                        !department.equals("Unknown", ignoreCase = true)
+                    ) {
+                        loaded.add(
+                            ResponderListItem(
+                                userId,
+                                fullName,
+                                department,
+                                isOnline
+                            )
+                        )
+                    }
                 }
 
                 // ✅ FIX 4: trim() on both sides avoids invisible whitespace mismatch
-                responders = loaded.filter { it.userId != myUserId }
+                responders = loaded.filter {
+                    it.userId != myUserId &&
+                            !it.fullName.equals("Unknown", ignoreCase = true) &&
+                            !it.department.equals("Unknown", ignoreCase = true)
+                }
                 isLoading  = false
 
                 android.util.Log.d(
@@ -102,6 +126,60 @@ fun ResponderListScreen(
             usersRef.removeEventListener(listener)
         }
     }
+
+    DisposableEffect(myUserId, responders) {
+        if (myUserId.isBlank()) {
+            onDispose { }
+        } else {
+            val db = FirebaseDatabase.getInstance()
+            val listeners = mutableListOf<Pair<com.google.firebase.database.DatabaseReference, ValueEventListener>>()
+
+            responders.forEach { responder ->
+                val chatId = privateChatId(myUserId, responder.userId)
+                val ref = db.getReference("chats")
+                    .child(chatId)
+                    .child("messages")
+
+                val listener = object : ValueEventListener {
+                    override fun onDataChange(snapshot: DataSnapshot) {
+                        val unread = snapshot.children.count { msg ->
+                            val senderId = msg.child("senderId").getValue(String::class.java) ?: ""
+                            val status = msg.child("status").getValue(String::class.java) ?: ""
+
+                            senderId != myUserId &&
+                                    !status.equals("READ", ignoreCase = true)
+                        }
+
+                        unreadMap = unreadMap.toMutableMap().apply {
+                            put(responder.userId, unread)
+                        }
+                    }
+
+                    override fun onCancelled(error: DatabaseError) {}
+                }
+
+                ref.addValueEventListener(listener)
+                listeners.add(ref to listener)
+            }
+
+            onDispose {
+                listeners.forEach { (ref, listener) ->
+                    ref.removeEventListener(listener)
+                }
+            }
+        }
+    }
+
+    val visibleResponders = responders
+        .filter { responder ->
+            selectedDepartment == "All" ||
+                    responder.department.equals(selectedDepartment, ignoreCase = true)
+        }
+        .map { responder ->
+            responder.copy(
+                unreadCount = unreadMap[responder.userId] ?: 0
+            )
+        }
 
     Scaffold(
         topBar = {
@@ -162,23 +240,42 @@ fun ResponderListScreen(
 
             // Success — show list
             else -> {
-                LazyColumn(
-                    modifier       = Modifier.padding(padding),
-                    contentPadding = PaddingValues(vertical = 8.dp)
+                Column(
+                    modifier = Modifier.padding(padding)
                 ) {
-                    items(
-                        items = responders,
-                        key   = { it.userId }
-                    ) { responder ->
-                        ResponderRow(
-                            responder = responder,
-                            onClick   = { onOpenChat(responder.userId) }
-                        )
-                        HorizontalDivider(
-                            modifier  = Modifier.padding(start = 80.dp),
-                            color     = Color(0xFFE4E6EA),
-                            thickness = 0.5.dp
-                        )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf("All", "Fire", "Medical", "Police").forEach { dept ->
+                            FilterChip(
+                                selected = selectedDepartment == dept,
+                                onClick = { selectedDepartment = dept },
+                                label = { Text(dept) }
+                            )
+                        }
+                    }
+
+                    LazyColumn(
+                        contentPadding = PaddingValues(vertical = 8.dp)
+                    ) {
+                        items(
+                            items = visibleResponders,
+                            key = { it.userId }
+                        ) { responder ->
+                            ResponderRow(
+                                responder = responder,
+                                onClick = { onOpenChat(responder.userId) }
+                            )
+
+                            HorizontalDivider(
+                                modifier = Modifier.padding(start = 80.dp),
+                                color = Color(0xFFE4E6EA),
+                                thickness = 0.5.dp
+                            )
+                        }
                     }
                 }
             }
@@ -225,18 +322,21 @@ private fun ResponderRow(
                         color      = deptColor
                     )
                 }
-                if (responder.isOnline) {
-                    Box(
-                        modifier = Modifier
-                            .size(14.dp)
-                            .align(Alignment.BottomEnd)
-                            .clip(CircleShape)
-                            .background(Color.White)
-                            .padding(2.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFF31A24C))
-                    )
-                }
+                Box(
+                    modifier = Modifier
+                        .size(14.dp)
+                        .align(Alignment.BottomEnd)
+                        .clip(CircleShape)
+                        .background(Color.White)
+                        .padding(2.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (responder.isOnline)
+                                Color(0xFF31A24C)
+                            else
+                                Color(0xFFB0B0B0)
+                        )
+                )
             }
 
             Spacer(Modifier.width(12.dp))
@@ -275,9 +375,36 @@ private fun ResponderRow(
                 }
             }
 
-            Text("›", fontSize = 22.sp, color = Color(0xFFBFC2C8))
+            if (responder.unreadCount > 0) {
+                Badge(
+                    containerColor = Color(0xFFE41E3F)
+                ) {
+                    Text(
+                        responder.unreadCount.toString(),
+                        color = Color.White
+                    )
+                }
+            } else {
+                if (responder.unreadCount > 0) {
+                    Badge(
+                        containerColor = Color(0xFFE41E3F)
+                    ) {
+                        Text(
+                            responder.unreadCount.toString(),
+                            color = Color.White,
+                            fontSize = 11.sp
+                        )
+                    }
+                } else {
+                    Text("›", fontSize = 22.sp, color = Color(0xFFBFC2C8))
+                }
+            }
         }
     }
+}
+
+private fun privateChatId(a: String, b: String): String {
+    return listOf(a, b).sorted().joinToString("_")
 }
 
 private fun departmentColor(department: String): Color = when (department.lowercase()) {

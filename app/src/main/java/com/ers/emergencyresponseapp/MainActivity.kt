@@ -101,6 +101,7 @@ class MainActivity : ComponentActivity() {
                 Surface(color = MaterialTheme.colorScheme.background) {
 
                     val navController = rememberNavController()
+                    var isCoordinationChatOpen by remember { mutableStateOf(false) }
 
                     // Auto-logout after 5 min of inactivity
                     LaunchedEffect(Unit) {
@@ -127,13 +128,13 @@ class MainActivity : ComponentActivity() {
                     val hideBottomBarRoutes = setOf(
                         "entry",
                         "login",
-                        "coordination_portal"
                     )
 
                     val showBottomBar = currentRoute != null &&
                             !hideBottomBarRoutes.contains(currentRoute) &&
                             !currentRoute.startsWith("responder_list/") &&
-                            !currentRoute.startsWith("firebase_chat/")
+                            !currentRoute.startsWith("firebase_chat/") &&
+                            !(currentRoute == "coordination_portal" && isCoordinationChatOpen)
 
                     Scaffold(
                         bottomBar = {
@@ -258,7 +259,10 @@ class MainActivity : ComponentActivity() {
                                         currentResponderId = myUserId,
                                         currentResponderName = myUserName,
                                         currentResponderRole = department,
-                                        navController = navController
+                                        navController = navController,
+                                        onChatModeChange = { isChat ->
+                                            isCoordinationChatOpen = isChat
+                                        }
                                     )
                                 }
 

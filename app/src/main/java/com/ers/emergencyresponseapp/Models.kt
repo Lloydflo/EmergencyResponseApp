@@ -10,6 +10,7 @@ data class ResponderBrief(
     val role: String,
     val status: String,
     val lastMessage: String = "",
+    val lastMessageTime: Long = 0L,
     val unreadCount: Int = 0
 )
 

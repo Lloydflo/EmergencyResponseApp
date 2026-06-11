@@ -49,6 +49,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
     // Active Firebase listeners so we can remove them on disconnect
     private var messagesListener: ValueEventListener? = null
+    private var threadsListener: ValueEventListener? = null
     private var messagesListenerPath: String? = null
     private var respondersListener: ValueEventListener? = null
 
@@ -71,6 +72,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
         // Load the real list of responders from Firebase /users
         loadRespondersFromFirebase()
+        listenToThreads()
 
         // Load static department list (departments are role-based, not user accounts)
         if (departments.isEmpty()) {
@@ -113,6 +115,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                             role        = department,
                             status      = if (isOnline) "online" else "offline",
                             lastMessage = existing?.lastMessage ?: "",
+                            lastMessageTime = existing?.lastMessageTime ?: 0L,
                             unreadCount = existing?.unreadCount ?: 0
                         )
                     )
@@ -130,6 +133,50 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         db.child("users").addValueEventListener(respondersListener!!)
     }
 
+    private fun listenToThreads() {
+        threadsListener?.let {
+            db.child("threads").removeEventListener(it)
+        }
+
+        threadsListener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                for (thread in snapshot.children) {
+                    val threadId = thread.key ?: continue
+                    val lastMessage = thread.child("lastMessage")
+                        .getValue(String::class.java) ?: ""
+
+                    val lastMessageTime = thread.child("lastMessageTime")
+                        .getValue(Long::class.java) ?: 0L
+
+                    val responderId = threadId
+                        .removePrefix("pm_")
+                        .split("_")
+                        .firstOrNull { it != myUserId }
+                        ?: continue
+
+                    val index = responders.indexOfFirst { it.id == responderId }
+
+                    if (index >= 0) {
+                        responders[index] = responders[index].copy(
+                            lastMessage = lastMessage,
+                            lastMessageTime = lastMessageTime
+                        )
+                    }
+                }
+
+                val sorted = responders.sortedByDescending { it.lastMessageTime }
+                responders.clear()
+                responders.addAll(sorted)
+            }
+
+            override fun onCancelled(error: DatabaseError) {
+                error.toException().printStackTrace()
+            }
+        }
+
+        db.child("threads").addValueEventListener(threadsListener!!)
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     //  DISCONNECT
     // ─────────────────────────────────────────────────────────────────────────
@@ -143,6 +190,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         }
         // Remove Firebase listeners to avoid memory leaks
         respondersListener?.let { db.child("users").removeEventListener(it) }
+        threadsListener?.let { db.child("threads").removeEventListener(it) }
         stopListeningToMessages()
     }
 

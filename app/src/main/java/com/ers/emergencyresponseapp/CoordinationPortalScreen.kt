@@ -54,7 +54,7 @@ import java.text.SimpleDateFormat
 import java.util.*
 import java.util.UUID
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.material.icons.filled.*
+import androidx.activity.compose.BackHandler
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  COLORS
@@ -208,6 +208,7 @@ private fun FirebaseResponder.toResponderBrief(): ResponderBrief {
         role = department.lowercase(),
         status = if (isOnline) "online" else "offline",
         lastMessage = "Tap to coordinate",
+        lastMessageTime = 0L,
         unreadCount = 0
     )
 }
@@ -225,10 +226,14 @@ fun CoordinationPortalScreen(
     currentResponderId  : String,
     currentResponderName: String,
     currentResponderRole: String,
-    navController       : NavHostController? = null
+    navController       : NavHostController? = null,
+    onChatModeChange    : (Boolean) -> Unit = {}
 ) {
     val vm: CoordinationViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
     var navState by remember { mutableStateOf(NavState.INBOX) }
+    LaunchedEffect(navState) {
+        onChatModeChange(navState == NavState.CHAT)
+    }
 
     val onOpenChat: (ResponderBrief?, DepartmentInfo?) -> Unit = { res, dept ->
         if (res != null)       vm.selectResponderAndLoadHistory(currentResponderId, res)
@@ -240,6 +245,10 @@ fun CoordinationPortalScreen(
         vm.connectRealtime(currentResponderId, currentResponderName, currentResponderRole)
     }
     DisposableEffect(Unit) { onDispose { vm.disconnectRealtime() } }
+
+    BackHandler(enabled = navState == NavState.CHAT) {
+        navState = NavState.INBOX
+    }
 
     AnimatedContent(
         targetState    = navState,
@@ -282,6 +291,10 @@ private fun InboxScreen(
     var tabIndex    by remember { mutableIntStateOf(0) }
     var searchQuery by remember { mutableStateOf("") }
     var showBroadcast by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        delay(5000)
+        showBroadcast = false
+    }
     val responders  = vm.responders
     val departments = vm.departments
     val totalUnread = responders.sumOf { it.unreadCount } + departments.sumOf { it.unreadCount }
@@ -321,21 +334,6 @@ private fun InboxScreen(
                                     color = BrandGreen
                                 )
                             }
-                        }
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .background(BrandGreen.copy(alpha = 0.12f))
-                                .clickable { navController?.navigate("responder_list/$currentResponderId") },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                Icons.Default.Edit,
-                                contentDescription = "New message",
-                                tint = BrandGreen,
-                                modifier = Modifier.size(20.dp)
-                            )
                         }
                     }
 
@@ -381,71 +379,22 @@ private fun InboxScreen(
                         )
                     )
 
-                    if (showBroadcast) {
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = Color(0xFFFFF3E0)
-                            ),
-                            shape = RoundedCornerShape(16.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(16.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text("🚨", fontSize = 28.sp)
-
-                                Spacer(Modifier.width(12.dp))
-
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        "Active Broadcast",
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color(0xFFE65100)
-                                    )
-
-                                    Text("Fire Incident • Commonwealth Ave", fontSize = 13.sp)
-
-                                    Text(
-                                        "Need 2 Fire Trucks and 1 Ambulance",
-                                        fontSize = 12.sp,
-                                        color = TextSecondary
-                                    )
-                                }
-
-                                Row {
-                                    TextButton(
-                                        onClick = { }
-                                    ) {
-                                        Text("View")
-                                    }
-
-                                    IconButton(
-                                        onClick = {
-                                            showBroadcast = false
-                                        }
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Close,
-                                            contentDescription = "Close"
-                                        )
-                                    }
-                                }
-
-                                IconButton(onClick = { showBroadcast = false }) {
-                                    Icon(
-                                        Icons.Default.Close,
-                                        contentDescription = "Close"
-                                    )
-                                }
-                            }
-                        }
-                    }
-
                     DepartmentStatusCard(
-                        responders = firebaseResponders
+                        responders = firebaseResponders.filter { responder ->
+                            val name = responder.fullName.trim()
+                            val dept = responder.department.trim()
+
+                            val isMe =
+                                responder.uid == currentResponderId ||
+                                        responder.userId == currentResponderId
+
+                            val isValidResponder =
+                                name.isNotBlank() &&
+                                        !name.equals("Unknown", ignoreCase = true) &&
+                                        dept.isNotBlank()
+
+                            !isMe && isValidResponder
+                        }
                     )
 
                     TabRow(
@@ -503,10 +452,23 @@ private fun InboxScreen(
         ) { padding ->
             when (tabIndex) {
                 0 -> {
-                    val filtered = responders.filter {
-                        it.fullName.contains(searchQuery, ignoreCase = true) ||
-                                it.role.contains(searchQuery, ignoreCase = true)
-                    }
+                    val filtered = responders
+                        .filter { responder ->
+                            val name = responder.fullName.trim()
+                            val role = responder.role.trim()
+
+                            val isValidResponder =
+                                name.isNotBlank() &&
+                                        !name.equals("Unknown", ignoreCase = true)
+
+                            val matchesSearch =
+                                name.contains(searchQuery, ignoreCase = true) ||
+                                        role.contains(searchQuery, ignoreCase = true)
+
+                            isValidResponder && matchesSearch
+                        }
+                        .sortedByDescending { it.lastMessageTime }
+
                     if (filtered.isEmpty()) EmptySearch(modifier = Modifier.padding(padding))
                     else LazyColumn(
                         modifier = Modifier.padding(padding),
@@ -518,6 +480,7 @@ private fun InboxScreen(
                         ) { r -> ResponderRow(responder = r, onClick = { onOpenChat(r, null) }) }
                     }
                 }
+
 
                 1 -> {
                     val filtered = departments
@@ -538,9 +501,11 @@ private fun InboxScreen(
                     }
                 }
 
+
                 2 -> AllRespondersTab(
                     vm = fbVm,
                     searchQuery = searchQuery,
+                    currentResponderId = currentResponderId,
                     modifier = Modifier.padding(padding),
                     onResponderClick = { responder ->
                         onOpenChat(
@@ -556,6 +521,91 @@ private fun InboxScreen(
             vm    = vm,
             onTap = { responder, dept -> onOpenChat(responder, dept) }
         )
+
+        FloatingActionButton(
+            onClick = {
+                navController?.navigate("responder_list/$currentResponderId")
+            },
+            containerColor = BrandGreen,
+            contentColor = Color.White,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(
+                    end = 20.dp,
+                    bottom = 40.dp
+                )
+        ) {
+            Icon(
+                Icons.Default.Edit,
+                contentDescription = "New message"
+            )
+        }
+
+        AnimatedVisibility(
+            visible = showBroadcast,
+            enter = slideInVertically { -it } + fadeIn(),
+            exit = slideOutVertically { -it } + fadeOut(),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .zIndex(20f)
+        ) {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = Color(0xFF1E1E1E)
+                ),
+                elevation = CardDefaults.cardElevation(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.Campaign,
+                        contentDescription = null,
+                        tint = Color(0xFFFFA726),
+                        modifier = Modifier.size(22.dp)
+                    )
+
+                    Spacer(Modifier.width(10.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Active Broadcast",
+                            color = Color(0xFFFFA726),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
+                        )
+
+                        Text(
+                            "Fire Incident • Commonwealth Ave",
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    TextButton(onClick = { }) {
+                        Text("View", color = Color.White)
+                    }
+
+                    IconButton(
+                        onClick = { showBroadcast = false },
+                        modifier = Modifier.size(30.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Close",
+                            tint = Color.White.copy(alpha = 0.7f),
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -566,16 +616,32 @@ private fun InboxScreen(
 private fun AllRespondersTab(
     vm          : FirebaseResponderViewModel,
     searchQuery : String,
+    currentResponderId: String,
     modifier    : Modifier = Modifier,
     onResponderClick: (FirebaseResponder) -> Unit
 ) {
     val allResponders by vm.responders.collectAsState()
     val isLoading     by vm.isLoading.collectAsState()
 
-    val filtered = allResponders.filter {
-        it.fullName.contains(searchQuery, ignoreCase = true)   ||
-                it.department.contains(searchQuery, ignoreCase = true) ||
-                it.email.contains(searchQuery, ignoreCase = true)
+    val filtered = allResponders.filter { responder ->
+        val name = responder.fullName.trim()
+        val dept = responder.department.trim()
+
+        val isMe =
+            responder.uid == currentResponderId ||
+                    responder.userId == currentResponderId
+
+        val isValidResponder =
+            name.isNotBlank() &&
+                    !name.equals("Unknown", ignoreCase = true) &&
+                    dept.isNotBlank()
+
+        val matchesSearch =
+            name.contains(searchQuery, ignoreCase = true) ||
+                    dept.contains(searchQuery, ignoreCase = true) ||
+                    responder.email.contains(searchQuery, ignoreCase = true)
+
+        !isMe && isValidResponder && matchesSearch
     }
 
     when {
@@ -749,7 +815,7 @@ private fun ResponderRow(responder: ResponderBrief, onClick: () -> Unit) {
                     )
 
                     Text(
-                        "Now",
+                        formatChatTime(responder.lastMessageTime),
                         fontSize = 11.sp,
                         color = TextSecondary
                     )
@@ -779,7 +845,17 @@ private fun DepartmentRow(dept: DepartmentInfo, onClick: () -> Unit) {
     Surface(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick), color = BgCard) {
         Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(modifier = Modifier.size(52.dp).clip(RoundedCornerShape(16.dp)).background(roleColor(dept.name).copy(alpha = 0.12f)), contentAlignment = Alignment.Center) {
-                Text(dept.emoji, fontSize = 24.sp)
+                Icon(
+                    when (dept.name.lowercase()) {
+                        "fire" -> Icons.Default.LocalFireDepartment
+                        "medical" -> Icons.Default.LocalHospital
+                        "police" -> Icons.Default.Security
+                        else -> Icons.Default.Groups
+                    },
+                    contentDescription = null,
+                    tint = roleColor(dept.name),
+                    modifier = Modifier.size(24.dp)
+                )
             }
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
@@ -848,10 +924,8 @@ private fun ChatScreen(vm: CoordinationViewModel, currentResponderId: String, on
 
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
-            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-            val total = messages.size
-            if (lastVisible == -1 || lastVisible >= total - 2) { listState.animateScrollToItem(total - 1); unseenCount.intValue = 0 }
-            else unseenCount.intValue = total - (lastVisible + 1)
+            listState.scrollToItem(messages.lastIndex)
+            unseenCount.intValue = 0
         }
     }
 
@@ -1536,95 +1610,75 @@ private fun NotificationOverlay(
 private fun DepartmentStatusCard(
     responders: List<FirebaseResponder>
 ) {
-
     val onlineCount = responders.count { it.isOnline }
-
-    val fireCount = responders.count {
-        it.isOnline &&
-                it.department.contains("fire", true)
-    }
-
+    val fireCount = responders.count { it.isOnline && it.department.contains("fire", true) }
     val medicalCount = responders.count {
-        it.isOnline &&
-                (
-                        it.department.contains("medical", true) ||
-                                it.department.contains("ems", true)
-                        )
+        it.isOnline && (it.department.contains("medical", true) || it.department.contains("ems", true))
     }
-
     val policeCount = responders.count {
-        it.isOnline &&
-                (
-                        it.department.contains("police", true) ||
-                                it.department.contains("crime", true)
-                        )
+        it.isOnline && (it.department.contains("police", true) || it.department.contains("crime", true))
     }
 
-    Card(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = Color.White
-        )
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-
-        Column(
-            modifier = Modifier.padding(16.dp)
-        ) {
-
-            Text(
-                text = "Responder Status",
-                fontWeight = FontWeight.Bold,
-                fontSize = 16.sp
-            )
-
-            Spacer(Modifier.height(12.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-
-                StatusItem("🟢", onlineCount.toString(), "Online")
-
-                StatusItem("👨‍🚒", fireCount.toString(), "Fire")
-
-                StatusItem("🚑", medicalCount.toString(), "Medical")
-
-                StatusItem("👮", policeCount.toString(), "Police")
-            }
-        }
+        CompactStatusChip(Icons.Default.Groups, "$onlineCount Online", OnlineDot, Modifier.weight(1f))
+        CompactStatusChip(Icons.Default.LocalFireDepartment, "$fireCount Fire", Color(0xFFE53935), Modifier.weight(1f))
+        CompactStatusChip(Icons.Default.LocalHospital, "$medicalCount Medical", Color(0xFF1E88E5), Modifier.weight(1f))
+        CompactStatusChip(Icons.Default.Security, "$policeCount Police", Color(0xFF6D4C41), Modifier.weight(1f))
     }
 }
 
 @Composable
-private fun StatusItem(
-    icon: String,
-    count: String,
-    label: String
+private fun CompactStatusChip(
+    icon: ImageVector,
+    text: String,
+    tint: Color,
+    modifier: Modifier = Modifier
 ) {
-
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(14.dp),
+        color = tint.copy(alpha = 0.10f)
     ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = tint,
+                modifier = Modifier.size(15.dp)
+            )
 
-        Text(
-            icon,
-            fontSize = 22.sp
-        )
+            Spacer(Modifier.width(4.dp))
 
-        Text(
-            count,
-            fontWeight = FontWeight.Bold,
-            fontSize = 18.sp
-        )
+            Text(
+                text,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = tint,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+private fun formatChatTime(time: Long): String {
+    if (time <= 0L) return ""
 
-        Text(
-            label,
-            fontSize = 12.sp,
-            color = TextSecondary
-        )
+    val now = System.currentTimeMillis()
+    val diff = now - time
+
+    return when {
+        diff < 60_000 -> "Now"
+        diff < 3_600_000 -> "${diff / 60_000}m"
+        diff < 86_400_000 -> "${diff / 3_600_000}h"
+        else -> SimpleDateFormat("MMM dd", Locale.getDefault()).format(Date(time))
     }
 }
