@@ -22,6 +22,15 @@ import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ValueEventListener
 import kotlinx.coroutines.launch
 import java.util.UUID
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.MultipartBody
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
+import org.json.JSONObject
+import java.io.File
+import java.io.FileOutputStream
+import kotlinx.coroutines.Dispatchers
 
 class CoordinationViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -252,10 +261,20 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
                     val senderId   = child.child("senderId").getValue(String::class.java) ?: continue
                     val senderName = child.child("senderName").getValue(String::class.java) ?: "Unknown"
-                    val text       = child.child("text").getValue(String::class.java) ?: ""
-                    val role       = child.child("role").getValue(String::class.java) ?: ""
-                    val createdAt  = child.child("createdAt").getValue(Long::class.java) ?: 0L
-                    val msgId      = child.key ?: UUID.randomUUID().toString()
+                    val text = child.child("text").getValue(String::class.java)
+                    val role = child.child("role").getValue(String::class.java) ?: ""
+                    val createdAt = child.child("createdAt").getValue(Long::class.java) ?: 0L
+                    val msgId = child.key ?: UUID.randomUUID().toString()
+
+                    val typeText = child.child("type").getValue(String::class.java) ?: "TEXT"
+                    val msgType = when (typeText.uppercase()) {
+                        "IMAGE" -> MessageType.IMAGE
+                        "FILE" -> MessageType.FILE
+                        else -> MessageType.TEXT
+                    }
+
+                    val attachmentUri = child.child("attachmentUri").getValue(String::class.java)
+                    val attachmentName = child.child("attachmentName").getValue(String::class.java)
 
                     loaded.add(
                         ChatMessage(
@@ -264,11 +283,13 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                             senderId   = senderId,
                             senderName = senderName,
                             role       = role,
-                            type       = MessageType.TEXT,
-                            text       = text,
-                            createdAt  = createdAt,
-                            status     = MessageStatus.READ,
-                            isOwn      = senderId == myUserId
+                            type = msgType,
+                            text = text,
+                            createdAt = createdAt,
+                            status = MessageStatus.READ,
+                            isOwn = senderId == myUserId,
+                            attachmentUri = attachmentUri,
+                            attachmentName = attachmentName
                         )
                     )
                 }
@@ -345,50 +366,153 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         ))
     }
 
+    private fun uploadFileToServer(
+        uri: Uri,
+        fileName: String,
+        onSuccess: (fileUrl: String, uploadedName: String) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val context = getApplication<Application>()
+
+                val inputStream = context.contentResolver.openInputStream(uri)
+                    ?: throw Exception("Cannot open file")
+
+                val tempFile = File(context.cacheDir, fileName)
+                FileOutputStream(tempFile).use { output ->
+                    inputStream.copyTo(output)
+                }
+
+                val requestBody = tempFile
+                    .asRequestBody("application/octet-stream".toMediaTypeOrNull())
+
+                val filePart = MultipartBody.Part.createFormData(
+                    "file",
+                    fileName,
+                    requestBody
+                )
+
+                val multipartBody = MultipartBody.Builder()
+                    .setType(MultipartBody.FORM)
+                    .addPart(filePart)
+                    .build()
+
+                val request = Request.Builder()
+                    .url("https://emergency-response.alertaraqc.com/api/api_app/upload_chat_file.php")
+                    .post(multipartBody)
+                    .build()
+
+                val response = OkHttpClient().newCall(request).execute()
+                val body = response.body?.string() ?: ""
+
+                val json = JSONObject(body)
+
+                if (json.optBoolean("success")) {
+                    onSuccess(
+                        json.optString("file_url"),
+                        json.optString("file_name")
+                    )
+                } else {
+                    onError(json.optString("message", "Upload failed"))
+                }
+
+            } catch (e: Exception) {
+                onError(e.message ?: "Upload error")
+            }
+        }
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     //  FILE / IMAGE SENDING
     // ─────────────────────────────────────────────────────────────────────────
-    fun sendFileMessage(meId: String, peer: ResponderBrief, uri: Uri, fileName: String, isImage: Boolean) {
-        val msgType  = if (isImage) MessageType.IMAGE else MessageType.FILE
+    fun sendFileMessage(
+        meId: String,
+        peer: ResponderBrief,
+        uri: Uri,
+        fileName: String,
+        isImage: Boolean
+    ) {
         val threadId = buildChatId(meId, peer.id)
-        val msgId    = UUID.randomUUID().toString()
-        // Add locally for instant feedback (URI is local, can't push to Firebase easily without Storage)
-        messages.add(
-            ChatMessage(
-                id             = msgId,
-                senderId       = meId,
-                senderName     = myUserName.ifBlank { meId },
-                threadId       = threadId,
-                type           = msgType,
-                text           = null,
-                role           = myRole,
-                createdAt      = System.currentTimeMillis(),
-                status         = MessageStatus.SENT,
-                isOwn          = true,
-                attachmentUri  = uri.toString(),
-                attachmentName = fileName
-            )
+
+        uploadFileToServer(
+            uri = uri,
+            fileName = fileName,
+            onSuccess = { fileUrl, uploadedName ->
+                pushFileMessageToFirebase(
+                    threadId = threadId,
+                    senderId = meId,
+                    senderName = myUserName.ifBlank { meId },
+                    role = myRole,
+                    fileUrl = fileUrl,
+                    fileName = uploadedName,
+                    isImage = isImage
+                )
+            },
+            onError = { error ->
+                latestNotification.value = "Upload failed: $error"
+            }
         )
     }
 
-    fun sendFileToDepartment(meId: String, department: String, uri: Uri, fileName: String, isImage: Boolean) {
-        val msgType  = if (isImage) MessageType.IMAGE else MessageType.FILE
+    fun sendFileToDepartment(
+        meId: String,
+        department: String,
+        uri: Uri,
+        fileName: String,
+        isImage: Boolean
+    ) {
         val threadId = "dept_$department"
-        val msgId    = UUID.randomUUID().toString()
-        messages.add(
-            ChatMessage(
-                id             = msgId,
-                senderId       = meId,
-                senderName     = myUserName.ifBlank { meId },
-                threadId       = threadId,
-                type           = msgType,
-                text           = null,
-                role           = myRole,
-                createdAt      = System.currentTimeMillis(),
-                status         = MessageStatus.SENT,
-                isOwn          = true,
-                attachmentUri  = uri.toString(),
-                attachmentName = fileName
+
+        uploadFileToServer(
+            uri = uri,
+            fileName = fileName,
+            onSuccess = { fileUrl, uploadedName ->
+                pushFileMessageToFirebase(
+                    threadId = threadId,
+                    senderId = meId,
+                    senderName = myUserName.ifBlank { meId },
+                    role = myRole,
+                    fileUrl = fileUrl,
+                    fileName = uploadedName,
+                    isImage = isImage
+                )
+            },
+            onError = { error ->
+                latestNotification.value = "Upload failed: $error"
+            }
+        )
+    }
+
+    private fun pushFileMessageToFirebase(
+        threadId: String,
+        senderId: String,
+        senderName: String,
+        role: String,
+        fileUrl: String,
+        fileName: String,
+        isImage: Boolean
+    ) {
+        val now = System.currentTimeMillis()
+        val msgRef = db.child("messages").child(threadId).push()
+
+        val data = mapOf(
+            "senderId" to senderId,
+            "senderName" to senderName,
+            "role" to role,
+            "text" to if (isImage) "Image" else fileName,
+            "type" to if (isImage) "IMAGE" else "FILE",
+            "attachmentUri" to fileUrl,
+            "attachmentName" to fileName,
+            "createdAt" to now
+        )
+
+        msgRef.setValue(data)
+
+        db.child("threads").child(threadId).updateChildren(
+            mapOf(
+                "lastMessage" to if (isImage) "📷 Image" else "📎 $fileName",
+                "lastMessageTime" to now
             )
         )
     }

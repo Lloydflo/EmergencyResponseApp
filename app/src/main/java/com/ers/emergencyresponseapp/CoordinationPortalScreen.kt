@@ -55,6 +55,8 @@ import java.util.*
 import java.util.UUID
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.activity.compose.BackHandler
+import android.content.Intent
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  COLORS
@@ -1065,6 +1067,8 @@ private fun ChatBubble(msg: ChatMessage, timeLabel: String, currentResponderId: 
     val alignment = if (isOwn) Alignment.End else Alignment.Start; val horizontalArr = if (isOwn) Arrangement.End else Arrangement.Start
     var showEmojiPicker by remember(msg.id) { mutableStateOf(false) }; var showLightbox by remember(msg.id) { mutableStateOf(false) }
     val bubbleShape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomEnd = if (isOwn) 4.dp else 18.dp, bottomStart = if (isOwn) 18.dp else 4.dp)
+    val context = LocalContext.current
+
     Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp), horizontalArrangement = horizontalArr, verticalAlignment = Alignment.Bottom) {
         if (!isOwn) AvatarCircle(name = msg.senderName, role = msg.role, size = 28.dp, modifier = Modifier.padding(end = 6.dp, bottom = 18.dp))
         Column(horizontalAlignment = alignment, modifier = Modifier.widthIn(max = 280.dp)) {
@@ -1077,7 +1081,17 @@ private fun ChatBubble(msg: ChatMessage, timeLabel: String, currentResponderId: 
             }
             when (msg.type) {
                 MessageType.TEXT -> Surface(color = bubbleColor, shape = bubbleShape, shadowElevation = if (isOwn) 0.dp else 1.dp,
-                    modifier = Modifier.combinedClickable(onClick = { showEmojiPicker = false }, onLongClick = { showEmojiPicker = !showEmojiPicker })) {
+                    modifier = Modifier.combinedClickable(
+                        onClick = {
+                            msg.attachmentUri?.let { url ->
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                context.startActivity(intent)
+                            }
+                        },
+                        onLongClick = {
+                            showEmojiPicker = !showEmojiPicker
+                        }
+                    )) {
                     Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
                         if (!isOwn && msg.senderName.isNotBlank()) { Text(msg.senderName, fontWeight = FontWeight.SemiBold, fontSize = 11.sp, color = roleColor(msg.role)); Spacer(Modifier.height(2.dp)) }
                         Text(msg.text ?: "", color = textColor, fontSize = 14.sp, lineHeight = 20.sp)
@@ -1599,11 +1613,54 @@ private fun NotificationOverlay(
         }
     }
 }
-@Composable private fun UriImage(uriString: String, contentDescription: String, modifier: Modifier = Modifier, contentScale: ContentScale = ContentScale.Crop) {
-    val ctx = LocalContext.current; var bitmap by remember(uriString) { mutableStateOf<android.graphics.Bitmap?>(null) }
-    LaunchedEffect(uriString) { withContext(Dispatchers.IO) { try { val stream = ctx.contentResolver.openInputStream(Uri.parse(uriString)); bitmap = BitmapFactory.decodeStream(stream); stream?.close() } catch (_: Exception) {} } }
-    if (bitmap != null) Image(bitmap = bitmap!!.asImageBitmap(), contentDescription = contentDescription, contentScale = contentScale, modifier = modifier)
-    else Box(modifier = modifier.background(Color(0xFFEEEEEE)), contentAlignment = Alignment.Center) { Icon(Icons.Default.Image, contentDescription = null, tint = Color(0xFFBBBBBB), modifier = Modifier.size(32.dp)) }
+@Composable
+private fun UriImage(
+    uriString: String,
+    contentDescription: String,
+    modifier: Modifier = Modifier,
+    contentScale: ContentScale = ContentScale.Crop
+) {
+    val ctx = LocalContext.current
+    var bitmap by remember(uriString) { mutableStateOf<android.graphics.Bitmap?>(null) }
+
+    LaunchedEffect(uriString) {
+        withContext(Dispatchers.IO) {
+            try {
+                val inputStream =
+                    if (uriString.startsWith("http", ignoreCase = true)) {
+                        java.net.URL(uriString).openStream()
+                    } else {
+                        ctx.contentResolver.openInputStream(Uri.parse(uriString))
+                    }
+
+                bitmap = BitmapFactory.decodeStream(inputStream)
+                inputStream?.close()
+            } catch (_: Exception) {
+                bitmap = null
+            }
+        }
+    }
+
+    if (bitmap != null) {
+        Image(
+            bitmap = bitmap!!.asImageBitmap(),
+            contentDescription = contentDescription,
+            contentScale = contentScale,
+            modifier = modifier
+        )
+    } else {
+        Box(
+            modifier = modifier.background(Color(0xFFEEEEEE)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Default.Image,
+                contentDescription = null,
+                tint = Color(0xFFBBBBBB),
+                modifier = Modifier.size(32.dp)
+            )
+        }
+    }
 }
 
 @Composable
