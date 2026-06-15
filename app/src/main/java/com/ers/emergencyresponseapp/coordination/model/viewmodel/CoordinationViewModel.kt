@@ -275,6 +275,26 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
                     val attachmentUri = child.child("attachmentUri").getValue(String::class.java)
                     val attachmentName = child.child("attachmentName").getValue(String::class.java)
+                    val statusText = child.child("status").getValue(String::class.java) ?: "sent"
+
+                    val messageStatus = when (statusText.lowercase()) {
+                        "delivered" -> MessageStatus.DELIVERED
+                        "read" -> MessageStatus.READ
+                        else -> MessageStatus.SENT
+                    }
+
+                    if (senderId != myUserId && statusText == "sent") {
+                        child.ref.child("status").setValue("delivered")
+                    }
+                    val reactions = child.child("reactions").children.mapNotNull { reaction ->
+                        val userId = reaction.key ?: return@mapNotNull null
+                        val emoji = reaction.getValue(String::class.java) ?: return@mapNotNull null
+
+                        com.ers.emergencyresponseapp.coordination.model.MessageReaction(
+                            userId = userId,
+                            emoji = emoji
+                        )
+                    }
 
                     loaded.add(
                         ChatMessage(
@@ -286,10 +306,11 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                             type = msgType,
                             text = text,
                             createdAt = createdAt,
-                            status = MessageStatus.READ,
+                            status = messageStatus,
                             isOwn = senderId == myUserId,
                             attachmentUri = attachmentUri,
-                            attachmentName = attachmentName
+                            attachmentName = attachmentName,
+                            reactions = reactions
                         )
                     )
                 }
@@ -305,6 +326,26 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
         db.child("messages").child(threadId)
             .addValueEventListener(messagesListener!!)
+    }
+
+    fun markMessagesAsRead(myId: String, peerId: String?) {
+        if (peerId == null) return
+
+        val threadId = buildChatId(myId, peerId)
+
+        db.child("messages")
+            .child(threadId)
+            .get()
+            .addOnSuccessListener { snapshot ->
+                snapshot.children.forEach { msg ->
+                    val senderId = msg.child("senderId")
+                        .getValue(String::class.java)
+
+                    if (senderId != myId) {
+                        msg.ref.child("status").setValue("read")
+                    }
+                }
+            }
     }
 
     private fun stopListeningToMessages() {
@@ -355,7 +396,8 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
             "senderName" to senderName,
             "role"       to role,
             "text"       to text,
-            "createdAt"  to System.currentTimeMillis()
+            "createdAt"  to System.currentTimeMillis(),
+            "status" to "sent"
         )
         msgRef.setValue(data)
 
@@ -521,16 +563,23 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
     //  REACTIONS
     // ─────────────────────────────────────────────────────────────────────────
     fun addReaction(messageId: String, emoji: String, userId: String) {
-        val index = messages.indexOfFirst { it.id == messageId }
-        if (index == -1) return
-        val old = messages[index]
-        val updatedReactions = old.reactions.toMutableList()
-        val existingIndex = updatedReactions.indexOfFirst { it.userId == userId && it.emoji == emoji }
-        if (existingIndex >= 0) updatedReactions.removeAt(existingIndex)
-        else updatedReactions.add(
-            com.ers.emergencyresponseapp.coordination.model.MessageReaction(userId = userId, emoji = emoji)
-        )
-        messages[index] = old.copy(reactions = updatedReactions)
+        val threadId = currentThread.value?.id ?: return
+
+        val reactionRef = db.child("messages")
+            .child(threadId)
+            .child(messageId)
+            .child("reactions")
+            .child(userId)
+
+        reactionRef.get().addOnSuccessListener { snapshot ->
+            val currentEmoji = snapshot.getValue(String::class.java)
+
+            if (currentEmoji == emoji) {
+                reactionRef.removeValue()
+            } else {
+                reactionRef.setValue(emoji)
+            }
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────

@@ -56,6 +56,9 @@ import java.util.UUID
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.activity.compose.BackHandler
 import android.content.Intent
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -246,7 +249,35 @@ fun CoordinationPortalScreen(
     LaunchedEffect(currentResponderId) {
         vm.connectRealtime(currentResponderId, currentResponderName, currentResponderRole)
     }
-    DisposableEffect(Unit) { onDispose { vm.disconnectRealtime() } }
+
+    LaunchedEffect(currentResponderId) {
+        val db = FirebaseDatabase.getInstance().reference
+        val userRef = db.child("users").child(currentResponderId)
+
+        userRef.updateChildren(
+            mapOf(
+                "isOnline" to true,
+                "lastSeen" to System.currentTimeMillis()
+            )
+        )
+
+        userRef.child("isOnline").onDisconnect().setValue(false)
+        userRef.child("lastSeen").onDisconnect().setValue(System.currentTimeMillis())
+    }
+
+    DisposableEffect(currentResponderId) {
+        onDispose {
+            val db = FirebaseDatabase.getInstance().reference
+            db.child("users").child(currentResponderId).updateChildren(
+                mapOf(
+                    "isOnline" to false,
+                    "lastSeen" to System.currentTimeMillis()
+                )
+            )
+
+            vm.disconnectRealtime()
+        }
+    }
 
     BackHandler(enabled = navState == NavState.CHAT) {
         navState = NavState.INBOX
@@ -888,7 +919,11 @@ private fun ChatScreen(vm: CoordinationViewModel, currentResponderId: String, on
     val unseenCount        = remember { mutableIntStateOf(0) }
     val timeFmt            = remember { SimpleDateFormat("hh:mm a", Locale.getDefault()) }
     val showAttach         = remember { mutableStateOf(false) }
+    var isRecordingVoice by remember { mutableStateOf(false) }
     val showInfoDialog     = remember { mutableStateOf(false) }
+    val showSharedFilesDialog = remember { mutableStateOf(false) }
+    var showChatSearch by remember { mutableStateOf(false) }
+    var chatSearchQuery by remember { mutableStateOf("") }
     val ctx                = LocalContext.current
     val chatName           = selectedResponder?.fullName ?: selectedDepartment?.displayName ?: "Chat"
     val isOnline           = selectedResponder?.status?.contains("online", ignoreCase = true) == true
@@ -913,6 +948,16 @@ private fun ChatScreen(vm: CoordinationViewModel, currentResponderId: String, on
         }
     }
 
+    val audioPermissionLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) {
+                isRecordingVoice = true
+                Toast.makeText(ctx, "Recording started", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(ctx, "Microphone permission denied", Toast.LENGTH_SHORT).show()
+            }
+        }
+
     fun doSend() {
         val text = messageInput.value.trim()
         if (text.isEmpty()) return
@@ -930,11 +975,27 @@ private fun ChatScreen(vm: CoordinationViewModel, currentResponderId: String, on
             unseenCount.intValue = 0
         }
     }
+    LaunchedEffect(messages.size, selectedResponder?.id) {
+        vm.markMessagesAsRead(
+            currentResponderId,
+            selectedResponder?.id
+        )
+    }
+
+    val visibleMessages = if (chatSearchQuery.isBlank()) {
+        messages
+    } else {
+        messages.filter {
+            it.text?.contains(chatSearchQuery, ignoreCase = true) == true ||
+                    it.attachmentName?.contains(chatSearchQuery, ignoreCase = true) == true
+        }
+    }
 
     Scaffold(
         topBar = {
             Surface(color = BgCard, shadowElevation = 2.dp) {
-                Row(modifier = Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(modifier = Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically)
+                {
                     IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary) }
                     Box(modifier = Modifier.size(40.dp)) {
                         if (selectedResponder != null) {
@@ -957,12 +1018,45 @@ private fun ChatScreen(vm: CoordinationViewModel, currentResponderId: String, on
                     }
                     IconButton(onClick = { showInfoDialog.value = true }) { Icon(Icons.Default.Info, contentDescription = "Info", tint = TextSecondary) }
                 }
+                if (showChatSearch) {
+                    OutlinedTextField(
+                        value = chatSearchQuery,
+                        onValueChange = { chatSearchQuery = it },
+                        placeholder = {
+                            Text("Search messages...")
+                        },
+                        leadingIcon = {
+                            Icon(Icons.Default.Search, null)
+                        },
+                        trailingIcon = {
+                            IconButton(
+                                onClick = {
+                                    chatSearchQuery = ""
+                                    showChatSearch = false
+                                }
+                            ) {
+                                Icon(Icons.Default.Close, null)
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        singleLine = true,
+                        shape = RoundedCornerShape(20.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = Color.White,
+                            unfocusedContainerColor = Color.White,
+                            focusedBorderColor = BrandGreen,
+                            unfocusedBorderColor = Color(0xFFE0E0E0)
+                        )
+                    )
+                }
             }
         },
         containerColor = BgChat
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-            ChatMessagesPanel(messages = messages, timeFmt = timeFmt, listState = listState, currentResponderId = currentResponderId, onReact = { id, emoji -> vm.addReaction(id, emoji, currentResponderId) }, modifier = Modifier.fillMaxSize().padding(bottom = 72.dp))
+            ChatMessagesPanel(messages = visibleMessages, timeFmt = timeFmt, listState = listState, currentResponderId = currentResponderId, onReact = { id, emoji -> vm.addReaction(id, emoji, currentResponderId) }, modifier = Modifier.fillMaxSize().padding(bottom = 72.dp))
             if (unseenCount.intValue > 0) {
                 Button(onClick = { scope.launch { if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1); unseenCount.intValue = 0 } },
                     modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 80.dp), shape = RoundedCornerShape(20.dp),
@@ -1007,7 +1101,19 @@ private fun ChatScreen(vm: CoordinationViewModel, currentResponderId: String, on
             text  = {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     when {
-                        selectedResponder  != null -> ChatInfoContent(r = selectedResponder)
+                        selectedResponder  != null -> ChatInfoContent(
+                            r = selectedResponder,
+                            messages = messages,
+                            currentResponderId = currentResponderId,
+                            onSearchClick = {
+                                showInfoDialog.value = false
+                                showChatSearch = true
+                            },
+                            onFilesClick = {
+                                showInfoDialog.value = false
+                                showSharedFilesDialog.value = true
+                            }
+                        )
                         selectedDepartment != null -> Text("Department: ${selectedDepartment.displayName}")
                         else -> Text("No info available")
                     }
@@ -1016,8 +1122,13 @@ private fun ChatScreen(vm: CoordinationViewModel, currentResponderId: String, on
             shape = RoundedCornerShape(20.dp)
         )
     }
-    if (showAttach.value) {
-        AttachSheet(onDismiss = { showAttach.value = false }, onPickImage = { showAttach.value = false; imageLauncher.launch("image/*") }, onPickFile = { showAttach.value = false; fileLauncher.launch("*/*") })
+    if (showSharedFilesDialog.value) {
+        SharedFilesDialog(
+            messages = messages,
+            onDismiss = {
+                showSharedFilesDialog.value = false
+            }
+        )
     }
 }
 
@@ -1103,7 +1214,27 @@ private fun ChatBubble(msg: ChatMessage, timeLabel: String, currentResponderId: 
                     if (!msg.text.isNullOrBlank()) Text(msg.text, color = textColor, fontSize = 13.sp, modifier = Modifier.background(bubbleColor).padding(horizontal = 10.dp, vertical = 6.dp))
                 }
                 MessageType.FILE -> Surface(color = bubbleColor, shape = bubbleShape, shadowElevation = if (isOwn) 0.dp else 1.dp,
-                    modifier = Modifier.combinedClickable(onClick = {}, onLongClick = { showEmojiPicker = !showEmojiPicker })) {
+                    modifier = Modifier.combinedClickable(
+                        onClick = {
+                            Toast.makeText(context, "Opening file...", Toast.LENGTH_SHORT).show()
+
+                            msg.attachmentUri?.let { url ->
+                                try {
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    }
+                                    context.startActivity(intent)
+                                } catch (e: Exception) {
+                                    Toast.makeText(
+                                        context,
+                                        "No app found to open this file",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            }
+                        },
+                        onLongClick = { showEmojiPicker = !showEmojiPicker }
+                    )) {
                     Row(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Box(modifier = Modifier.size(38.dp).clip(RoundedCornerShape(10.dp)).background(if (isOwn) Color.White.copy(alpha = 0.2f) else Color(0xFFE3F2FD)), contentAlignment = Alignment.Center) {
                             Icon(Icons.AutoMirrored.Filled.InsertDriveFile, contentDescription = null, tint = if (isOwn) Color.White else Color(0xFF3498DB), modifier = Modifier.size(20.dp))
@@ -1372,11 +1503,63 @@ private fun NotificationOverlay(
     }
 }
 
-@Composable private fun ChatInfoContent(r: ResponderBrief) {
+@Composable private fun ChatInfoContent(
+    r: ResponderBrief,
+    messages: List<ChatMessage>,
+    currentResponderId: String,
+    onSearchClick: () -> Unit,
+    onFilesClick: () -> Unit
+) {
     val online  = r.status.contains("online", ignoreCase = true)
+    val messageCount = messages.count { it.type == MessageType.TEXT }
+    val fileCount = messages.count {
+        it.type == MessageType.FILE || it.type == MessageType.IMAGE
+    }
+
+    val firstMessageTime = messages.minOfOrNull { it.createdAt } ?: 0L
+
+    val chatAge = if (firstMessageTime > 0L) {
+        val days = ((System.currentTimeMillis() - firstMessageTime) / 86_400_000).coerceAtLeast(0)
+        if (days == 0L) "Today" else "${days}d"
+    } else {
+        "—"
+    }
     val ctx     = LocalContext.current
-    var muted    by remember { mutableStateOf(false) }
     var priority by remember { mutableStateOf(false) }
+    var priorityLoaded by remember { mutableStateOf(false) }
+    LaunchedEffect(r.id, currentResponderId) {
+        FirebaseDatabase.getInstance().reference
+            .child("priority_chats")
+            .child(currentResponderId)
+            .child(r.id)
+            .get()
+            .addOnSuccessListener { snapshot ->
+                priority = snapshot.getValue(Boolean::class.java) ?: false
+                priorityLoaded = true
+            }
+            .addOnFailureListener {
+                priorityLoaded = true
+            }
+    }
+    var showReportDialog by remember { mutableStateOf(false) }
+    var reportReason by remember { mutableStateOf("") }
+    var realLastSeen by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(r.id) {
+        FirebaseDatabase.getInstance().reference
+            .child("users")
+            .child(r.id)
+            .child("lastSeen")
+            .get()
+            .addOnSuccessListener { snapshot ->
+                realLastSeen = when (val value = snapshot.value) {
+                    is Long -> value
+                    is Int -> value.toLong()
+                    is Double -> value.toLong()
+                    is String -> value.toLongOrNull() ?: 0L
+                    else -> 0L
+                }
+            }
+    }
 
     Column(modifier = Modifier.fillMaxWidth()) {
 
@@ -1442,23 +1625,31 @@ private fun NotificationOverlay(
         Spacer(Modifier.height(16.dp))
 
         // ── STATS ROW ───────────────────────────────────────────────────
-        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)) {
-            listOf(
-                "Messages" to "—",
-                "Files"    to "—",
-                "Chat age" to "—"
-            ).forEachIndexed { i, (label, value) ->
-                if (i > 0) VerticalDivider(modifier = Modifier.height(36.dp).padding(top = 4.dp), color = DividerColor)
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.weight(1f).background(Color(0xFFF7F8FA), RoundedCornerShape(8.dp)).padding(vertical = 10.dp)
-                ) {
-                    Text(value, fontSize = 17.sp, fontWeight = FontWeight.Medium, color = TextPrimary)
-                    Text(label, fontSize = 11.sp, color = TextSecondary)
-                }
-            }
-        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            ChatStatTile(
+                value = messageCount.toString(),
+                label = "Messages",
+                modifier = Modifier.weight(1f)
+            )
 
+            ChatStatTile(
+                value = fileCount.toString(),
+                label = "Files",
+                modifier = Modifier.weight(1f),
+                onClick = onFilesClick
+            )
+
+            ChatStatTile(
+                value = chatAge,
+                label = "Chat age",
+                modifier = Modifier.weight(1f)
+            )
+        }
         Spacer(Modifier.height(16.dp))
 
         // ── RESPONDER INFO SECTION ──────────────────────────────────────
@@ -1469,7 +1660,11 @@ private fun NotificationOverlay(
             InfoRowDept(dept = r.role)
             if (!online) {
                 InfoRowDivider()
-                InfoRow(icon = Icons.Default.AccessTime, label = "Last seen", value = "Unknown")
+                InfoRow(
+                    icon = Icons.Default.AccessTime,
+                    label = "Last seen",
+                    value = formatLastSeenTime(realLastSeen)
+                )
             }
         }
 
@@ -1498,7 +1693,30 @@ private fun NotificationOverlay(
                 tint  = if (priority) Color(0xFFBA7517) else TextSecondary,
                 bg    = if (priority) Color(0xFFFAEEDA) else Color(0xFFF7F8FA),
                 modifier = Modifier.weight(1f),
-                onClick = { priority = !priority }
+                onClick = {
+                    val newValue = !priority
+
+                    FirebaseDatabase.getInstance().reference
+                        .child("priority_chats")
+                        .child(currentResponderId)
+                        .child(r.id)
+                        .setValue(newValue)
+                        .addOnSuccessListener {
+                            priority = newValue
+                            Toast.makeText(
+                                ctx,
+                                if (newValue) "Marked as priority" else "Removed from priority",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                        .addOnFailureListener {
+                            Toast.makeText(
+                                ctx,
+                                "Failed to update priority",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                }
             )
             // Search
             ActionTile(
@@ -1506,30 +1724,112 @@ private fun NotificationOverlay(
                 label = "Search",
                 tint  = TextSecondary,
                 modifier = Modifier.weight(1f),
-                onClick = { Toast.makeText(ctx, "Search coming soon", Toast.LENGTH_SHORT).show() }
+                onClick = onSearchClick
             )
         }
-
         Spacer(Modifier.height(16.dp))
 
-        // ── DANGER ZONE ─────────────────────────────────────────────────
         Surface(
-            color    = Color(0xFFFFEBEB),
-            shape    = RoundedCornerShape(12.dp),
-            modifier = Modifier.fillMaxWidth().clickable {
-                Toast.makeText(ctx, "Block feature coming soon", Toast.LENGTH_SHORT).show()
-            }
+            color = Color(0xFFFFF3E0),
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable {
+                    showReportDialog = true
+                }
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)
             ) {
-                Icon(Icons.Default.PersonOff, contentDescription = null,
-                    tint = Color(0xFFA32D2D), modifier = Modifier.size(18.dp))
+                Icon(
+                    Icons.Default.Report,
+                    contentDescription = null,
+                    tint = Color(0xFFE65100),
+                    modifier = Modifier.size(18.dp)
+                )
+
                 Spacer(Modifier.width(12.dp))
-                Text("Block responder", fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium, color = Color(0xFFA32D2D))
+
+                Text(
+                    "Report communication issue",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = Color(0xFFE65100)
+                )
             }
+        }
+
+        if (showReportDialog) {
+            AlertDialog(
+                onDismissRequest = {
+                    showReportDialog = false
+                    reportReason = ""
+                },
+                title = { Text("Report communication issue") },
+                text = {
+                    Column {
+                        Text(
+                            "This will be submitted to admin/dispatcher for review.",
+                            fontSize = 13.sp,
+                            color = TextSecondary
+                        )
+
+                        Spacer(Modifier.height(12.dp))
+
+                        OutlinedTextField(
+                            value = reportReason,
+                            onValueChange = { reportReason = it },
+                            placeholder = { Text("Describe the issue...") },
+                            modifier = Modifier.fillMaxWidth(),
+                            minLines = 3,
+                            maxLines = 5
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        enabled = reportReason.trim().isNotEmpty(),
+                        onClick = {
+                            val db = FirebaseDatabase.getInstance().reference
+                            val reportId = db.child("communication_reports").push().key ?: return@TextButton
+
+                            val report = mapOf(
+                                "reportId" to reportId,
+                                "reporterId" to currentResponderId,
+                                "reportedResponderId" to r.id,
+                                "reportedResponderName" to r.fullName,
+                                "reportedResponderRole" to r.role,
+                                "reason" to reportReason.trim(),
+                                "status" to "pending",
+                                "createdAt" to System.currentTimeMillis()
+                            )
+
+                            db.child("communication_reports")
+                                .child(reportId)
+                                .setValue(report)
+                                .addOnSuccessListener {
+                                    Toast.makeText(ctx, "Report submitted", Toast.LENGTH_SHORT).show()
+                                    showReportDialog = false
+                                    reportReason = ""
+                                }
+                                .addOnFailureListener {
+                                    Toast.makeText(ctx, "Failed to submit report", Toast.LENGTH_SHORT).show()
+                                }
+                        }
+                    ) {
+                        Text("Submit", color = Color(0xFFE65100))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        showReportDialog = false
+                        reportReason = ""
+                    }) {
+                        Text("Cancel")
+                    }
+                }
+            )
         }
     }
 }
@@ -1737,5 +2037,153 @@ private fun formatChatTime(time: Long): String {
         diff < 3_600_000 -> "${diff / 60_000}m"
         diff < 86_400_000 -> "${diff / 3_600_000}h"
         else -> SimpleDateFormat("MMM dd", Locale.getDefault()).format(Date(time))
+    }
+}
+
+@Composable
+private fun SharedFilesDialog(
+    messages: List<ChatMessage>,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+
+    val files = messages.filter {
+        it.type == MessageType.FILE || it.type == MessageType.IMAGE
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close", color = BrandGreen)
+            }
+        },
+        title = {
+            Text("Shared Files", fontWeight = FontWeight.Bold)
+        },
+        text = {
+            if (files.isEmpty()) {
+                Text(
+                    "No shared files yet.",
+                    color = TextSecondary
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 420.dp)
+                ) {
+                    items(files) { file ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    file.attachmentUri?.let { url ->
+                                        try {
+                                            context.startActivity(
+                                                Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                            )
+                                        } catch (e: Exception) {
+                                            Toast.makeText(
+                                                context,
+                                                "Unable to open file",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    }
+                                }
+                                .padding(vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                if (file.type == MessageType.IMAGE)
+                                    Icons.Default.Image
+                                else
+                                    Icons.AutoMirrored.Filled.InsertDriveFile,
+                                contentDescription = null,
+                                tint = BrandGreen,
+                                modifier = Modifier.size(24.dp)
+                            )
+
+                            Spacer(Modifier.width(12.dp))
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    file.attachmentName ?: file.text ?: "Attachment",
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+
+                                Text(
+                                    SimpleDateFormat(
+                                        "MMM dd, hh:mm a",
+                                        Locale.getDefault()
+                                    ).format(Date(file.createdAt)),
+                                    fontSize = 12.sp,
+                                    color = TextSecondary
+                                )
+                            }
+                        }
+
+                        HorizontalDivider(color = DividerColor)
+                    }
+                }
+            }
+        },
+        shape = RoundedCornerShape(20.dp)
+    )
+}
+
+@Composable
+private fun ChatStatTile(
+    value: String,
+    label: String,
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null
+) {
+    Surface(
+        modifier = modifier
+            .height(74.dp)
+            .then(
+                if (onClick != null) Modifier.clickable { onClick() }
+                else Modifier
+            ),
+        color = Color(0xFFF7F8FA),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                value,
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Medium,
+                color = TextPrimary
+            )
+
+            Spacer(Modifier.height(2.dp))
+
+            Text(
+                label,
+                fontSize = 11.sp,
+                color = TextSecondary
+            )
+        }
+    }
+}
+private fun formatLastSeenTime(time: Long): String {
+    if (time <= 0L) return "Unknown"
+
+    val now = System.currentTimeMillis()
+    val diff = now - time
+
+    return when {
+        diff < 60_000 -> "Just now"
+        diff < 3_600_000 -> "${diff / 60_000}m ago"
+        diff < 86_400_000 -> "${diff / 3_600_000}h ago"
+        else -> SimpleDateFormat(
+            "MMM dd, hh:mm a",
+            Locale.getDefault()
+        ).format(Date(time))
     }
 }

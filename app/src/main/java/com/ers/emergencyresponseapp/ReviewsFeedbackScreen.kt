@@ -58,6 +58,11 @@ import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
 import java.util.UUID
 import java.util.Locale
+import android.graphics.Paint
+import android.graphics.pdf.PdfDocument
+import java.io.File
+import java.io.FileOutputStream
+import androidx.core.content.FileProvider
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
 private object RFColors {
@@ -479,11 +484,14 @@ private fun ResourceRequestFormSheet(
     onSubmit: () -> Unit
 ) {
     val context    = LocalContext.current
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val sheetState = rememberModalBottomSheetState(
+        skipPartiallyExpanded = false
+    )
 
     // Form state
     var category         by rememberSaveable { mutableStateOf(ResCategory.MEDICAL) }
     var resourceName     by rememberSaveable { mutableStateOf(ResCategory.MEDICAL.items.first()) }
+    var formStep by rememberSaveable { mutableIntStateOf(1) }
     var showItemDropdown by remember { mutableStateOf(false) }
 
     var quantity         by rememberSaveable { mutableIntStateOf(1) }
@@ -594,7 +602,10 @@ private fun ResourceRequestFormSheet(
         }
     ) {
         LazyColumn(
-            modifier            = Modifier.fillMaxWidth().navigationBarsPadding(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 640.dp)
+                .navigationBarsPadding(),
             contentPadding      = PaddingValues(horizontal = 18.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -617,6 +628,22 @@ private fun ResourceRequestFormSheet(
             }
 
             item { HorizontalDivider(color = RFColors.Border) }
+
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    StepChip("1", "Resource", formStep == 1, Modifier.weight(1f))
+                    StepChip("2", "Details", formStep == 2, Modifier.weight(1f))
+                }
+
+                Spacer(Modifier.height(12.dp))
+            }
+
+            if (formStep == 1) {
 
             // ── Category chips ────────────────────────────────────────────
             item {
@@ -748,25 +775,26 @@ private fun ResourceRequestFormSheet(
                         }
                     }
 
-                    // Urgency selector
-                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("Urgency", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = RFColors.TextSecondary)
-                        Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                            ResUrgency.entries.chunked(2).forEach { row ->
-                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                                    row.forEach { u ->
-                                        val isSel = u == urgency
-                                        Box(
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .clip(RoundedCornerShape(10.dp))
-                                                .background(if (isSel) u.bgColor else RFColors.SurfaceBg)
-                                                .border(1.dp, if (isSel) u.color.copy(alpha = 0.6f) else RFColors.Border, RoundedCornerShape(10.dp))
-                                                .clickable { urgency = u }
-                                                .padding(vertical = 8.dp),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Text(u.displayName, fontSize = 11.sp, fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal, color = if (isSel) u.color else RFColors.TextSecondary)
+                        // Urgency selector
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text("Urgency", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = RFColors.TextSecondary)
+                            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                                ResUrgency.entries.chunked(2).forEach { row ->
+                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                                        row.forEach { u ->
+                                            val isSel = u == urgency
+                                            Box(
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .clip(RoundedCornerShape(10.dp))
+                                                    .background(if (isSel) u.bgColor else RFColors.SurfaceBg)
+                                                    .border(1.dp, if (isSel) u.color.copy(alpha = 0.6f) else RFColors.Border, RoundedCornerShape(10.dp))
+                                                    .clickable { urgency = u }
+                                                    .padding(vertical = 8.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(u.displayName, fontSize = 11.sp, fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal, color = if (isSel) u.color else RFColors.TextSecondary)
+                                            }
                                         }
                                     }
                                 }
@@ -776,6 +804,8 @@ private fun ResourceRequestFormSheet(
                 }
             }
 
+
+            if (formStep == 2) {
             // ── Incident ID ───────────────────────────────────────────────
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -827,16 +857,17 @@ private fun ResourceRequestFormSheet(
                 }
             }
 
-            // ── Additional Notes ──────────────────────────────────────────
-            item {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Additional Notes", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = RFColors.TextSecondary)
-                    OutlinedTextField(
-                        value = notes, onValueChange = { notes = it },
-                        placeholder = { Text("Any special instructions or context…", color = RFColors.TextSecondary.copy(alpha = 0.6f)) },
-                        modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), minLines = 3, maxLines = 5,
-                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.Notes, contentDescription = null, tint = RFColors.Primary, modifier = Modifier.size(18.dp)) }
-                    )
+                // ── Additional Notes ──────────────────────────────────────────
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("Additional Notes", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = RFColors.TextSecondary)
+                        OutlinedTextField(
+                            value = notes, onValueChange = { notes = it },
+                            placeholder = { Text("Any special instructions or context…", color = RFColors.TextSecondary.copy(alpha = 0.6f)) },
+                            modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), minLines = 3, maxLines = 5,
+                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.Notes, contentDescription = null, tint = RFColors.Primary, modifier = Modifier.size(18.dp)) }
+                        )
+                    }
                 }
             }
 
@@ -854,49 +885,132 @@ private fun ResourceRequestFormSheet(
                 }
             }
 
-            // ── Send button ───────────────────────────────────────────────
+            // ── Navigation / Submit buttons ───────────────────────────────
             item {
-                Button(
-                    onClick = {
-                        if (!isFormValid) return@Button
-                        isSending = true
-                        val req = ResRequest(
-                            resourceName = resourceName.trim(),
-                            category     = category,
-                            quantity     = quantity,
-                            urgency      = urgency,
-                            incidentId   = incidentId.trim().ifBlank { "N/A" },
-                            location     = location.trim(),
-                            notes        = notes.trim(),
-                            requestedBy  = responderName
-                        )
-                        try {
-                            Log.i("ResourceRequest", "Sending to admin: ${req.id} — ${req.resourceName} x${req.quantity}")
-                            // TODO: POST req to backend
-                            Toast.makeText(context, "Request sent to admin!", Toast.LENGTH_SHORT).show()
-                            isSending = false
-                            onSubmit()
-                        } catch (e: Exception) {
-                            Log.e("ResourceRequest", "Failed: ${e.message}")
-                            Toast.makeText(context, "Failed to send request", Toast.LENGTH_SHORT).show()
-                            isSending = false
-                        }
-                    },
-                    enabled = isFormValid && !isSending,
-                    modifier = Modifier.fillMaxWidth().height(52.dp),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor        = RFColors.Primary,
-                        contentColor          = Color.White,
-                        disabledContainerColor = RFColors.Primary.copy(alpha = 0.4f)
-                    )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    if (isSending) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
-                    } else {
-                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Send Request to Admin", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+
+                    if (formStep == 2) {
+                        OutlinedButton(
+                            onClick = { formStep = 1 },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(52.dp),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Text("Back")
+                        }
+                    }
+
+                    Button(
+                        onClick = {
+                            if (formStep == 1) {
+                                formStep = 2
+                                return@Button
+                            }
+
+                            if (!isFormValid) return@Button
+
+                            isSending = true
+
+                            val req = ResRequest(
+                                resourceName = resourceName.trim(),
+                                category     = category,
+                                quantity     = quantity,
+                                urgency      = urgency,
+                                incidentId   = incidentId.trim().ifBlank { "N/A" },
+                                location     = location.trim(),
+                                notes        = notes.trim(),
+                                requestedBy  = responderName
+                            )
+
+                            try {
+                                Log.i(
+                                    "ResourceRequest",
+                                    "Sending to admin: ${req.id} — ${req.resourceName} x${req.quantity}"
+                                )
+
+                                val json = """
+                                    {
+                                      "id": "${req.id}",
+                                      "resourceName": "${req.resourceName}",
+                                      "category": "${req.category.displayName}",
+                                      "quantity": ${req.quantity},
+                                      "urgency": "${req.urgency.displayName}",
+                                      "incidentId": "${req.incidentId}",
+                                      "location": "${req.location}",
+                                      "notes": "${req.notes}",
+                                      "requestedBy": "${req.requestedBy}",
+                                      "timestamp": ${req.timestamp},
+                                      "status": "Pending"
+                                    }
+                                    """.trimIndent()
+
+                                val prefs = context.getSharedPreferences(
+                                    "resource_requests",
+                                    Context.MODE_PRIVATE
+                                )
+
+                                val old = prefs.getStringSet(
+                                    "requests",
+                                    emptySet()
+                                ) ?: emptySet()
+
+                                prefs.edit()
+                                    .putStringSet("requests", old + json)
+                                    .apply()
+
+                                Toast.makeText(
+                                    context,
+                                    "Request submitted for admin review",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+
+                                isSending = false
+                                onSubmit()
+
+                            } catch (e: Exception) {
+                                Log.e("ResourceRequest", "Failed: ${e.message}")
+
+                                Toast.makeText(
+                                    context,
+                                    "Failed to send request",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+
+                                isSending = false
+                            }
+                        },
+                        enabled = if (formStep == 1) {
+                            resourceName.isNotBlank() && quantity > 0
+                        } else {
+                            isFormValid && !isSending
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(52.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = RFColors.Primary,
+                            contentColor = Color.White,
+                            disabledContainerColor = RFColors.Primary.copy(alpha = 0.4f)
+                        )
+                    ) {
+                        if (isSending) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = Color.White,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Text(
+                                if (formStep == 1) "Next" else "Submit Request",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp
+                            )
+                        }
                     }
                 }
             }
@@ -917,11 +1031,17 @@ fun ReviewsFeedbackScreen() {
 
     val showComposeDialog = remember { mutableStateOf(false) }
     val reviewText        = rememberSaveable { mutableStateOf("") }
+    var responseRating by rememberSaveable { mutableIntStateOf(3) }
+    var communicationRating by rememberSaveable { mutableIntStateOf(3) }
+    var professionalismRating by rememberSaveable { mutableIntStateOf(3) }
+    var selectedOutcome by rememberSaveable { mutableStateOf("Resolved") }
     val composeTarget     = remember { mutableStateOf<ReviewableIncident?>(null) }
 
     val showDetailsDialog = remember { mutableStateOf(false) }
     val detailsText       = rememberSaveable { mutableStateOf("") }
     val detailsTarget     = remember { mutableStateOf<ReviewableIncident?>(null) }
+    val showReportDialog = remember { mutableStateOf(false) }
+    val generatedReport = rememberSaveable { mutableStateOf("") }
 
     var fullScreenImageUri by remember { mutableStateOf<String?>(null) }   // ← replaces AlertDialog
     var showResourceForm   by remember { mutableStateOf(false) }
@@ -963,15 +1083,19 @@ fun ReviewsFeedbackScreen() {
             ReviewableIncident("#${inc.id}", inc.type.displayName, dateStr, status, proof, notes)
         }
 
-    val allIncidents = derivedIncidents + listOf(
-        ReviewableIncident("#C-5678", "Robbery",         "2024-07-27 · 21:00", ReviewStatus.Submitted),
-        ReviewableIncident("#D-1123", "Flood Zone Evac", "2024-07-26 · 11:45", ReviewStatus.Completed)
-    )
+    val allIncidents = derivedIncidents
 
     val pendingCount   = allIncidents.count { it.status == ReviewStatus.Pending }
     val submittedCount = allIncidents.count { it.status == ReviewStatus.Submitted }
     val completedCount = allIncidents.count { it.status == ReviewStatus.Completed }
     val filtered       = allIncidents.filter { it.status == selected }
+
+    val resourcePrefs = context.getSharedPreferences("resource_requests", Context.MODE_PRIVATE)
+
+    val avgRating = 4.6f
+    val resourceRequests = resourcePrefs
+        .getStringSet("requests", emptySet())
+        ?.size ?: 0
 
     Scaffold(containerColor = RFColors.SurfaceBg) { paddingValues ->
         LazyColumn(
@@ -1014,6 +1138,39 @@ fun ReviewsFeedbackScreen() {
                     ReviewStatCard(pendingCount,   "Pending",   Color(0xFFE65100), Modifier.weight(1f))
                     ReviewStatCard(submittedCount, "Submitted", Color(0xFF0277BD), Modifier.weight(1f))
                     ReviewStatCard(completedCount, "Completed", Color(0xFF2E7D32), Modifier.weight(1f))
+                }
+            }
+
+            item {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        "Performance Overview",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = RFColors.Text
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        AnalyticsCard(
+                            title = "Avg Rating",
+                            value = "⭐ $avgRating",
+                            modifier = Modifier.weight(1f)
+                        )
+
+                        AnalyticsCard(
+                            title = "Resource Requests",
+                            value = resourceRequests.toString(),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                 }
             }
 
@@ -1093,6 +1250,10 @@ fun ReviewsFeedbackScreen() {
                         onWriteReview = { inc ->
                             composeTarget.value = inc
                             reviewText.value = ""
+                            responseRating = 3
+                            communicationRating = 3
+                            professionalismRating = 3
+                            selectedOutcome = "Resolved"
                             showComposeDialog.value = true
                         },
                         onViewDetails = { inc ->
@@ -1123,26 +1284,64 @@ fun ReviewsFeedbackScreen() {
                     }
                 },
                 text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = reviewText.value, onValueChange = { reviewText.value = it },
-                            label = { Text("Your feedback") }, minLines = 3,
-                            modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+
+                        RatingSelector(
+                            title = "Response Time",
+                            rating = responseRating,
+                            onRatingChange = { responseRating = it }
                         )
-                        if (reviewText.value.isBlank()) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Icon(Icons.Default.Info, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color(0xFFE65100))
-                                Text("Please enter feedback before submitting.", fontSize = 12.sp, color = Color(0xFFE65100))
-                            }
-                        }
+
+                        RatingSelector(
+                            title = "Communication",
+                            rating = communicationRating,
+                            onRatingChange = { communicationRating = it }
+                        )
+
+                        RatingSelector(
+                            title = "Professionalism",
+                            rating = professionalismRating,
+                            onRatingChange = { professionalismRating = it }
+                        )
+
+                        OutcomeSelector(
+                            selected = selectedOutcome,
+                            onSelect = { selectedOutcome = it }
+                        )
+
+                        OutlinedTextField(
+                            value = reviewText.value,
+                            onValueChange = { reviewText.value = it },
+                            label = { Text("Additional feedback") },
+                            minLines = 3,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp)
+                        )
                     }
                 },
                 confirmButton = {
                     Button(
                         onClick = {
                             val target = composeTarget.value
-                            if (target != null && reviewText.value.isNotBlank()) submitReview(target, reviewText.value)
-                            showComposeDialog.value = false; composeTarget.value = null; reviewText.value = ""
+
+                            if (target != null) {
+                                val fullReview = """
+                                    Outcome: $selectedOutcome
+                                    
+                                    Response Time Rating: $responseRating/5
+                                    Communication Rating: $communicationRating/5
+                                    Professionalism Rating: $professionalismRating/5
+                                    
+                                    Feedback:
+                                    ${reviewText.value}
+                                    """.trimIndent()
+
+                                submitReview(target, fullReview)
+                            }
+
+                            showComposeDialog.value = false
+                            composeTarget.value = null
+                            reviewText.value = ""
                         },
                         enabled = reviewText.value.isNotBlank(),
                         shape = RoundedCornerShape(12.dp),
@@ -1178,8 +1377,111 @@ fun ReviewsFeedbackScreen() {
                     }
                 },
                 confirmButton = {
-                    Button(onClick = { showDetailsDialog.value = false; detailsTarget.value = null }, shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = RFColors.Primary)) {
-                        Text("Close", fontWeight = FontWeight.SemiBold)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+
+                        OutlinedButton(
+                            onClick = {
+                                generatedReport.value = """
+                                INCIDENT REPORT
+                                
+                                Incident ID: ${inc.id}
+                                Incident Type: ${inc.type}
+                                Date Completed: ${inc.date}
+                                
+                                Status: ${inc.status.label}
+                                
+                                Review Details:
+                                ${detailsText.value}
+                                
+                                Generated By:
+                                $responderName
+                                
+                                Generated On:
+                                ${java.text.SimpleDateFormat(
+                                    "MMM dd, yyyy hh:mm a",
+                                    java.util.Locale.getDefault()
+                                ).format(java.util.Date())}
+                                    """.trimIndent()
+
+                                showReportDialog.value = true
+                            }
+                        ) {
+                            Icon(
+                                Icons.Default.Description,
+                                contentDescription = null
+                            )
+
+                            Spacer(Modifier.width(6.dp))
+
+                            Text("Generate Report")
+                        }
+
+                        Button(
+                            onClick = {
+                                showDetailsDialog.value = false
+                                detailsTarget.value = null
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = RFColors.Primary
+                            )
+                        ) {
+                            Text("Close")
+                        }
+                    }
+                }
+            )
+        }
+
+        if (showReportDialog.value) {
+
+            AlertDialog(
+                onDismissRequest = {
+                    showReportDialog.value = false
+                },
+
+                title = {
+                    Text(
+                        "Incident Report",
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+
+                text = {
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color.White
+                        )
+                    ) {
+                        Text(
+                            generatedReport.value,
+                            modifier = Modifier.padding(12.dp),
+                            fontSize = 13.sp
+                        )
+                    }
+                },
+
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            exportIncidentReportPdf(
+                                context = context,
+                                reportText = generatedReport.value
+                            )
+                        }
+                    ) {
+                        Text("Export PDF")
+                    }
+                },
+
+                dismissButton = {
+                    OutlinedButton(
+                        onClick = {
+                            showReportDialog.value = false
+                        }
+                    ) {
+                        Text("Close")
                     }
                 }
             )
@@ -1196,6 +1498,177 @@ fun ReviewsFeedbackScreen() {
                 responderName = responderName,
                 onDismiss     = { showResourceForm = false },
                 onSubmit      = { showResourceForm = false }
+            )
+        }
+    }
+}
+
+@Composable
+private fun RatingSelector(
+    title: String,
+    rating: Int,
+    onRatingChange: (Int) -> Unit
+) {
+    Column {
+        Text(
+            title,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = RFColors.TextSecondary
+        )
+
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            (1..5).forEach { value ->
+                Icon(
+                    imageVector = if (value <= rating) Icons.Default.Star else Icons.Default.StarBorder,
+                    contentDescription = null,
+                    tint = if (value <= rating) Color(0xFFFFB300) else RFColors.Border,
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clickable { onRatingChange(value) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun OutcomeSelector(
+    selected: String,
+    onSelect: (String) -> Unit
+) {
+    val outcomes = listOf("Resolved", "Partially Resolved", "Escalated", "False Alarm")
+
+    Column {
+        Text(
+            "Incident Outcome",
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = RFColors.TextSecondary
+        )
+
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(outcomes.size) { index ->
+                val item = outcomes[index]
+                FilterChip(
+                    selected = selected == item,
+                    onClick = { onSelect(item) },
+                    label = { Text(item, fontSize = 12.sp) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AnalyticsCard(
+    title: String,
+    value: String,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier.height(86.dp),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = RFColors.Bg),
+        border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                value,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                color = RFColors.Text
+            )
+
+            Spacer(Modifier.height(4.dp))
+
+            Text(
+                title,
+                fontSize = 12.sp,
+                color = RFColors.TextSecondary
+            )
+        }
+    }
+}
+
+private fun exportIncidentReportPdf(
+    context: Context,
+    reportText: String
+) {
+    val pdfDocument = PdfDocument()
+    val pageInfo = PdfDocument.PageInfo.Builder(595, 842, 1).create()
+    val page = pdfDocument.startPage(pageInfo)
+
+    val canvas = page.canvas
+    val paint = Paint().apply {
+        textSize = 14f
+        color = android.graphics.Color.BLACK
+    }
+
+    var y = 60f
+    reportText.lines().forEach { line ->
+        canvas.drawText(line, 40f, y, paint)
+        y += 22f
+    }
+
+    pdfDocument.finishPage(page)
+
+    val file = File(
+        context.cacheDir,
+        "incident_report_${System.currentTimeMillis()}.pdf"
+    )
+
+    pdfDocument.writeTo(FileOutputStream(file))
+    pdfDocument.close()
+
+    val uri = FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.provider",
+        file
+    )
+
+    val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+        type = "application/pdf"
+        putExtra(android.content.Intent.EXTRA_STREAM, uri)
+        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+
+    context.startActivity(
+        android.content.Intent.createChooser(intent, "Share Incident Report")
+    )
+}
+
+@Composable
+private fun StepChip(
+    number: String,
+    label: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(50),
+        color = if (selected) RFColors.Primary else RFColors.SurfaceBg,
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (selected) RFColors.Primary else RFColors.Border
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Text(
+                "$number. $label",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = if (selected) Color.White else RFColors.TextSecondary
             )
         }
     }
