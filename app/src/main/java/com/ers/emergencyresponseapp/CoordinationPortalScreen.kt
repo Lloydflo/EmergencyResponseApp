@@ -1130,6 +1130,21 @@ private fun ChatScreen(vm: CoordinationViewModel, currentResponderId: String, on
             }
         )
     }
+    if (showAttach.value) {
+        AttachSheet(
+            onDismiss = {
+                showAttach.value = false
+            },
+            onPickImage = {
+                showAttach.value = false
+                imageLauncher.launch("image/*")
+            },
+            onPickFile = {
+                showAttach.value = false
+                fileLauncher.launch("*/*")
+            }
+        )
+    }
 }
 
 @Composable
