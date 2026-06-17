@@ -166,6 +166,15 @@ private data class SavedResourceRequest(
     val timestamp: Long
 )
 
+private data class SavedReviewRating(
+    val incidentId: String,
+    val responseRating: Int,
+    val communicationRating: Int,
+    val professionalismRating: Int,
+    val outcome: String,
+    val timestamp: Long
+)
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /** Decode a file:// or content:// URI string to a Bitmap safely */
@@ -1341,17 +1350,53 @@ fun ReviewsFeedbackScreen() {
 
     val resourcePrefs = context.getSharedPreferences("resource_requests", Context.MODE_PRIVATE)
 
-    val avgRating = 4.6f
-    val resourceRequests = resourcePrefs
-        .getStringSet("requests", emptySet())
-        ?.size ?: 0
+    val reviewPrefs = context.getSharedPreferences("review_ratings", Context.MODE_PRIVATE)
+    var ratingRefreshKey by remember { mutableIntStateOf(0) }
+
+    val parsedRequests = remember(requestRefreshKey) {
+        parseSavedResourceRequests(
+            resourcePrefs.getStringSet("requests", emptySet()) ?: emptySet()
+        )
+    }
+
+
+    val resourceRequests = parsedRequests.size
+
+    val submittedReviews = allIncidents.filter {
+        it.status == ReviewStatus.Submitted || it.status == ReviewStatus.Completed
+    }
+
+    val savedRatings = remember(ratingRefreshKey) {
+        parseSavedReviewRatings(
+            reviewPrefs.getStringSet("ratings", emptySet()) ?: emptySet()
+        )
+    }
+
+    val avgRating = if (savedRatings.isNotEmpty()) {
+        val totalAverage = savedRatings.map {
+            (it.responseRating + it.communicationRating + it.professionalismRating) / 3f
+        }.average()
+
+        String.format(Locale.getDefault(), "%.1f", totalAverage).toFloat()
+    } else {
+        0f
+    }
 
     fun cancelResourceRequest(requestId: String) {
         val old = resourcePrefs.getStringSet("requests", emptySet()) ?: emptySet()
 
-        val updated = old.filterNot { json ->
-            json.contains("\"id\": \"$requestId\"") ||
-                    json.contains("\"id\":\"$requestId\"")
+        val updated = old.map { json ->
+            if (
+                json.contains("\"id\": \"$requestId\"") ||
+                json.contains("\"id\":\"$requestId\"")
+            ) {
+                json.replace(
+                    Regex("\"status\"\\s*:\\s*\".*?\""),
+                    "\"status\": \"Cancelled\""
+                )
+            } else {
+                json
+            }
         }.toSet()
 
         resourcePrefs.edit()
@@ -1367,11 +1412,7 @@ fun ReviewsFeedbackScreen() {
         ).show()
     }
 
-    val recentRequests = remember(requestRefreshKey) {
-        parseSavedResourceRequests(
-            resourcePrefs.getStringSet("requests", emptySet()) ?: emptySet()
-        ).take(3)
-    }
+    val recentRequests = parsedRequests.take(3)
 
     Scaffold(containerColor = RFColors.SurfaceBg) { paddingValues ->
         LazyColumn(
@@ -1439,7 +1480,7 @@ fun ReviewsFeedbackScreen() {
                     ) {
                         AnalyticsCard(
                             title = "Avg Rating",
-                            value = "⭐ $avgRating",
+                            value = if (avgRating > 0f) "⭐ $avgRating" else "—",
                             modifier = Modifier.weight(1f)
                         )
 
@@ -1675,6 +1716,25 @@ fun ReviewsFeedbackScreen() {
                                     """.trimIndent()
 
                                 submitReview(target, fullReview)
+
+                                val ratingJson = """
+                                    {
+                                      "incidentId": "${target.id.removePrefix("#")}",
+                                      "responseRating": $responseRating,
+                                      "communicationRating": $communicationRating,
+                                      "professionalismRating": $professionalismRating,
+                                      "outcome": "$selectedOutcome",
+                                      "timestamp": ${System.currentTimeMillis()}
+                                    }
+                                """.trimIndent()
+
+                                val oldRatings = reviewPrefs.getStringSet("ratings", emptySet()) ?: emptySet()
+
+                                reviewPrefs.edit()
+                                    .putStringSet("ratings", oldRatings + ratingJson)
+                                    .apply()
+
+                                ratingRefreshKey++
                             }
 
                             showComposeDialog.value = false
@@ -2083,6 +2143,38 @@ private fun parseSavedResourceRequests(raw: Set<String>): List<SavedResourceRequ
     }.sortedByDescending { it.timestamp }
 }
 
+private fun parseSavedReviewRatings(raw: Set<String>): List<SavedReviewRating> {
+    return raw.mapNotNull { json ->
+        runCatching {
+            fun pick(key: String): String {
+                return Regex("\"$key\"\\s*:\\s*\"(.*?)\"")
+                    .find(json)
+                    ?.groupValues
+                    ?.get(1)
+                    ?: ""
+            }
+
+            fun pickNumber(key: String): Int {
+                return Regex("\"$key\"\\s*:\\s*(\\d+)")
+                    .find(json)
+                    ?.groupValues
+                    ?.get(1)
+                    ?.toIntOrNull()
+                    ?: 0
+            }
+
+            SavedReviewRating(
+                incidentId = pick("incidentId"),
+                responseRating = pickNumber("responseRating"),
+                communicationRating = pickNumber("communicationRating"),
+                professionalismRating = pickNumber("professionalismRating"),
+                outcome = pick("outcome"),
+                timestamp = pickNumber("timestamp").toLong()
+            )
+        }.getOrNull()
+    }
+}
+
 @Composable
 private fun ResourceRequestHistoryCard(
     request: SavedResourceRequest,
@@ -2099,6 +2191,7 @@ private fun ResourceRequestHistoryCard(
     val statusColor = when (request.status.lowercase()) {
         "approved" -> Color(0xFF2E7D32)
         "rejected" -> Color(0xFFD32F2F)
+        "cancelled" -> Color(0xFF757575)
         else -> Color(0xFFF57C00)
     }
 
@@ -2161,15 +2254,8 @@ private fun ResourceRequestHistoryCard(
                 )
             }
             if (request.status.equals("Pending", ignoreCase = true)) {
-                Spacer(Modifier.width(8.dp))
-
                 TextButton(onClick = onCancel) {
-                    Text(
-                        "Cancel",
-                        color = Color(0xFFD32F2F),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Text("Cancel", color = Color(0xFFD32F2F))
                 }
             }
         }

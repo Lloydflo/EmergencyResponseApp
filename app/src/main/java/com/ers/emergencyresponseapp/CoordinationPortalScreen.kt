@@ -926,7 +926,54 @@ private fun ChatScreen(vm: CoordinationViewModel, currentResponderId: String, on
     var chatSearchQuery by remember { mutableStateOf("") }
     val ctx                = LocalContext.current
     val chatName           = selectedResponder?.fullName ?: selectedDepartment?.displayName ?: "Chat"
-    val isOnline           = selectedResponder?.status?.contains("online", ignoreCase = true) == true
+    var liveIsOnline by remember(selectedResponder?.id) {
+        mutableStateOf(selectedResponder?.status?.contains("online", ignoreCase = true) == true)
+    }
+
+    var liveLastSeen by remember(selectedResponder?.id) {
+        mutableLongStateOf(0L)
+    }
+
+    DisposableEffect(selectedResponder?.id) {
+        val responderId = selectedResponder?.id
+
+        if (responderId.isNullOrBlank()) {
+            onDispose { }
+        } else {
+            val userRef = FirebaseDatabase.getInstance()
+                .reference
+                .child("users")
+                .child(responderId)
+
+            val listener = object : ValueEventListener {
+                override fun onDataChange(snapshot: DataSnapshot) {
+                    liveIsOnline = when (val value = snapshot.child("isOnline").value) {
+                        is Boolean -> value
+                        is String -> value.toBoolean()
+                        else -> false
+                    }
+
+                    liveLastSeen = when (val value = snapshot.child("lastSeen").value) {
+                        is Long -> value
+                        is Int -> value.toLong()
+                        is Double -> value.toLong()
+                        is String -> value.toLongOrNull() ?: 0L
+                        else -> 0L
+                    }
+                }
+
+                override fun onCancelled(error: DatabaseError) {}
+            }
+
+            userRef.addValueEventListener(listener)
+
+            onDispose {
+                userRef.removeEventListener(listener)
+            }
+        }
+    }
+
+    val isOnline = liveIsOnline
 
     val fileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         if (uri != null) {
