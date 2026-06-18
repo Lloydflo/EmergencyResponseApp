@@ -127,6 +127,11 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Refresh
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.ers.emergencyresponseapp.features.assigned.AssignedIncidentsViewModel
+import com.ers.emergencyresponseapp.features.assigned.toDomain
+import androidx.compose.runtime.collectAsState
+import androidx.compose.material3.Surface
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -382,205 +387,75 @@ private fun AssignedActionButtons(
     sendOnSceneReport: (Incident) -> Unit,
     openMarkDone: (Incident) -> Unit
 ) {
-    val buttonScope = rememberCoroutineScope()
-
-    // FIX 5: Use the incident id directly as the remember key (already unique).
-    // Removed string concatenation for "_scene" / "_mark" keys — use Pair instead
-    // so the key object is structurally stable across recompositions.
-    val showNavLabel   = remember(inc.id) { mutableStateOf(false) }
-    val showSceneLabel = remember(inc.id to "scene") { mutableStateOf(false) }
-    val showMarkLabel  = remember(inc.id to "mark")  { mutableStateOf(false) }
-
-    Row(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.End
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Column {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
+        OutlinedButton(
+            onClick = {
+                context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
+                    .edit()
+                    .putString("last_nav_incident_id", inc.id)
+                    .apply()
 
-                // NAVIGATE
-                OutlinedButton(
-                    onClick = {
-                        context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
-                            .edit().putString("last_nav_incident_id", inc.id).apply()
-                        setOnSceneEnabled(false)
-                        setNavTarget(inc.id, inc.latitude, inc.longitude)
-                        startRouteUpdateMonitoring(
-                            context,
-                            inc.id,
-                            inc.latitude,
-                            inc.longitude,
-                            inc.location
-                        )
-                        navigateToLocation(inc.latitude, inc.longitude, inc.location)
-                        if (currentLatitude != null && currentLongitude != null && inc.latitude != null && inc.longitude != null) {
-                            RouteHistoryStore.startRoute(
-                                context,
-                                inc.id,
-                                currentLatitude,
-                                currentLongitude,
-                                inc.latitude,
-                                inc.longitude
-                            )
-                        }
-                        if (inc.latitude != null && inc.longitude != null) {
-                            if (ContextCompat.checkSelfPermission(
-                                    context,
-                                    Manifest.permission.ACCESS_FINE_LOCATION
-                                ) == PackageManager.PERMISSION_GRANTED
-                            ) {
-                                startOnSceneTracking()
-                            } else {
-                                requestOnScenePermission()
-                            }
-                        }
-                    },
-                    // FIX 6: Removed the redundant inner combinedClickable wrapping an empty onClick.
-                    // The OutlinedButton already handles click; combinedClickable here only adds
-                    // a second gesture detector that competed with the button's own ripple.
-                    // Long-press is wired directly to the button's modifier instead.
-                    modifier = Modifier.size(42.dp).combinedClickable(
-                        onClick = {
-                            context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
-                                .edit().putString("last_nav_incident_id", inc.id).apply()
-                            setOnSceneEnabled(false)
-                            setNavTarget(inc.id, inc.latitude, inc.longitude)
-                            startRouteUpdateMonitoring(
-                                context,
-                                inc.id,
-                                inc.latitude,
-                                inc.longitude,
-                                inc.location
-                            )
-                            navigateToLocation(inc.latitude, inc.longitude, inc.location)
-                            if (currentLatitude != null && currentLongitude != null && inc.latitude != null && inc.longitude != null) {
-                                RouteHistoryStore.startRoute(
-                                    context,
-                                    inc.id,
-                                    currentLatitude,
-                                    currentLongitude,
-                                    inc.latitude,
-                                    inc.longitude
-                                )
-                            }
-                            if (inc.latitude != null && inc.longitude != null) {
-                                if (ContextCompat.checkSelfPermission(
-                                        context,
-                                        Manifest.permission.ACCESS_FINE_LOCATION
-                                    ) == PackageManager.PERMISSION_GRANTED
-                                ) {
-                                    startOnSceneTracking()
-                                } else {
-                                    requestOnScenePermission()
-                                }
-                            }
-                        },
-                        onLongClick = {
-                            showNavLabel.value = true
-                            buttonScope.launch { delay(900); showNavLabel.value = false }
-                        }
-                    ),
-                    shape = RoundedCornerShape(12.dp),
-                    contentPadding = PaddingValues(0.dp)
-                ) {
-                    Icon(
-                        Icons.Default.LocationOn,
-                        contentDescription = "Navigate",
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
+                setOnSceneEnabled(false)
+                setNavTarget(inc.id, inc.latitude, inc.longitude)
 
-                // ON-SCENE
-                OutlinedButton(
-                    onClick = { sendOnSceneReport(inc) },
-                    enabled = onSceneEnabled,
-                    modifier = Modifier.size(42.dp).combinedClickable(
-                        onClick = { if (onSceneEnabled) sendOnSceneReport(inc) },
-                        onLongClick = {
-                            showSceneLabel.value = true
-                            buttonScope.launch { delay(900); showSceneLabel.value = false }
-                        }
-                    ),
-                    shape = RoundedCornerShape(12.dp),
-                    contentPadding = PaddingValues(0.dp)
-                ) {
-                    Icon(
-                        Icons.Default.MyLocation,
-                        contentDescription = "On Scene",
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
+                startRouteUpdateMonitoring(
+                    context,
+                    inc.id,
+                    inc.latitude,
+                    inc.longitude,
+                    inc.location
+                )
 
-                // MARK DONE
-                Button(
-                    onClick = { openMarkDone(inc) },
-                    modifier = Modifier.size(42.dp).combinedClickable(
-                        onClick = { openMarkDone(inc) },
-                        onLongClick = {
-                            showMarkLabel.value = true
-                            buttonScope.launch { delay(900); showMarkLabel.value = false }
-                        }
-                    ),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFF2E7D32),
-                        contentColor = Color.White
-                    ),
-                    shape = RoundedCornerShape(12.dp),
-                    contentPadding = PaddingValues(0.dp)
-                ) {
-                    Icon(
-                        Icons.Default.Done,
-                        contentDescription = "Mark Done",
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-            }
+                navigateToLocation(inc.latitude, inc.longitude, inc.location)
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp),
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            Icon(Icons.Default.LocationOn, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text("Navigate to Incident", fontWeight = FontWeight.SemiBold)
         }
 
-        Spacer(Modifier.height(4.dp))
-
         Row(
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-
-            Box(
-                modifier = Modifier.size(42.dp),
-                contentAlignment = Alignment.Center
+            OutlinedButton(
+                onClick = { sendOnSceneReport(inc) },
+                enabled = onSceneEnabled,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp),
+                shape = RoundedCornerShape(14.dp)
             ) {
-                Text(
-                    "Nav",
-                    fontSize = 10.sp,
-                    color = AppColors.TextSecondary
-                )
+                Icon(Icons.Default.MyLocation, contentDescription = null)
+                Spacer(Modifier.width(6.dp))
+                Text("On Scene", fontSize = 13.sp)
             }
 
-            Box(
-                modifier = Modifier.size(42.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    "Scene",
-                    fontSize = 10.sp,
-                    color = AppColors.TextSecondary
+            Button(
+                onClick = { openMarkDone(inc) },
+                modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp),
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF2E7D32),
+                    contentColor = Color.White
                 )
-            }
-
-            Box(
-                modifier = Modifier.size(42.dp),
-                contentAlignment = Alignment.Center
             ) {
-                Text(
-                    "Done",
-                    fontSize = 10.sp,
-                    color = AppColors.TextSecondary
-                )
+                Icon(Icons.Default.Done, contentDescription = null)
+                Spacer(Modifier.width(6.dp))
+                Text("Complete", fontSize = 13.sp)
             }
         }
     }
 }
-
 
 
 
@@ -638,7 +513,8 @@ private fun EmergencyRequestCard(request: EmergencyRequest, showBackupBadge: Boo
 fun HomeScreen(
     navController: NavHostController,
     responderRole: String? = null,
-    onLogout: () -> Unit
+    onLogout: () -> Unit,
+    assignedVm: AssignedIncidentsViewModel = viewModel()
 ) {
     val context = LocalContext.current
     var isLocationMonitoringEnabled by remember { mutableStateOf(false) }
@@ -647,6 +523,17 @@ fun HomeScreen(
 
     val storedPrefs      = context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
     val storedDepartment = storedPrefs.getString("department", null)
+    val responderId = storedPrefs.getString("user_id", "")?.toIntOrNull() ?: 0
+    val unitCode = storedPrefs.getString("unit_code", "") ?: ""
+    val unitType = storedPrefs.getString("unit_type", "") ?: ""
+    val unitStatus = storedPrefs.getString("unit_status", "available") ?: "available"
+
+    val assignedUi by assignedVm.ui.collectAsState()
+    LaunchedEffect(responderId) {
+        if (responderId > 0) {
+            assignedVm.load(responderId)
+        }
+    }
     val effectiveRole    = storedDepartment?.lowercase() ?: responderRole?.takeIf { it.isNotBlank() }
     val departmentFilter: IncidentType? = when (effectiveRole?.trim()?.lowercase()) {
         "fire"    -> IncidentType.FIRE
@@ -690,9 +577,12 @@ fun HomeScreen(
     var onlineStatus     by remember { mutableStateOf(ResponderOnlineStatus.Online) }
     val incomingRequests  = remember { mutableStateListOf<EmergencyRequest>() }
 
-    var showNewIncidentNotification   by remember { mutableStateOf(false) }
-    var newIncidentMessage            by remember { mutableStateOf("") }
-    var showAssignedAfterNotification by remember { mutableStateOf(true) }
+    var showNewIncidentNotification by remember { mutableStateOf(false) }
+    var newIncidentMessage by remember { mutableStateOf("") }
+    var showAssignedAfterNotification by remember { mutableStateOf(false) }
+    var lastShownApiAssignedId by remember {
+        mutableStateOf(prefs.getString("last_shown_api_assigned_id", null))
+    }
     var lastNotifiedIncidentId        by remember { mutableStateOf(prefs.getString("last_notified_incident_id", null)) }
     var lastAssignedIncidentId        by remember { mutableStateOf(prefs.getString("last_assigned_incident_id", null)) }
     var navDestinationIncidentId      by remember { mutableStateOf<String?>(null) }
@@ -733,7 +623,7 @@ fun HomeScreen(
 
     var incidentsList   by remember { mutableStateOf(listOf<Incident>()) }
     var activeIncidents by remember { mutableStateOf(listOf<Incident>()) }
-    var isLoading by remember { mutableStateOf(true) }
+    var isLoading by remember { mutableStateOf(false) }
     var isRefreshing by remember { mutableStateOf(false) }
     var showNotificationsDialog by remember { mutableStateOf(false) }
 
@@ -765,10 +655,8 @@ fun HomeScreen(
     }
 
     LaunchedEffect(Unit) {
-        isLoading = true
         loadIncidents()
         refreshActiveIncidents()
-        delay(800)
         isLoading = false
 
         fun persistAssigned(id: String?) {
@@ -1142,20 +1030,39 @@ fun HomeScreen(
                 }.sortedWith(incidentPriorityComparator).take(1)
             }
 
-            val assignedListForRole = if (showAssignedAfterNotification) assignedCandidateForRole else emptyList()
+            val assignedListForRole =
+                if (showAssignedAfterNotification) {
+                    assignedUi.incidents.map { it.toDomain() }
+                } else {
+                    emptyList()
+                }
 
             assignedListForRole.firstOrNull()?.id?.let { id -> if (!onSceneEnabledMap.containsKey(id)) onSceneEnabledMap[id] = false }
 
-            LaunchedEffect(assignedCandidateForRole.firstOrNull()?.id) {
-                val inc = assignedCandidateForRole.firstOrNull() ?: return@LaunchedEffect
-                if (lastNotifiedIncidentId == inc.id) return@LaunchedEffect
-                lastNotifiedIncidentId = inc.id
-                try { prefs.edit().putString("last_notified_incident_id", inc.id).apply() } catch (_: Exception) {}
-                newIncidentMessage = "New ${inc.type.displayName} incident assigned: ${inc.location.ifBlank { "Unknown location" }}"
+            LaunchedEffect(assignedUi.incidents.firstOrNull()?.id) {
+                val incident = assignedUi.incidents.firstOrNull() ?: return@LaunchedEffect
+
+                if (lastShownApiAssignedId == incident.id) {
+                    showAssignedAfterNotification = true
+                    return@LaunchedEffect
+                }
+
+                lastShownApiAssignedId = incident.id
+                prefs.edit()
+                    .putString("last_shown_api_assigned_id", incident.id)
+                    .apply()
+
+                newIncidentMessage =
+                    "New ${incident.type.uppercase()} incident assigned at ${incident.location}"
+
                 notificationCount += 1
                 showAssignedAfterNotification = false
                 showNewIncidentNotification = true
-                delay(3000L); showNewIncidentNotification = false; showAssignedAfterNotification = true
+
+                delay(5000L)
+
+                showNewIncidentNotification = false
+                showAssignedAfterNotification = true
             }
 
             // FIX 8: Removed the duplicate outer `activeListVisible` that was shadowed
@@ -1378,45 +1285,66 @@ fun HomeScreen(
                         if (assignedListForRole.isEmpty()) {
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(18.dp),
+                                shape = RoundedCornerShape(20.dp),
                                 colors = CardDefaults.cardColors(
                                     containerColor = Color.White
                                 ),
-                                border = BorderStroke(
-                                    1.dp,
-                                    Color(0xFFE0E0E0)
-                                )
-                            ){
+                                elevation = CardDefaults.cardElevation(2.dp)
+                            ) {
                                 Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(14.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally
+                                    modifier = Modifier.padding(16.dp)
                                 ) {
+
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(10.dp)
-                                                .clip(CircleShape)
-                                                .background(Color(0xFF4CAF50))
+
+                                        Icon(
+                                            imageVector = Icons.Default.LocalFireDepartment,
+                                            contentDescription = null,
+                                            tint = Color(0xFFEF6C00)
                                         )
 
-                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Spacer(Modifier.width(8.dp))
 
+                                        Column {
+
+                                            Text(
+                                                text = unitCode,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 18.sp
+                                            )
+
+                                            Text(
+                                                text = unitType,
+                                                color = Color.Gray,
+                                                fontSize = 13.sp
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(Modifier.height(12.dp))
+
+                                    Surface(
+                                        color = Color(0xFFE8F5E9),
+                                        shape = RoundedCornerShape(50)
+                                    ) {
                                         Text(
-                                            "Available for Dispatch",
-                                            color = Color(0xFF4CAF50),
+                                            text = "🟢 Available for Dispatch",
+                                            modifier = Modifier.padding(
+                                                horizontal = 12.dp,
+                                                vertical = 6.dp
+                                            ),
+                                            color = Color(0xFF2E7D32),
                                             fontWeight = FontWeight.SemiBold
                                         )
                                     }
 
+                                    Spacer(Modifier.height(12.dp))
+
                                     Text(
-                                        text = "No active assignment. Waiting for dispatch center.",
-                                        textAlign = TextAlign.Center,
-                                        color = Color.Gray,
-                                        fontSize = 13.sp
+                                        text = "Waiting for dispatch center",
+                                        color = Color.Gray
                                     )
                                 }
                             }
@@ -1454,10 +1382,45 @@ fun HomeScreen(
                                             Text(timeLabel, fontSize = 12.sp, color = AppColors.TextSecondary)
                                             Spacer(Modifier.width(10.dp))
                                             Box(modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(AppColors.Secondary.copy(0.10f)).padding(horizontal = 10.dp, vertical = 5.dp)) {
-                                                Text(inc.status.displayName, fontSize = 12.sp, color = AppColors.Secondary, fontWeight = FontWeight.SemiBold)
+                                                Text(
+                                                    text = when (inc.status.name.lowercase()) {
+                                                        "reported" -> "Received"
+                                                        "assigned" -> "Assigned"
+                                                        "on_scene" -> "On Scene"
+                                                        else -> inc.status.displayName
+                                                    },
+                                                    fontSize = 12.sp,
+                                                    color = AppColors.Secondary,
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
                                             }
                                         }
                                         inc.description.takeIf { it.isNotBlank() }?.let { Text(it, fontSize = 13.sp, color = AppColors.Text.copy(0.9f), maxLines = 2, overflow = TextOverflow.Ellipsis) }
+
+                                        Surface(
+                                            color = Color(0xFFEFF5F5),
+                                            shape = RoundedCornerShape(14.dp)
+                                        ) {
+                                            Column(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(10.dp)
+                                            ) {
+                                                Text(
+                                                    "Assigned Unit",
+                                                    fontSize = 11.sp,
+                                                    color = AppColors.TextSecondary
+                                                )
+
+                                                Text(
+                                                    "${unitCode.ifBlank { "Unit" }} • ${unitType.ifBlank { "Responder Unit" }}",
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = AppColors.Text,
+                                                    fontSize = 13.sp
+                                                )
+                                            }
+                                        }
+
                                         AssignedActionButtons(
                                             inc = inc, context = context, navController = navController,
                                             currentLatitude = currentLatitude, currentLongitude = currentLongitude,
@@ -1567,7 +1530,7 @@ fun HomeScreen(
                     // so Compose can reuse item positions across recompositions instead of
                     // treating it as a new list every time.
                     val activeListState = rememberLazyListState()
-                    if (isLoading){
+                    if (isLoading && activeIncidents.isEmpty()) {
                         Column (
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1849,37 +1812,148 @@ fun HomeScreen(
 
             // ── MARK COMPLETE DIALOG ──
             if (showMarkCompleteDialog && markTargetIncidentInc != null) {
-                val hasProof    = selectedProofUri != null
-                val hasTwoWords = proofNotes.trim().split(Regex("\\s+")).filter { it.isNotBlank() }.size >= 2
+                val hasProof = selectedProofUri != null
+
                 AlertDialog(
-                    onDismissRequest = { showMarkCompleteDialog = false; markTargetIncidentInc = null },
-                    title = { Text("Mark Incident Complete", fontWeight = FontWeight.SemiBold) },
+                    onDismissRequest = {
+                        showMarkCompleteDialog = false
+                        markTargetIncidentInc = null
+                    },
+                    title = {
+                        Text(
+                            "Complete Incident",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 22.sp
+                        )
+                    },
                     text = {
-                        Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text("Provide a short note and take a photo as proof.")
-                            OutlinedTextField(value = proofNotes, onValueChange = { proofNotes = it }, label = { Text("Completion notes") }, modifier = Modifier.fillMaxWidth())
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Button(onClick = { takePictureLauncher.launch(Intent(MediaStore.ACTION_IMAGE_CAPTURE)) }) { Text("Take Photo") }
-                                selectedProofUri?.let { uriStr ->
-                                    val bitmap = try {
-                                        val opts = BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 }
-                                        if (uriStr.startsWith("file://")) Uri.parse(uriStr).path?.let { BitmapFactory.decodeFile(it, opts) }
-                                        else context.contentResolver.openInputStream(Uri.parse(uriStr))?.use { BitmapFactory.decodeStream(it, null, opts) }
-                                    } catch (_: Exception) { null }
-                                    if (bitmap != null) {
-                                        Image(bitmap = bitmap.asImageBitmap(), contentDescription = "Proof", modifier = Modifier.size(96.dp).clip(RoundedCornerShape(10.dp)).border(1.dp, Color(0xFFE5E5E5), RoundedCornerShape(10.dp)), contentScale = ContentScale.Fit)
-                                    } else { Text("Photo captured ✓", fontSize = 12.sp, color = Color(0xFF2E7D32)) }
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(
+                                "Photo proof is required. Completion notes are optional.",
+                                color = AppColors.TextSecondary,
+                                fontSize = 13.sp
+                            )
+
+                            OutlinedTextField(
+                                value = proofNotes,
+                                onValueChange = { proofNotes = it },
+                                label = { Text("Completion notes (optional)") },
+                                modifier = Modifier.fillMaxWidth(),
+                                minLines = 3
+                            )
+
+                            Button(
+                                onClick = {
+                                    takePictureLauncher.launch(Intent(MediaStore.ACTION_IMAGE_CAPTURE))
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = AppColors.Primary,
+                                    contentColor = Color.White
+                                )
+                            ) {
+                                Icon(
+                                    Icons.Default.CameraAlt,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+
+                                Spacer(Modifier.width(8.dp))
+
+                                Text(if (hasProof) "Retake Photo" else "Take Required Photo")
+                            }
+
+                            if (!hasProof) {
+                                Text(
+                                    "Required before submitting",
+                                    color = Color(0xFFD32F2F),
+                                    fontSize = 12.sp
+                                )
+                            }
+
+                            selectedProofUri?.let { uriStr ->
+                                val bitmap = try {
+                                    val opts = BitmapFactory.Options().apply {
+                                        inPreferredConfig = Bitmap.Config.ARGB_8888
+                                    }
+
+                                    if (uriStr.startsWith("file://")) {
+                                        Uri.parse(uriStr).path?.let {
+                                            BitmapFactory.decodeFile(it, opts)
+                                        }
+                                    } else {
+                                        context.contentResolver
+                                            .openInputStream(Uri.parse(uriStr))
+                                            ?.use { BitmapFactory.decodeStream(it, null, opts) }
+                                    }
+                                } catch (_: Exception) {
+                                    null
+                                }
+
+                                if (bitmap != null) {
+                                    Image(
+                                        bitmap = bitmap.asImageBitmap(),
+                                        contentDescription = "Proof photo",
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(150.dp)
+                                            .clip(RoundedCornerShape(16.dp))
+                                            .border(
+                                                1.dp,
+                                                AppColors.Border,
+                                                RoundedCornerShape(16.dp)
+                                            ),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                } else {
+                                    Text(
+                                        "Photo captured ✓",
+                                        color = Color(0xFF2E7D32),
+                                        fontWeight = FontWeight.SemiBold
+                                    )
                                 }
                             }
                         }
                     },
                     confirmButton = {
                         Button(
-                            onClick = { val inc = markTargetIncidentInc; if (inc != null) { markIncidentDone(inc, proofNotes, selectedProofUri); showMarkCompleteDialog = false; markTargetIncidentInc = null; proofNotes = ""; selectedProofUri = null } },
-                            enabled = hasTwoWords && hasProof
-                        ) { Text("Submit") }
+                            onClick = {
+                                val inc = markTargetIncidentInc
+                                if (inc != null) {
+                                    markIncidentDone(
+                                        inc,
+                                        proofNotes,
+                                        selectedProofUri
+                                    )
+                                }
+
+                                showMarkCompleteDialog = false
+                                markTargetIncidentInc = null
+                                proofNotes = ""
+                                selectedProofUri = null
+                            },
+                            enabled = hasProof,
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Text("Submit")
+                        }
                     },
-                    dismissButton = { TextButton(onClick = { showMarkCompleteDialog = false; markTargetIncidentInc = null }) { Text("Cancel") } }
+                    dismissButton = {
+                        TextButton(
+                            onClick = {
+                                showMarkCompleteDialog = false
+                                markTargetIncidentInc = null
+                                proofNotes = ""
+                                selectedProofUri = null
+                            }
+                        ) {
+                            Text("Cancel")
+                        }
+                    }
                 )
             }
 

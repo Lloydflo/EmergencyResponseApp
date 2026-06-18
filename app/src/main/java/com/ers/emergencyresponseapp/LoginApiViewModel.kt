@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import com.ers.emergencyresponseapp.network.UserDto
 
+
 data class LoginApiUiState(
     val loading: Boolean = false,
     val email: String = "",
@@ -18,7 +19,8 @@ data class LoginApiUiState(
     val verified: Boolean = false,
     val message: String? = null,
     val error: String? = null,
-    val loggedInUser: UserDto? = null
+    val loggedInUser: UserDto? = null,
+    val resendSeconds: Int = 0
 )
 
 class LoginApiViewModel : ViewModel() {
@@ -60,6 +62,9 @@ class LoginApiViewModel : ViewModel() {
                     message  = response.message,
                     error    = if (response.success) null else response.message
                 )
+                if (response.success) {
+                    startResendTimer()
+                }
             } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     loading = false,
@@ -127,6 +132,14 @@ class LoginApiViewModel : ViewModel() {
                     loading = false,
                     error   = e.message ?: "OTP verification failed"
                 )
+            }
+        }
+    }
+    private fun startResendTimer() {
+        viewModelScope.launch {
+            for (sec in 180 downTo 0) {
+                _uiState.value = _uiState.value.copy(resendSeconds = sec)
+                kotlinx.coroutines.delay(1000)
             }
         }
     }

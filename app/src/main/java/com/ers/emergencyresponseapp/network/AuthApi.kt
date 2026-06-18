@@ -34,14 +34,4 @@ interface AuthApi {
         @Field("email") email: String
     ): LoginResponse
 
-    @FormUrlEncoded
-    @POST("api/Incidents/get-assigned-incidents.php")
-    suspend fun getAssignedIncidents(
-        @Field("email") email: String
-    ): IncidentsResponse
-}
-
-interface IncidentsApi {
-    @POST("api/Incidents/get-assigned-incidents.php")
-    suspend fun getAssignedIncidents(@Body body: AssignedIncidentsRequest): AssignedIncidentsResponse
 }

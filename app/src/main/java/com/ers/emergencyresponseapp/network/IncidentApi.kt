@@ -1,24 +1,27 @@
-package com.ers.emergencyresponseapp.network  // ✅ must match folder
+package com.ers.emergencyresponseapp.network
 
+import com.ers.emergencyresponseapp.features.assigned.IncidentDto
 import retrofit2.Response
 import retrofit2.http.*
-import retrofit2.http.GET
-import retrofit2.http.POST
-import retrofit2.http.Path
-import retrofit2.http.Query
-import retrofit2.http.Header
 
 interface IncidentApi {
 
-    @GET("incidents/assigned")
+    @GET("api/api_app/get-assigned-incidents.php")
     suspend fun getAssignedIncidents(
-        @Header("Authorization") token: String,
-        @Query("department") department: String
+        @Query("responder_id") responderId: Int
     ): Response<List<IncidentDto>>
 
-    @POST("incidents/{id}/complete")
-    suspend fun markIncidentComplete(
-        @Path("id") incidentId: String,
-        @Header("Authorization") token: String
+    @FormUrlEncoded
+    @POST("update-assignment-status.php")
+    suspend fun updateAssignmentStatus(
+        @Field("assignment_id") assignmentId: String,
+        @Field("status") status: String
+    ): Response<Unit>
+
+    @FormUrlEncoded
+    @POST("api/api_app/mark-assignment-received.php")
+    suspend fun markAssignmentReceived(
+        @Field("incident_id") incidentId: String,
+        @Field("responder_id") responderId: Int
     ): Response<Unit>
 }

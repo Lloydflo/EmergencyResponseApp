@@ -7,8 +7,6 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
@@ -16,8 +14,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.tooling.preview.Preview
@@ -47,7 +43,6 @@ import com.ers.emergencyresponseapp.firebase.ui.FirebaseChatScreen
 import com.ers.emergencyresponseapp.firebase.ui.ResponderListScreen
 import com.ers.emergencyresponseapp.firebase.repository.FirebaseChatRepository
 import androidx.lifecycle.lifecycleScope
-import kotlinx.coroutines.launch
 
 sealed class NavItem(val route: String, val title: String, val icon: ImageVector) {
     object Home              : NavItem("home",                "Home",         Icons.Filled.Home)
@@ -184,7 +179,7 @@ class MainActivity : ComponentActivity() {
 
                                 // Home (no role)
                                 composable("home") {
-                                    AnimatedHomeScreen(
+                                    HomeScreen(
                                         navController = navController,
                                         responderRole = null,
                                         onLogout = {
@@ -206,7 +201,7 @@ class MainActivity : ComponentActivity() {
                                     val innerPrefs =
                                         innerContext.getSharedPreferences("ers_prefs", MODE_PRIVATE)
 
-                                    AnimatedHomeScreen(
+                                    HomeScreen(
                                         navController = navController,
                                         responderRole = roleArg?.takeIf { it.isNotBlank() },
                                         onLogout = {
@@ -416,50 +411,16 @@ fun EmergencyResponseScreen(modifier: Modifier = Modifier, onProceed: () -> Unit
 // ─────────────────────────────────────────────────────────────────────────────
 //  Animated home screen wrapper
 // ─────────────────────────────────────────────────────────────────────────────
-@Composable
-fun AnimatedHomeScreen(
-    navController : androidx.navigation.NavHostController,
-    responderRole : String? = null,
-    onLogout      : () -> Unit
-) {
-    var showEntrance by remember { mutableStateOf(true) }
-    val alpha        = remember { Animatable(0f) }
-    val scale        = remember { Animatable(0.9f) }
 
-    LaunchedEffect(Unit) {
-        alpha.animateTo(1f, animationSpec = tween(450))
-        scale.animateTo(1f, animationSpec = tween(500, easing = FastOutSlowInEasing))
-        delay(450L)
-        showEntrance = false
-    }
-
-    if (showEntrance) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(
-                text      = "Emergency Response",
-                style     = MaterialTheme.typography.headlineLarge,
-                color     = MaterialTheme.colorScheme.onBackground,
-                modifier  = Modifier.scale(scale.value).alpha(alpha.value).fillMaxWidth(),
-                textAlign = TextAlign.Center
-            )
-        }
-    } else {
-        HomeScreen(
-            navController = navController,
-            responderRole = responderRole,
-            onLogout      = onLogout
-        )
-    }
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Session timeout watcher
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
 fun SessionTimeoutWatcher(
-    lastTouchMillis : MutableStateFlow<Long>,
-    timeoutMillis   : Long = 5 * 60 * 1000L,
-    onTimeout       : () -> Unit
+    lastTouchMillis: MutableStateFlow<Long>,
+    timeoutMillis: Long = 2 * 60 * 60 * 1000L,
+    onTimeout: () -> Unit
 ) {
     LaunchedEffect(Unit) {
         lastTouchMillis.collectLatest { last ->

@@ -1,11 +1,22 @@
 package com.ers.emergencyresponseapp.network
 
+import com.google.gson.annotations.SerializedName
+
 data class UserDto(
     val id: Int,
     val name: String? = null,
     val email: String,
     val role: String? = null,
-    val department: String? = null
+    val department: String? = null,
+
+    @SerializedName("unit_code")
+    val unitCode: String? = null,
+
+    @SerializedName("unit_type")
+    val unitType: String? = null,
+
+    @SerializedName("unit_status")
+    val unitStatus: String? = null
 )
 
 data class LoginResponse(
