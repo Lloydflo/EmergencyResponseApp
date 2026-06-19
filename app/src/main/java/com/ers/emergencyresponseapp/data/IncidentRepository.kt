@@ -19,20 +19,28 @@ class IncidentRepository {
 
     suspend fun updateAssignmentStatus(
         assignmentId: String,
+        responderId: Int,
         status: String
     ): Boolean {
         val response = api.updateAssignmentStatus(
             assignmentId = assignmentId,
+            responderId = responderId,
             status = status
         )
 
         return response.isSuccessful
     }
+
     suspend fun markAssignmentReceived(
         incidentId: String,
         responderId: Int
     ): Boolean {
         val response = api.markAssignmentReceived(incidentId, responderId)
+        return response.isSuccessful
+    }
+
+    suspend fun syncUnitStatus(responderId: Int): Boolean {
+        val response = api.syncUnitStatus(responderId)
         return response.isSuccessful
     }
 }

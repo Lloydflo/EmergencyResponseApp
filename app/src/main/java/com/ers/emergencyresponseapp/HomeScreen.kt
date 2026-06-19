@@ -132,6 +132,10 @@ import com.ers.emergencyresponseapp.features.assigned.AssignedIncidentsViewModel
 import com.ers.emergencyresponseapp.features.assigned.toDomain
 import androidx.compose.runtime.collectAsState
 import androidx.compose.material3.Surface
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.compose.runtime.DisposableEffect
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -275,6 +279,18 @@ private fun openMapPin(context: Context, lat: Double?, lng: Double?, address: St
     }
 }
 
+private fun formatUnitStatus(status: String): String {
+    return when (status.lowercase()) {
+        "available" -> "Available"
+        "assigned" -> "Assigned"
+        "received" -> "Assigned"
+        "en_route" -> "En Route"
+        "on_scene" -> "On Scene"
+        "completed" -> "Available"
+        else -> status.replace("_", " ").replaceFirstChar { it.uppercase() }
+    }
+}
+
 private fun timeAgoLabel(timeReported: java.util.Date): String {
     val diffMin = ((System.currentTimeMillis() - timeReported.time) / 60000).toInt()
     return when {
@@ -385,7 +401,8 @@ private fun AssignedActionButtons(
     requestOnScenePermission: () -> Unit,
     navigateToLocation: (Double?, Double?, String?) -> Unit,
     sendOnSceneReport: (Incident) -> Unit,
-    openMarkDone: (Incident) -> Unit
+    openMarkDone: (Incident) -> Unit,
+    onNavigateStatusUpdate: (Incident) -> Unit
 ) {
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -408,8 +425,16 @@ private fun AssignedActionButtons(
                     inc.longitude,
                     inc.location
                 )
+                onNavigateStatusUpdate(inc)
+                startOnSceneTracking()
+                setOnSceneEnabled(false)
 
                 navigateToLocation(inc.latitude, inc.longitude, inc.location)
+                context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
+                    .edit()
+                    .putBoolean("pending_en_route_check", true)
+                    .putString("pending_en_route_incident_id", inc.id)
+                    .apply()
             },
             modifier = Modifier
                 .fillMaxWidth()
@@ -517,6 +542,30 @@ fun HomeScreen(
     assignedVm: AssignedIncidentsViewModel = viewModel()
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var showCancelRouteDialog by remember { mutableStateOf(false) }
+    var pendingRouteIncidentId by remember { mutableStateOf<String?>(null) }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                val navPrefs = context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
+                val pending = navPrefs.getBoolean("pending_en_route_check", false)
+                val incidentId = navPrefs.getString("pending_en_route_incident_id", null)
+
+                if (pending && !incidentId.isNullOrBlank()) {
+                    pendingRouteIncidentId = incidentId
+                    showCancelRouteDialog = true
+                }
+            }
+        }
+
+        lifecycleOwner.lifecycle.addObserver(observer)
+
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
     var isLocationMonitoringEnabled by remember { mutableStateOf(false) }
 
 
@@ -526,12 +575,28 @@ fun HomeScreen(
     val responderId = storedPrefs.getString("user_id", "")?.toIntOrNull() ?: 0
     val unitCode = storedPrefs.getString("unit_code", "") ?: ""
     val unitType = storedPrefs.getString("unit_type", "") ?: ""
-    val unitStatus = storedPrefs.getString("unit_status", "available") ?: "available"
+    var unitStatus by remember {
+        mutableStateOf(storedPrefs.getString("unit_status", "available") ?: "available")
+    }
 
     val assignedUi by assignedVm.ui.collectAsState()
+    LaunchedEffect(assignedUi.incidents) {
+        val latestStatus = assignedUi.incidents.firstOrNull()?.unit_status
+
+        if (!latestStatus.isNullOrBlank()) {
+            unitStatus = latestStatus
+
+            storedPrefs.edit()
+                .putString("unit_status", latestStatus)
+                .apply()
+        }
+    }
     LaunchedEffect(responderId) {
-        if (responderId > 0) {
+        if (responderId <= 0) return@LaunchedEffect
+
+        while (true) {
             assignedVm.load(responderId)
+            delay(5000L)
         }
     }
     val effectiveRole    = storedDepartment?.lowercase() ?: responderRole?.takeIf { it.isNotBlank() }
@@ -709,7 +774,7 @@ fun HomeScreen(
                 val current = r.lastLocation ?: return
                 val res     = FloatArray(1)
                 Location.distanceBetween(current.latitude, current.longitude, destLat, destLng, res)
-                onSceneEnabledMap[destId] = res[0] <= 20f
+                onSceneEnabledMap[destId] = res[0] <= 50f
             }
         }
     }
@@ -787,6 +852,12 @@ fun HomeScreen(
 
     fun sendOnSceneReport(incident: Incident) {
         try {
+            assignedVm.updateStatus(
+                assignmentId = incident.id,
+                status = "on_scene",
+                responderId = responderId
+            )
+
             incidentsList = incidentsList.map { if (it.id == incident.id) it.copy(status = IncidentStatus.ON_SCENE) else it }
             refreshActiveIncidents()
             RouteHistoryStore.completeRoute(context, incident.id)
@@ -797,6 +868,12 @@ fun HomeScreen(
 
     fun markIncidentDone(incident: Incident, notes: String, proofUri: String?) {
         try {
+            assignedVm.updateStatus(
+                assignmentId = incident.id,
+                status = "completed",
+                responderId = responderId
+            )
+
             val name = prefs.getString("account_username", responderName)
             IncidentStore.markPendingReview(incident.id, name)
             try { IncidentStore.storeProof(incident.id, proofUri) } catch (_: Exception) {}
@@ -1031,11 +1108,7 @@ fun HomeScreen(
             }
 
             val assignedListForRole =
-                if (showAssignedAfterNotification) {
-                    assignedUi.incidents.map { it.toDomain() }
-                } else {
-                    emptyList()
-                }
+                assignedUi.incidents.map { it.toDomain() }
 
             assignedListForRole.firstOrNull()?.id?.let { id -> if (!onSceneEnabledMap.containsKey(id)) onSceneEnabledMap[id] = false }
 
@@ -1043,7 +1116,6 @@ fun HomeScreen(
                 val incident = assignedUi.incidents.firstOrNull() ?: return@LaunchedEffect
 
                 if (lastShownApiAssignedId == incident.id) {
-                    showAssignedAfterNotification = true
                     return@LaunchedEffect
                 }
 
@@ -1062,7 +1134,6 @@ fun HomeScreen(
                 delay(5000L)
 
                 showNewIncidentNotification = false
-                showAssignedAfterNotification = true
             }
 
             // FIX 8: Removed the duplicate outer `activeListVisible` that was shadowed
@@ -1118,7 +1189,7 @@ fun HomeScreen(
                                     Spacer(Modifier.height(6.dp))
 
                                     Text(
-                                        text = "${effectiveRole ?: "Responder"} • ${onlineStatus.name}",
+                                        text = "${effectiveRole ?: "Responder"} • ${formatUnitStatus(unitStatus)}",
                                         color = Color.White.copy(alpha = 0.90f),
                                         fontSize = 13.sp
                                     )
@@ -1386,7 +1457,10 @@ fun HomeScreen(
                                                     text = when (inc.status.name.lowercase()) {
                                                         "reported" -> "Received"
                                                         "assigned" -> "Assigned"
+                                                        "received" -> "Received"
+                                                        "en_route" -> "En Route"
                                                         "on_scene" -> "On Scene"
+                                                        "completed" -> "Completed"
                                                         else -> inc.status.displayName
                                                     },
                                                     fontSize = 12.sp,
@@ -1431,8 +1505,16 @@ fun HomeScreen(
                                             requestOnScenePermission = { onScenePermLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION) },
                                             navigateToLocation = { lat, lng, addr -> navigateToLocation(lat, lng, addr) },
                                             sendOnSceneReport = { sendOnSceneReport(it) },
-                                            openMarkDone = { markTargetIncidentInc = it; proofNotes = ""; selectedProofUri = null; showMarkCompleteDialog = true }
+                                            openMarkDone = { markTargetIncidentInc = it; proofNotes = ""; selectedProofUri = null; showMarkCompleteDialog = true },
+                                            onNavigateStatusUpdate = {
+                                                assignedVm.updateStatus(
+                                                    assignmentId = it.id,
+                                                    status = "en_route",
+                                                    responderId = responderId
+                                                )
+                                            }
                                         )
+
                                     }
                                 }
                             }
@@ -1771,6 +1853,59 @@ fun HomeScreen(
                 }
             } // end LazyColumn
 
+            if (showCancelRouteDialog && pendingRouteIncidentId != null) {
+                AlertDialog(
+                    onDismissRequest = { showCancelRouteDialog = false },
+                    title = { Text("Navigation status") },
+                    text = { Text("Are you still responding to this incident?") },
+
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                showCancelRouteDialog = false
+
+                                context.getSharedPreferences(
+                                    "nav_prefs",
+                                    Context.MODE_PRIVATE
+                                )
+                                    .edit()
+                                    .remove("pending_en_route_check")
+                                    .remove("pending_en_route_incident_id")
+                                    .apply()
+                            }
+                        ) {
+                            Text("Continue")
+                        }
+                    },
+
+                    dismissButton = {
+                        TextButton(
+                            onClick = {
+                                val id = pendingRouteIncidentId ?: return@TextButton
+
+                                assignedVm.updateStatus(
+                                    assignmentId = id,
+                                    status = "received",
+                                    responderId = responderId
+                                )
+
+                                showCancelRouteDialog = false
+
+                                context.getSharedPreferences(
+                                    "nav_prefs",
+                                    Context.MODE_PRIVATE
+                                )
+                                    .edit()
+                                    .remove("pending_en_route_check")
+                                    .remove("pending_en_route_incident_id")
+                                    .apply()
+                            }
+                        ) {
+                            Text("Cancel En Route")
+                        }
+                    }
+                )
+            }
 
             // ── ALL ACTIVE DIALOG ──
             if (showAllActiveDialog) {

@@ -12,9 +12,10 @@ interface IncidentApi {
     ): Response<List<IncidentDto>>
 
     @FormUrlEncoded
-    @POST("update-assignment-status.php")
+    @POST("api/api_app/update-assignment-status.php")
     suspend fun updateAssignmentStatus(
         @Field("assignment_id") assignmentId: String,
+        @Field("responder_id") responderId: Int,
         @Field("status") status: String
     ): Response<Unit>
 
@@ -22,6 +23,12 @@ interface IncidentApi {
     @POST("api/api_app/mark-assignment-received.php")
     suspend fun markAssignmentReceived(
         @Field("incident_id") incidentId: String,
+        @Field("responder_id") responderId: Int
+    ): Response<Unit>
+
+    @FormUrlEncoded
+    @POST("api/api_app/sync-unit-status.php")
+    suspend fun syncUnitStatus(
         @Field("responder_id") responderId: Int
     ): Response<Unit>
 }

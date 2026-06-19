@@ -26,6 +26,7 @@ class AssignedIncidentsViewModel(
 
             try {
                 val list = repo.getAssignedIncidents(responderId)
+                repo.syncUnitStatus(responderId)
 
                 list.forEach { incident ->
                     repo.markAssignmentReceived(
@@ -55,7 +56,11 @@ class AssignedIncidentsViewModel(
     ) {
         viewModelScope.launch {
             try {
-                val success = repo.updateAssignmentStatus(assignmentId, status)
+                val success = repo.updateAssignmentStatus(
+                    assignmentId = assignmentId,
+                    responderId = responderId,
+                    status = status
+                )
 
                 if (success) {
                     load(responderId)
