@@ -1,3 +1,4 @@
+@file:OptIn(ExperimentalFoundationApi::class)
 package com.ers.emergencyresponseapp
 
 import android.Manifest
@@ -79,12 +80,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ers.emergencyresponseapp.home.Incident
 import com.ers.emergencyresponseapp.home.IncidentPriority
-import com.ers.emergencyresponseapp.home.IncidentStatus
 import com.ers.emergencyresponseapp.home.IncidentType
 import com.ers.emergencyresponseapp.analytics.RouteHistoryStore
 import com.ers.emergencyresponseapp.home.composables.BackupRequest
 import com.ers.emergencyresponseapp.home.composables.DepartmentSelectionDialog
-import com.ers.emergencyresponseapp.home.IncidentStore
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
@@ -140,8 +139,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.window.Dialog
 import android.os.VibrationEffect
 import android.os.Vibrator
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.app.PendingIntent
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat

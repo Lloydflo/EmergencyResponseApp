@@ -96,6 +96,15 @@ data class FirebaseResponder(
     val lastSeen   : Long    = 0L
 )
 
+data class InteragencyGroupDto(
+    val id: Int = 0,
+    val name: String = "",
+    val displayName: String = "",
+    val lastMessage: String = "",
+    val unreadCount: Int = 0,
+    val lastReadId: Int = 0
+)
+
     class FirebaseResponderRepository {
     private val db = FirebaseDatabase.getInstance().getReference("users")
 
@@ -516,7 +525,6 @@ private fun InboxScreen(
                             it.displayName.contains(searchQuery, ignoreCase = true) ||
                                     it.name.contains(searchQuery, ignoreCase = true)
                         }
-                        .filter { it.name == currentResponderRole || currentResponderRole == "admin" }
                     if (filtered.isEmpty()) EmptySearch(modifier = Modifier.padding(padding))
                     else LazyColumn(
                         modifier = Modifier.padding(padding),
@@ -1081,6 +1089,8 @@ private fun ChatScreen(vm: CoordinationViewModel, currentResponderId: String, on
                             r = selectedResponder,
                             messages = messages,
                             currentResponderId = currentResponderId,
+                            liveIsOnline = liveIsOnline,
+                            liveLastSeen = liveLastSeen,
                             onSearchClick = {
                                 showInfoDialog.value = false
                                 showChatSearch = true
@@ -1498,10 +1508,12 @@ private fun NotificationOverlay(
     r: ResponderBrief,
     messages: List<ChatMessage>,
     currentResponderId: String,
+    liveIsOnline: Boolean,
+    liveLastSeen: Long,
     onSearchClick: () -> Unit,
     onFilesClick: () -> Unit
 ) {
-    val online  = r.status.contains("online", ignoreCase = true)
+    val online = liveIsOnline
     val messageCount = messages.count { it.type == MessageType.TEXT }
     val fileCount = messages.count {
         it.type == MessageType.FILE || it.type == MessageType.IMAGE
@@ -1534,23 +1546,7 @@ private fun NotificationOverlay(
     }
     var showReportDialog by remember { mutableStateOf(false) }
     var reportReason by remember { mutableStateOf("") }
-    var realLastSeen by remember { mutableLongStateOf(0L) }
-    LaunchedEffect(r.id) {
-        FirebaseDatabase.getInstance().reference
-            .child("users")
-            .child(r.id)
-            .child("lastSeen")
-            .get()
-            .addOnSuccessListener { snapshot ->
-                realLastSeen = when (val value = snapshot.value) {
-                    is Long -> value
-                    is Int -> value.toLong()
-                    is Double -> value.toLong()
-                    is String -> value.toLongOrNull() ?: 0L
-                    else -> 0L
-                }
-            }
-    }
+    val realLastSeen = liveLastSeen
 
     Column(modifier = Modifier.fillMaxWidth()) {
 

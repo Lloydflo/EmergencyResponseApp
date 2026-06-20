@@ -84,13 +84,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         listenToThreads()
 
         // Load static department list (departments are role-based, not user accounts)
-        if (departments.isEmpty()) {
-            departments.addAll(listOf(
-                DepartmentInfo("fire",    "Fire Department",    "🔥", "Fire team assembled",  0),
-                DepartmentInfo("medical", "Medical Department", "🚑", "Ambulance dispatched", 0),
-                DepartmentInfo("police",  "Police Department",  "🚓", "Patrol on scene",      0)
-            ))
-        }
+        loadInteragencyGroups(userId)
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -116,6 +110,11 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                     // Find existing entry to preserve unread count / last message
                     val existing = responders.firstOrNull { it.id == uid }
 
+                    val latestThread = findLatestThreadForResponder(uid)
+
+                    val previewMessage = latestThread?.first ?: existing?.lastMessage ?: ""
+                    val previewTime = latestThread?.second ?: existing?.lastMessageTime ?: 0L
+
                     loaded.add(
                         ResponderBrief(
                             id          = uid,
@@ -123,8 +122,8 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                             fullName    = fullName,
                             role        = department,
                             status      = if (isOnline) "online" else "offline",
-                            lastMessage = existing?.lastMessage ?: "",
-                            lastMessageTime = existing?.lastMessageTime ?: 0L,
+                            lastMessage = previewMessage,
+                            lastMessageTime = previewTime,
                             unreadCount = existing?.unreadCount ?: 0
                         )
                     )
@@ -184,6 +183,67 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         }
 
         db.child("threads").addValueEventListener(threadsListener!!)
+    }
+
+    private fun loadInteragencyGroups(userId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val request = Request.Builder()
+                    .url("https://emergency-response.alertaraqc.com/api/api_app/get-interagency-groups.php?user_id=$userId")
+                    .get()
+                    .build()
+
+                val response = OkHttpClient().newCall(request).execute()
+                val body = response.body?.string() ?: ""
+
+                val json = JSONObject(body)
+
+                if (!json.optBoolean("success")) {
+                    latestNotification.value = json.optString("message", "Failed to load groups")
+                    return@launch
+                }
+
+                val groupsArray = json.optJSONArray("groups")
+
+                val loadedGroups = mutableListOf<DepartmentInfo>()
+
+                for (i in 0 until (groupsArray?.length() ?: 0)) {
+                    val item = groupsArray!!.getJSONObject(i)
+
+                    val groupId = item.optInt("id")
+                    val name = "group_$groupId"
+                    val displayName = item.optString("displayName", item.optString("name"))
+
+                    val icon = when {
+                        displayName.contains("fire", ignoreCase = true) -> "🔥"
+                        displayName.contains("medical", ignoreCase = true) ||
+                                displayName.contains("ambulance", ignoreCase = true) -> "🚑"
+                        displayName.contains("police", ignoreCase = true) -> "🚓"
+                        else -> "👥"
+                    }
+
+                    loadedGroups.add(
+                        DepartmentInfo(
+                            name = name,
+                            displayName = displayName,
+                            emoji = icon,
+                            lastMessage = item.optString("lastMessage", "Tap to open group chat"),
+                            unreadCount = item.optInt("unreadCount", 0)
+                        )
+                    )
+                }
+
+                launch(Dispatchers.Main) {
+                    departments.clear()
+                    departments.addAll(loadedGroups)
+                }
+
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) {
+                    latestNotification.value = "Failed to load groups: ${e.message}"
+                }
+            }
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -524,6 +584,31 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                 latestNotification.value = "Upload failed: $error"
             }
         )
+    }
+
+    private fun findLatestThreadForResponder(responderId: String): Pair<String, Long>? {
+        val threadId = buildChatId(myUserId, responderId)
+
+        var result: Pair<String, Long>? = null
+
+        db.child("threads").child(threadId).get()
+            .addOnSuccessListener { snapshot ->
+                val lastMessage = snapshot.child("lastMessage").getValue(String::class.java) ?: ""
+                val lastMessageTime = snapshot.child("lastMessageTime").getValue(Long::class.java) ?: 0L
+
+                if (lastMessage.isNotBlank() && lastMessageTime > 0L) {
+                    val index = responders.indexOfFirst { it.id == responderId }
+
+                    if (index >= 0) {
+                        responders[index] = responders[index].copy(
+                            lastMessage = lastMessage,
+                            lastMessageTime = lastMessageTime
+                        )
+                    }
+                }
+            }
+
+        return result
     }
 
     private fun pushFileMessageToFirebase(
