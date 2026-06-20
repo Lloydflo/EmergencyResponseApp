@@ -323,11 +323,6 @@ private fun InboxScreen(
 ) {
     var tabIndex    by remember { mutableIntStateOf(0) }
     var searchQuery by remember { mutableStateOf("") }
-    var showBroadcast by remember { mutableStateOf(true) }
-    LaunchedEffect(Unit) {
-        delay(5000)
-        showBroadcast = false
-    }
     val responders  = vm.responders
     val departments = vm.departments
     val totalUnread = responders.sumOf { it.unreadCount } + departments.sumOf { it.unreadCount }
@@ -572,72 +567,6 @@ private fun InboxScreen(
                 Icons.Default.Edit,
                 contentDescription = "New message"
             )
-        }
-
-        AnimatedVisibility(
-            visible = showBroadcast,
-            enter = slideInVertically { -it } + fadeIn(),
-            exit = slideOutVertically { -it } + fadeOut(),
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .statusBarsPadding()
-                .padding(horizontal = 12.dp, vertical = 8.dp)
-                .zIndex(20f)
-        ) {
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = Color(0xFF1E1E1E)
-                ),
-                elevation = CardDefaults.cardElevation(10.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        Icons.Default.Campaign,
-                        contentDescription = null,
-                        tint = Color(0xFFFFA726),
-                        modifier = Modifier.size(22.dp)
-                    )
-
-                    Spacer(Modifier.width(10.dp))
-
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            "Active Broadcast",
-                            color = Color(0xFFFFA726),
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 12.sp
-                        )
-
-                        Text(
-                            "Fire Incident • Commonwealth Ave",
-                            color = Color.White,
-                            fontSize = 13.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-
-                    TextButton(onClick = { }) {
-                        Text("View", color = Color.White)
-                    }
-
-                    IconButton(
-                        onClick = { showBroadcast = false },
-                        modifier = Modifier.size(30.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Close,
-                            contentDescription = "Close",
-                            tint = Color.White.copy(alpha = 0.7f),
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-                }
-            }
         }
     }
 }

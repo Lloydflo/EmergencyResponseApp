@@ -43,6 +43,10 @@ import com.ers.emergencyresponseapp.firebase.ui.FirebaseChatScreen
 import com.ers.emergencyresponseapp.firebase.ui.ResponderListScreen
 import com.ers.emergencyresponseapp.firebase.repository.FirebaseChatRepository
 import androidx.lifecycle.lifecycleScope
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.os.Build
 
 sealed class NavItem(val route: String, val title: String, val icon: ImageVector) {
     object Home              : NavItem("home",                "Home",         Icons.Filled.Home)
@@ -57,6 +61,39 @@ class MainActivity : ComponentActivity() {
     private val firebaseChatRepo = FirebaseChatRepository()
     private var currentUserId: String = ""
 
+    private fun createEmergencyChannel() {
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+
+            val channel = NotificationChannel(
+                "emergency_incidents",
+                "Emergency Incidents",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+
+                description = "Emergency assignments"
+
+                enableVibration(true)
+
+                vibrationPattern = longArrayOf(
+                    0,
+                    500,
+                    200,
+                    500,
+                    200,
+                    500
+                )
+
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            }
+
+            val manager =
+                getSystemService(NotificationManager::class.java)
+
+            manager.createNotificationChannel(channel)
+        }
+    }
+
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         lastTouchTime = System.currentTimeMillis()
         return super.dispatchTouchEvent(ev)
@@ -64,6 +101,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        createEmergencyChannel()
 
         currentUserId = getSharedPreferences("user_prefs", MODE_PRIVATE)
             .getString("user_id", "") ?: ""
@@ -437,3 +475,4 @@ fun EmergencyResponsePreview() {
         EmergencyResponseScreen(onProceed = {})
     }
 }
+

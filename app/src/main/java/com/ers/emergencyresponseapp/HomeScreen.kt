@@ -123,6 +123,7 @@ import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Warning
@@ -136,6 +137,15 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.window.Dialog
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -596,6 +606,7 @@ fun HomeScreen(
 
         while (true) {
             assignedVm.load(responderId)
+            assignedVm.loadActive(responderId)
             delay(5000L)
         }
     }
@@ -686,62 +697,32 @@ fun HomeScreen(
         }
     }
 
-    var incidentsList   by remember { mutableStateOf(listOf<Incident>()) }
-    var activeIncidents by remember { mutableStateOf(listOf<Incident>()) }
+    val activeIncidents = assignedUi.activeIncidents.map { it.toDomain() }
     var isLoading by remember { mutableStateOf(false) }
     var isRefreshing by remember { mutableStateOf(false) }
     var showNotificationsDialog by remember { mutableStateOf(false) }
-
-
-    fun loadIncidents()          { incidentsList = IncidentStore.incidents.toList() }
-    fun filterActive(l: List<Incident>): List<Incident> {
-        val cap = 60L * 60L * 1000L
-        val now = System.currentTimeMillis()
-        return l.filter { inc ->
-            inc.status != IncidentStatus.RESOLVED &&
-                    (now - inc.timeReported.time) <= cap
-        }
-    }
     val scope = rememberCoroutineScope()
-    fun refreshActiveIncidents() { activeIncidents = filterActive(incidentsList) }
     fun refreshHomeData() {
         if (isRefreshing) return
 
         scope.launch {
             isRefreshing = true
-            delay(700)
-
-            val freshList = IncidentStore.incidents.toList()
-            incidentsList = freshList
-            activeIncidents = filterActive(freshList)
-
+            assignedVm.load(responderId)
+            assignedVm.loadActive(responderId)
+            delay(500)
             isRefreshing = false
         }
     }
 
     LaunchedEffect(Unit) {
-        loadIncidents()
-        refreshActiveIncidents()
+        isLoading = true
+        assignedVm.load(responderId)
+        assignedVm.loadActive(responderId)
         isLoading = false
 
-        fun persistAssigned(id: String?) {
-            lastAssignedIncidentId = id
-            try { val e = prefs.edit(); if (id == null) e.remove("last_assigned_incident_id") else e.putString("last_assigned_incident_id", id); e.apply() } catch (_: Exception) {}
+        if (incomingRequests.isEmpty()) {
+            demoFeedIncomingRequests(incomingRequests)
         }
-
-        val savedAssigned = lastAssignedIncidentId?.let { id -> IncidentStore.incidents.firstOrNull { it.id == id && it.status != IncidentStatus.RESOLVED } }
-        if (savedAssigned != null) {
-            if (savedAssigned.assignedTo != responderName) { IncidentStore.assignIncident(savedAssigned.id, responderName); incidentsList = IncidentStore.incidents.toList() }
-        }
-        /*
-        else if (incidentsList.none { it.assignedTo == responderName && it.status != IncidentStatus.RESOLVED }) {
-            incidentsList.firstOrNull { it.status != IncidentStatus.RESOLVED }?.let { inc ->
-                IncidentStore.assignIncident(inc.id, responderName); incidentsList = IncidentStore.incidents.toList(); persistAssigned(inc.id)
-            }
-        }*/
-        if (incomingRequests.isEmpty()) demoFeedIncomingRequests(incomingRequests)
-        refreshActiveIncidents()
-        while (true) { delay(60_000L); refreshActiveIncidents() }
     }
 
     // Location
@@ -858,8 +839,8 @@ fun HomeScreen(
                 responderId = responderId
             )
 
-            incidentsList = incidentsList.map { if (it.id == incident.id) it.copy(status = IncidentStatus.ON_SCENE) else it }
-            refreshActiveIncidents()
+            assignedVm.load(responderId)
+            assignedVm.loadActive(responderId)
             RouteHistoryStore.completeRoute(context, incident.id)
             fusedClient.removeLocationUpdates(onSceneLocationCallback)
             Toast.makeText(context, "On-scene reported to command", Toast.LENGTH_SHORT).show()
@@ -874,27 +855,32 @@ fun HomeScreen(
                 responderId = responderId
             )
 
-            val name = prefs.getString("account_username", responderName)
-            IncidentStore.markPendingReview(incident.id, name)
-            try { IncidentStore.storeProof(incident.id, proofUri) } catch (_: Exception) {}
-            try { IncidentStore.storeCompletionNotes(incident.id, notes) } catch (_: Exception) {}
-            try { IncidentStore.storeCompletionTime(incident.id, System.currentTimeMillis()) } catch (_: Exception) {}
-            incidentsList = IncidentStore.incidents.toList()
-            refreshActiveIncidents()
-            if (lastNotifiedIncidentId  == incident.id) { lastNotifiedIncidentId  = null; try { prefs.edit().remove("last_notified_incident_id").apply() }  catch (_: Exception) {} }
-            if (lastAssignedIncidentId  == incident.id) { lastAssignedIncidentId  = null; try { prefs.edit().remove("last_assigned_incident_id").apply() }  catch (_: Exception) {} }
+            assignedVm.load(responderId)
+            assignedVm.loadActive(responderId)
 
-            val desiredType: IncidentType? = effectiveRole?.trim()?.lowercase()?.let { when (it) { "fire" -> IncidentType.FIRE; "medical" -> IncidentType.MEDICAL; "crime" -> IncidentType.CRIME; else -> null } }
-            val next = IncidentStore.incidents.firstOrNull { inc ->
-                (desiredType?.let { inc.type == it } ?: true) && inc.assignedTo.isNullOrBlank() &&
-                        inc.status !in listOf(IncidentStatus.RESOLVED, IncidentStatus.PENDING_REVIEW, IncidentStatus.SUBMITTED_REVIEW)
+            if (lastNotifiedIncidentId == incident.id) {
+                lastNotifiedIncidentId = null
+                prefs.edit().remove("last_notified_incident_id").apply()
             }
-            if (next != null) {
-                IncidentStore.assignIncident(next.id, responderName); incidentsList = IncidentStore.incidents.toList(); refreshActiveIncidents()
-                lastAssignedIncidentId = next.id; try { prefs.edit().putString("last_assigned_incident_id", next.id).apply() } catch (_: Exception) {}
+
+            if (lastAssignedIncidentId == incident.id) {
+                lastAssignedIncidentId = null
+                prefs.edit().remove("last_assigned_incident_id").apply()
             }
-            Toast.makeText(context, "Incident marked pending review", Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) { Toast.makeText(context, "Failed to mark complete", Toast.LENGTH_SHORT).show() }
+
+            Toast.makeText(
+                context,
+                "Incident marked completed",
+                Toast.LENGTH_SHORT
+            ).show()
+
+        } catch (e: Exception) {
+            Toast.makeText(
+                context,
+                "Failed to mark complete",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
     }
 
     var showAlwaysLocationNotice by remember { mutableStateOf(false) }
@@ -955,27 +941,51 @@ fun HomeScreen(
     fun sendBackupRequest(request: BackupRequest) {
         val deptName = when (request.department.shortCode) {
             "FIRE" -> "Fire Department"
-            "MED"  -> "Medical Department"
-            "POL"  -> "Police Department"
-            else   -> "Emergency Services"
+            "MED" -> "Medical Department"
+            "POL" -> "Police Department"
+            else -> "Emergency Services"
         }
-        val resourceList = if (request.isFullBackup) "Full Backup"
-        else request.resources.joinToString { it.label }
+
+        val resourceList = if (request.isFullBackup) {
+            "Full Backup"
+        } else {
+            request.resources.joinToString { it.label }
+        }
 
         scope.launch {
             try {
-                Log.i("BackupRequest", """
-                    |Backup request dispatched
-                    |  Department : ${request.department.shortCode} ($deptName)
-                    |  Resources  : $resourceList
-                    |  FullBackup : ${request.isFullBackup}
-                    |  IncidentId : ${request.fromIncidentId.ifBlank { "N/A" }}
-                    |  Timestamp  : ${request.timestamp}
-                """.trimMargin())
-                Toast.makeText(context, "Backup request sent to $deptName ($resourceList)", Toast.LENGTH_SHORT).show()
+                val repo = com.ers.emergencyresponseapp.data.IncidentRepository()
+
+                val success = repo.sendBackupRequest(
+                    responderId = responderId,
+                    responderName = responderName,
+                    department = effectiveRole ?: "",
+                    requestedDepartment = deptName,
+                    resources = resourceList,
+                    isFullBackup = request.isFullBackup,
+                    incidentId = request.fromIncidentId
+                )
+
+                if (success) {
+                    Toast.makeText(
+                        context,
+                        "Backup request sent to $deptName",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                } else {
+                    Toast.makeText(
+                        context,
+                        "Failed to send backup request",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+
             } catch (e: Exception) {
-                Log.e("HomeScreen", "Backup request error: ${e.message}")
-                Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    context,
+                    "Error: ${e.message}",
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }
     }
@@ -1080,32 +1090,86 @@ fun HomeScreen(
                 }
             }
 
+            // DITO ILAGAY
+            if (showNewIncidentNotification) {
+
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = Color(0xFF263238)
+                    ),
+                    elevation = CardDefaults.cardElevation(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(18.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+
+                        Icon(
+                            Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = Color(0xFF018786),
+                            modifier = Modifier.size(32.dp)
+                        )
+
+                        Spacer(Modifier.width(12.dp))
+
+                        Column(
+                            modifier = Modifier.weight(1f)
+                        ) {
+
+                            Text(
+                                text = "New Incident Assigned",
+                                color = Color(0xFF018786),
+                                fontWeight = FontWeight.Bold
+                            )
+
+                            Text(
+                                text = newIncidentMessage,
+                                color = Color.White,
+                                maxLines = 2
+                            )
+                        }
+
+                        TextButton(
+                            onClick = {
+                                showNewIncidentNotification = false
+
+                                scope.launch {
+                                    listState.animateScrollToItem(1)
+                                }
+                            }
+                        ) {
+                            Text("View")
+                        }
+
+                        IconButton(
+                            onClick = {
+                                showNewIncidentNotification = false
+                            }
+                        ) {
+                            Text(
+                                "×",
+                                color = Color.White,
+                                fontSize = 24.sp
+                            )
+                        }
+                    }
+                }
+            }
+
+
             // FIX 7: Use derivedStateOf for count values so recomposition only triggers
             // when the actual count changes, not on every activeIncidents reference change.
             val fireCount    by remember { derivedStateOf { activeIncidents.count { it.type == IncidentType.FIRE } } }
             val medicalCount by remember { derivedStateOf { activeIncidents.count { it.type == IncidentType.MEDICAL } } }
             val crimeCount   by remember { derivedStateOf { activeIncidents.count { it.type == IncidentType.CRIME } } }
 
-            val assignedCandidateForRole = run {
-                val source = IncidentStore.incidents
-
-                // 1. Try to restore the previously assigned incident for this session
-                val saved = lastAssignedIncidentId?.let { id ->
-                    source.firstOrNull { inc ->
-                        inc.id == id &&
-                                inc.status != IncidentStatus.RESOLVED &&
-                                (departmentFilter == null || inc.type == departmentFilter)  // ← respect dept
-                    }
-                }
-                if (saved != null) return@run listOf(saved)
-
-                // 2. Find incidents already assigned to this responder that match their dept
-                source.filter { inc ->
-                    inc.assignedTo == responderName &&
-                            inc.status != IncidentStatus.RESOLVED &&
-                            (departmentFilter == null || inc.type == departmentFilter)  // ← dept filter
-                }.sortedWith(incidentPriorityComparator).take(1)
-            }
 
             val assignedListForRole =
                 assignedUi.incidents.map { it.toDomain() }
@@ -1130,6 +1194,14 @@ fun HomeScreen(
                 notificationCount += 1
                 showAssignedAfterNotification = false
                 showNewIncidentNotification = true
+
+                vibratePhone(context)
+
+                showAssignedIncidentNotification(
+                    context = context,
+                    title = "New Incident Assigned",
+                    message = newIncidentMessage
+                )
 
                 delay(5000L)
 
@@ -1356,66 +1428,82 @@ fun HomeScreen(
                         if (assignedListForRole.isEmpty()) {
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(20.dp),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = Color.White
-                                ),
-                                elevation = CardDefaults.cardElevation(2.dp)
+                                shape = RoundedCornerShape(24.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color.White),
+                                elevation = CardDefaults.cardElevation(3.dp),
+                                border = BorderStroke(1.dp, AppColors.Primary.copy(alpha = 0.14f))
                             ) {
                                 Column(
-                                    modifier = Modifier.padding(16.dp)
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(18.dp),
+                                    verticalArrangement = Arrangement.spacedBy(14.dp)
                                 ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(54.dp)
+                                                .clip(RoundedCornerShape(18.dp))
+                                                .background(Color(0xFFFFF3E0)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.LocalFireDepartment,
+                                                contentDescription = null,
+                                                tint = Color(0xFFEF6C00),
+                                                modifier = Modifier.size(30.dp)
+                                            )
+                                        }
 
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
+                                        Spacer(Modifier.width(14.dp))
 
-                                        Icon(
-                                            imageVector = Icons.Default.LocalFireDepartment,
-                                            contentDescription = null,
-                                            tint = Color(0xFFEF6C00)
-                                        )
-
-                                        Spacer(Modifier.width(8.dp))
-
-                                        Column {
-
+                                        Column(modifier = Modifier.weight(1f)) {
                                             Text(
-                                                text = unitCode,
+                                                text = unitCode.ifBlank { "Unit not assigned" },
                                                 fontWeight = FontWeight.Bold,
-                                                fontSize = 18.sp
+                                                fontSize = 22.sp,
+                                                color = AppColors.Text
                                             )
 
                                             Text(
-                                                text = unitType,
-                                                color = Color.Gray,
-                                                fontSize = 13.sp
+                                                text = unitType.ifBlank { "Responder unit" },
+                                                color = AppColors.TextSecondary,
+                                                fontSize = 14.sp
                                             )
                                         }
                                     }
 
-                                    Spacer(Modifier.height(12.dp))
-
                                     Surface(
                                         color = Color(0xFFE8F5E9),
-                                        shape = RoundedCornerShape(50)
+                                        shape = RoundedCornerShape(999.dp)
                                     ) {
-                                        Text(
-                                            text = "🟢 Available for Dispatch",
-                                            modifier = Modifier.padding(
-                                                horizontal = 12.dp,
-                                                vertical = 6.dp
-                                            ),
-                                            color = Color(0xFF2E7D32),
-                                            fontWeight = FontWeight.SemiBold
-                                        )
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(10.dp)
+                                                    .clip(CircleShape)
+                                                    .background(Color(0xFF43A047))
+                                            )
+
+                                            Spacer(Modifier.width(8.dp))
+
+                                            Text(
+                                                text = "Available for Dispatch",
+                                                color = Color(0xFF2E7D32),
+                                                fontWeight = FontWeight.SemiBold,
+                                                fontSize = 14.sp
+                                            )
+                                        }
                                     }
 
-                                    Spacer(Modifier.height(12.dp))
-
                                     Text(
-                                        text = "Waiting for dispatch center",
-                                        color = Color.Gray
+                                        text = "No assigned incident yet. You’ll be notified once the dispatch center assigns an incident.",
+                                        color = AppColors.TextSecondary,
+                                        fontSize = 13.sp,
+                                        lineHeight = 18.sp
                                     )
                                 }
                             }
@@ -1554,7 +1642,7 @@ fun HomeScreen(
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier.clickable {
-                                    refreshHomeData()
+                                    assignedVm.loadActive(responderId)
                                     Toast.makeText(context, "Refreshing incidents...", Toast.LENGTH_SHORT).show()
                                 }
                             ) {
@@ -1632,34 +1720,73 @@ fun HomeScreen(
                             }
                         }
                     } else if (activeListVisible.isEmpty()) {
-                        Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), elevation = CardDefaults.cardElevation(0.dp), shape = RoundedCornerShape(14.dp)) {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp),
+                            shape = RoundedCornerShape(22.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = Color.White
+                            ),
+                            elevation = CardDefaults.cardElevation(2.dp),
+                            border = BorderStroke(
+                                1.dp,
+                                AppColors.Primary.copy(alpha = 0.16f)
+                            )
+                        ) {
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(24.dp),
+                                    .padding(horizontal = 22.dp, vertical = 28.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
-                                Icon(
-                                    Icons.Default.Done,
-                                    contentDescription = null,
-                                    tint = AppColors.Primary,
-                                    modifier = Modifier.size(34.dp)
-                                )
+                                Box(
+                                    modifier = Modifier
+                                        .size(58.dp)
+                                        .clip(RoundedCornerShape(18.dp))
+                                        .background(AppColors.Primary.copy(alpha = 0.10f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Done,
+                                        contentDescription = null,
+                                        tint = AppColors.Primary,
+                                        modifier = Modifier.size(32.dp)
+                                    )
+                                }
 
-                                Spacer(Modifier.height(8.dp))
+                                Spacer(Modifier.height(14.dp))
 
                                 Text(
-                                    "No active incidents",
-                                    fontWeight = FontWeight.SemiBold,
+                                    text = "No active incidents",
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Bold,
                                     color = AppColors.Text
                                 )
 
+                                Spacer(Modifier.height(6.dp))
+
                                 Text(
-                                    "New emergency reports will appear here.",
-                                    fontSize = 12.sp,
+                                    text = "Other assigned incidents will appear here for awareness.",
+                                    fontSize = 13.sp,
                                     color = AppColors.TextSecondary,
                                     textAlign = TextAlign.Center
                                 )
+
+                                Spacer(Modifier.height(16.dp))
+
+                                Surface(
+                                    color = AppColors.Primary.copy(alpha = 0.08f),
+                                    shape = RoundedCornerShape(999.dp)
+                                ) {
+                                    Text(
+                                        text = "Monitoring dispatch updates",
+                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                                        color = AppColors.Primary,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
                             }
                         }
                     } else {
@@ -1854,57 +1981,105 @@ fun HomeScreen(
             } // end LazyColumn
 
             if (showCancelRouteDialog && pendingRouteIncidentId != null) {
-                AlertDialog(
-                    onDismissRequest = { showCancelRouteDialog = false },
-                    title = { Text("Navigation status") },
-                    text = { Text("Are you still responding to this incident?") },
+                Dialog(
+                    onDismissRequest = { showCancelRouteDialog = false }
+                ) {
+                    Card(
+                        shape = RoundedCornerShape(24.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color.White
+                        ),
+                        elevation = CardDefaults.cardElevation(12.dp)
+                    ) {
 
-                    confirmButton = {
-                        TextButton(
-                            onClick = {
-                                showCancelRouteDialog = false
-
-                                context.getSharedPreferences(
-                                    "nav_prefs",
-                                    Context.MODE_PRIVATE
-                                )
-                                    .edit()
-                                    .remove("pending_en_route_check")
-                                    .remove("pending_en_route_incident_id")
-                                    .apply()
-                            }
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Text("Continue")
-                        }
-                    },
 
-                    dismissButton = {
-                        TextButton(
-                            onClick = {
-                                val id = pendingRouteIncidentId ?: return@TextButton
+                            Icon(
+                                imageVector = Icons.Default.Navigation,
+                                contentDescription = null,
+                                tint = Color(0xFF0F766E),
+                                modifier = Modifier.size(48.dp)
+                            )
 
-                                assignedVm.updateStatus(
-                                    assignmentId = id,
-                                    status = "received",
-                                    responderId = responderId
-                                )
+                            Spacer(Modifier.height(16.dp))
 
-                                showCancelRouteDialog = false
+                            Text(
+                                text = "Navigation Check",
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF111827)
+                            )
 
-                                context.getSharedPreferences(
-                                    "nav_prefs",
-                                    Context.MODE_PRIVATE
-                                )
-                                    .edit()
-                                    .remove("pending_en_route_check")
-                                    .remove("pending_en_route_incident_id")
-                                    .apply()
+                            Spacer(Modifier.height(8.dp))
+
+                            Text(
+                                text = "We detected that you exited navigation.\nAre you still responding to this incident?",
+                                textAlign = TextAlign.Center,
+                                color = Color.Gray,
+                                fontSize = 15.sp
+                            )
+
+                            Spacer(Modifier.height(24.dp))
+
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+
+                                OutlinedButton(
+                                    modifier = Modifier.weight(1f),
+                                    onClick = {
+                                        val id = pendingRouteIncidentId ?: return@OutlinedButton
+
+                                        assignedVm.updateStatus(
+                                            assignmentId = id,
+                                            status = "received",
+                                            responderId = responderId
+                                        )
+
+                                        showCancelRouteDialog = false
+
+                                        context.getSharedPreferences(
+                                            "nav_prefs",
+                                            Context.MODE_PRIVATE
+                                        )
+                                            .edit()
+                                            .remove("pending_en_route_check")
+                                            .remove("pending_en_route_incident_id")
+                                            .apply()
+                                    }
+                                ) {
+                                    Text("Cancel Route")
+                                }
+
+                                Button(
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFF0F766E)
+                                    ),
+                                    onClick = {
+                                        showCancelRouteDialog = false
+
+                                        context.getSharedPreferences(
+                                            "nav_prefs",
+                                            Context.MODE_PRIVATE
+                                        )
+                                            .edit()
+                                            .remove("pending_en_route_check")
+                                            .remove("pending_en_route_incident_id")
+                                            .apply()
+                                    }
+                                ) {
+                                    Text("Continue")
+                                }
                             }
-                        ) {
-                            Text("Cancel En Route")
                         }
                     }
-                )
+                }
             }
 
             // ── ALL ACTIVE DIALOG ──
@@ -2093,21 +2268,72 @@ fun HomeScreen(
             }
 
             if (showNotificationsDialog) {
+
+                val notificationItems = buildList {
+                    assignedListForRole.firstOrNull()?.let { inc ->
+                        add("New assigned ${inc.type.displayName} incident at ${inc.location}")
+                        add("Assigned unit: ${unitCode.ifBlank { "Unit" }} • ${unitType.ifBlank { "Responder Unit" }}")
+                    }
+
+                    if (activeIncidents.isNotEmpty()) {
+                        add("${activeIncidents.size} active incident${if (activeIncidents.size > 1) "s" else ""} being monitored")
+                    }
+
+                    if (!gpsEnabled) {
+                        add("GPS is disabled. Enable GPS for safer responder tracking.")
+                    } else if (!isLocationMonitoringEnabled) {
+                        add("GPS is available but monitoring is not active.")
+                    }
+                }
+
                 AlertDialog(
                     onDismissRequest = { showNotificationsDialog = false },
-                    title = { Text("Notifications") },
+                    shape = RoundedCornerShape(24.dp),
+                    title = {
+                        Text(
+                            "Notifications",
+                            fontWeight = FontWeight.Bold
+                        )
+                    },
                     text = {
                         Column(
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Text("• New incidents will appear here.")
-                            Text("• Backup request updates will appear here.")
-                            Text("• GPS and dispatch alerts will appear here.")
+                            if (notificationItems.isEmpty()) {
+                                Text(
+                                    "No new notifications.",
+                                    color = AppColors.TextSecondary
+                                )
+                            } else {
+                                notificationItems.forEach { item ->
+                                    Row(
+                                        verticalAlignment = Alignment.Top
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Notifications,
+                                            contentDescription = null,
+                                            tint = AppColors.Primary,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+
+                                        Spacer(Modifier.width(8.dp))
+
+                                        Text(
+                                            text = item,
+                                            color = AppColors.Text,
+                                            fontSize = 14.sp
+                                        )
+                                    }
+                                }
+                            }
                         }
                     },
                     confirmButton = {
                         TextButton(
-                            onClick = { showNotificationsDialog = false }
+                            onClick = {
+                                notificationCount = 0
+                                showNotificationsDialog = false
+                            }
                         ) {
                             Text("Close")
                         }
@@ -2274,7 +2500,8 @@ fun HomeScreen(
                         ) {
                             OutlinedButton(
                                 onClick = {
-                                    navigateToLocation(
+                                    openMapPin(
+                                        context,
                                         inc.latitude,
                                         inc.longitude,
                                         inc.location
@@ -2291,7 +2518,7 @@ fun HomeScreen(
 
                                 Spacer(Modifier.width(6.dp))
 
-                                Text("Navigate")
+                                Text("View Location")
                             }
 
                             Button(
@@ -2450,4 +2677,78 @@ private fun AccountSettingsDialog(
             OutlinedButton(onClick = onBack, shape = RoundedCornerShape(12.dp), modifier = Modifier.height(44.dp)) { Text("Cancel") }
         }
     )
+}
+
+private fun vibratePhone(context: Context) {
+    val vibrator =
+        context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        vibrator.vibrate(
+            VibrationEffect.createWaveform(
+                longArrayOf(
+                    0,
+                    300,
+                    150,
+                    300,
+                    150,
+                    500
+                ),
+                -1
+            )
+        )
+    } else {
+        vibrator.vibrate(1200)
+    }
+}
+private fun showAssignedIncidentNotification(
+    context: Context,
+    title: String,
+    message: String
+) {
+
+    val intent =
+        Intent(context, MainActivity::class.java)
+
+    intent.flags =
+        Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_CLEAR_TOP
+
+    val pendingIntent =
+        PendingIntent.getActivity(
+            context,
+            0,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or
+                    PendingIntent.FLAG_IMMUTABLE
+        )
+
+    val notification =
+        NotificationCompat.Builder(
+            context,
+            "emergency_incidents"
+        )
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle(title)
+            .setContentText(message)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .build()
+
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+        ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.POST_NOTIFICATIONS
+        ) == PackageManager.PERMISSION_GRANTED
+    ) {
+        NotificationManagerCompat
+            .from(context)
+            .notify(
+                System.currentTimeMillis().toInt(),
+                notification
+            )
+    }
 }

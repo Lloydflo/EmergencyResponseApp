@@ -10,8 +10,11 @@ import kotlinx.coroutines.launch
 data class AssignedIncidentsUiState(
     val loading: Boolean = false,
     val incidents: List<IncidentDto> = emptyList(),
+    val activeIncidents: List<IncidentDto> = emptyList(),
     val error: String? = null
 )
+
+
 
 class AssignedIncidentsViewModel(
     private val repo: IncidentRepository = IncidentRepository()
@@ -44,6 +47,22 @@ class AssignedIncidentsViewModel(
                 _ui.value = AssignedIncidentsUiState(
                     loading = false,
                     error = e.message ?: "Failed to load assigned incidents"
+                )
+            }
+        }
+    }
+    fun loadActive(responderId: Int) {
+        viewModelScope.launch {
+            try {
+                val list = repo.getActiveIncidents(responderId)
+
+                _ui.value = _ui.value.copy(
+                    activeIncidents = list,
+                    error = null
+                )
+            } catch (e: Exception) {
+                _ui.value = _ui.value.copy(
+                    error = e.message ?: "Failed to load active incidents"
                 )
             }
         }

@@ -31,4 +31,21 @@ interface IncidentApi {
     suspend fun syncUnitStatus(
         @Field("responder_id") responderId: Int
     ): Response<Unit>
+
+    @FormUrlEncoded
+    @POST("api/api_app/send-backup-request.php")
+    suspend fun sendBackupRequest(
+        @Field("responder_id") responderId: Int,
+        @Field("responder_name") responderName: String,
+        @Field("department") department: String,
+        @Field("requested_department") requestedDepartment: String,
+        @Field("resources") resources: String,
+        @Field("is_full_backup") isFullBackup: Int,
+        @Field("incident_id") incidentId: String
+    ): Response<Unit>
+
+    @GET("api/api_app/get-active-incidents.php")
+    suspend fun getActiveIncidents(
+        @Query("responder_id") responderId: Int
+    ): Response<List<IncidentDto>>
 }
