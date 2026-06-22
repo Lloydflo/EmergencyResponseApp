@@ -211,7 +211,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                     val item = groupsArray!!.getJSONObject(i)
 
                     val groupId = item.optInt("id")
-                    val name = "group_$groupId"
+                    val name = groupId.toString()
                     val displayName = item.optString("displayName", item.optString("name"))
 
                     val icon = when {
@@ -224,7 +224,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
                     loadedGroups.add(
                         DepartmentInfo(
-                            name = name,
+                            name = groupId.toString(),
                             displayName = displayName,
                             emoji = icon,
                             lastMessage = item.optString("lastMessage", "Tap to open group chat"),
@@ -289,19 +289,69 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
     // ─────────────────────────────────────────────────────────────────────────
     fun selectDepartmentAndLoadHistory(dept: DepartmentInfo) {
         selectedDepartment.value = dept
-        selectedResponder.value  = null
+        selectedResponder.value = null
         markDepartmentRead(dept.name)
 
-        val thread = ChatThread(
-            id           = "dept_${dept.name}",
-            type         = ThreadType.DEPARTMENT,
-            name         = dept.displayName,
+        val groupId = dept.name.toIntOrNull() ?: return
+
+        currentThread.value = ChatThread(
+            id = "group_$groupId",
+            type = ThreadType.DEPARTMENT,
+            name = dept.displayName,
             participants = listOf(dept.name)
         )
-        currentThread.value = thread
-        messages.clear()
 
-        listenToMessages(thread.id)
+        messages.clear()
+        loadInteragencyGroupMessages(groupId)
+    }
+
+    private fun loadInteragencyGroupMessages(groupId: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val request = Request.Builder()
+                    .url("https://emergency-response.alertaraqc.com/api/api_app/get-interagency-group-messages.php?group_id=$groupId")
+                    .get()
+                    .build()
+
+                val response = OkHttpClient().newCall(request).execute()
+                val body = response.body?.string() ?: ""
+                val json = JSONObject(body)
+
+                if (!json.optBoolean("success")) return@launch
+
+                val arr = json.optJSONArray("messages")
+                val loaded = mutableListOf<ChatMessage>()
+
+                for (i in 0 until (arr?.length() ?: 0)) {
+                    val item = arr!!.getJSONObject(i)
+
+                    loaded.add(
+                        ChatMessage(
+                            id = item.optString("id"),
+                            threadId = "group_$groupId",
+                            senderId = item.optString("senderId"),
+                            senderName = item.optString("senderName"),
+                            role = item.optString("role"),
+                            type = MessageType.TEXT,
+                            text = item.optString("text"),
+                            createdAt = item.optLong("createdAt"),
+                            status = MessageStatus.SENT,
+                            isOwn = item.optString("senderId") == myUserId
+                        )
+                    )
+                }
+
+                launch(Dispatchers.Main) {
+                    messages.clear()
+                    messages.addAll(loaded)
+                }
+
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) {
+                    latestNotification.value = "Failed to load group messages"
+                }
+            }
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -433,14 +483,38 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun sendMockDepartmentMessage(meId: String, department: String, body: String) {
-        val threadId = "dept_$department"
-        pushMessageToFirebase(
-            threadId   = threadId,
-            senderId   = meId,
-            senderName = myUserName.ifBlank { meId },
-            role       = myRole,
-            text       = body
-        )
+        val groupId = department.toIntOrNull() ?: return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val formBody = okhttp3.FormBody.Builder()
+                    .add("group_id", groupId.toString())
+                    .add("sender_user_id", meId)
+                    .add("text", body)
+                    .build()
+
+                val request = Request.Builder()
+                    .url("https://emergency-response.alertaraqc.com/api/api_app/send-interagency-group-message.php")
+                    .post(formBody)
+                    .build()
+
+                val response = OkHttpClient().newCall(request).execute()
+                val json = JSONObject(response.body?.string() ?: "")
+
+                if (json.optBoolean("success")) {
+                    loadInteragencyGroupMessages(groupId)
+                } else {
+                    launch(Dispatchers.Main) {
+                        latestNotification.value = json.optString("message", "Failed to send message")
+                    }
+                }
+
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) {
+                    latestNotification.value = "Failed to send message"
+                }
+            }
+        }
     }
 
     private fun pushMessageToFirebase(
