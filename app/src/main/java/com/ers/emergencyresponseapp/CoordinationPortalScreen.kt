@@ -533,7 +533,12 @@ private fun InboxScreen(
                         items(
                             items = filtered,
                             key = { it.name.ifBlank { UUID.randomUUID().toString() } }
-                        ) { d -> DepartmentRow(dept = d, onClick = { onOpenChat(null, d) }) }
+                        ) { d -> DepartmentRow(
+                            dept = d,
+                            currentResponderId = currentResponderId,
+                            vm = vm,
+                            onOpenChat = { onOpenChat(null, d) }
+                        ) }
                     }
                 }
 
@@ -811,37 +816,90 @@ private fun ResponderRow(responder: ResponderBrief, onClick: () -> Unit) {
 }
 
 @Composable
-private fun DepartmentRow(dept: DepartmentInfo, onClick: () -> Unit) {
-    Surface(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick), color = BgCard) {
-        Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(modifier = Modifier.size(52.dp).clip(RoundedCornerShape(16.dp)).background(roleColor(dept.name).copy(alpha = 0.12f)), contentAlignment = Alignment.Center) {
+private fun DepartmentRow(
+    dept: DepartmentInfo,
+    currentResponderId: String,
+    vm: CoordinationViewModel,
+    onOpenChat: () -> Unit
+) {
+    val isMember = dept.lastMessage == "Tap to open group chat"
+    val isPending = dept.lastMessage == "Request pending approval"
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = BgCard
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable {
+                    if (isMember) {
+                        onOpenChat()
+                    } else if (!isPending) {
+                        vm.requestGroupAccess(
+                            groupId = dept.name.toInt(),
+                            userId = currentResponderId.toInt()
+                        )
+                    }
+                }
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(52.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(roleColor(dept.displayName).copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center
+            ) {
                 Icon(
-                    when (dept.name.lowercase()) {
-                        "fire" -> Icons.Default.LocalFireDepartment
-                        "medical" -> Icons.Default.LocalHospital
-                        "police" -> Icons.Default.Security
+                    when {
+                        dept.displayName.contains("fire", true) -> Icons.Default.LocalFireDepartment
+                        dept.displayName.contains("medical", true) -> Icons.Default.LocalHospital
+                        dept.displayName.contains("police", true) -> Icons.Default.Security
                         else -> Icons.Default.Groups
                     },
                     contentDescription = null,
-                    tint = roleColor(dept.name),
+                    tint = roleColor(dept.displayName),
                     modifier = Modifier.size(24.dp)
                 )
             }
+
             Spacer(Modifier.width(12.dp))
+
             Column(modifier = Modifier.weight(1f)) {
-                Text(dept.displayName, fontWeight = if (dept.unreadCount > 0) FontWeight.Bold else FontWeight.SemiBold, fontSize = 15.sp, color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.height(2.dp))
-                Text(dept.lastMessage.ifBlank { "No recent update" }, fontSize = 13.sp,
-                    color      = if (dept.unreadCount > 0) TextPrimary else TextSecondary,
-                    fontWeight = if (dept.unreadCount > 0) FontWeight.Medium else FontWeight.Normal,
-                    maxLines   = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    dept.displayName,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 15.sp,
+                    color = TextPrimary
+                )
+
+                Text(
+                    dept.lastMessage,
+                    fontSize = 13.sp,
+                    color = TextSecondary
+                )
             }
-            Spacer(Modifier.width(8.dp))
-            if (dept.unreadCount > 0) UnreadBadgeCircle(count = dept.unreadCount)
-            else Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Color(0xFFBFC2C8), modifier = Modifier.size(20.dp))
+
+            if (isMember) {
+                Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Color(0xFFBFC2C8))
+            } else {
+                Text(
+                    if (isPending) "Pending" else "Request",
+                    color = BrandGreen,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
     }
-    HorizontalDivider(modifier = Modifier.padding(start = 80.dp), color = DividerColor, thickness = 0.5.dp)
+
+    HorizontalDivider(
+        modifier = Modifier.padding(start = 80.dp),
+        color = DividerColor,
+        thickness = 0.5.dp
+    )
 }
 
 @Composable

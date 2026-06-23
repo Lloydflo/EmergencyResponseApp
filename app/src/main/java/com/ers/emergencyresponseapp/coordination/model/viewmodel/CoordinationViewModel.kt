@@ -62,6 +62,9 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
     private var messagesListenerPath: String? = null
     private var respondersListener: ValueEventListener? = null
 
+    private var activeGroupId: Int? = null
+    private var groupPollingJob: kotlinx.coroutines.Job? = null
+
     // ─────────────────────────────────────────────────────────────────────────
     //  CONNECT — called once when CoordinationPortalScreen opens
     // ─────────────────────────────────────────────────────────────────────────
@@ -222,13 +225,20 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                         else -> "👥"
                     }
 
+                    val isMember = item.optBoolean("isMember")
+                    val requestPending = item.optBoolean("requestPending")
+
                     loadedGroups.add(
                         DepartmentInfo(
                             name = groupId.toString(),
                             displayName = displayName,
                             emoji = icon,
-                            lastMessage = item.optString("lastMessage", "Tap to open group chat"),
-                            unreadCount = item.optInt("unreadCount", 0)
+                            lastMessage = when {
+                                isMember -> "Tap to open group chat"
+                                requestPending -> "Request pending approval"
+                                else -> "Request access to join"
+                            },
+                            unreadCount = if (isMember) item.optInt("unreadCount", 0) else 0
                         )
                     )
                 }
@@ -245,6 +255,44 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
             }
         }
     }
+    fun requestGroupAccess(
+        groupId: Int,
+        userId: Int
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val formBody = okhttp3.FormBody.Builder()
+                    .add("group_id", groupId.toString())
+                    .add("user_id", userId.toString())
+                    .build()
+
+                val request = Request.Builder()
+                    .url("https://emergency-response.alertaraqc.com/api/api_app/request-group-access.php")
+                    .post(formBody)
+                    .build()
+
+                val response = OkHttpClient().newCall(request).execute()
+                val body = response.body?.string()?.trim() ?: ""
+                val json = JSONObject(body)
+
+                launch(Dispatchers.Main) {
+                    latestNotification.value =
+                        json.optString("message", "Request submitted")
+                }
+
+                if (json.optBoolean("success")) {
+                    loadInteragencyGroups(userId.toString())
+                }
+
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) {
+                    latestNotification.value = "Failed to request access: ${e.message}"
+                }
+            }
+        }
+    }
+
+
 
     // ─────────────────────────────────────────────────────────────────────────
     //  DISCONNECT
@@ -261,7 +309,11 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         respondersListener?.let { db.child("users").removeEventListener(it) }
         threadsListener?.let { db.child("threads").removeEventListener(it) }
         stopListeningToMessages()
+        groupPollingJob?.cancel()
+        groupPollingJob = null
+        activeGroupId = null
     }
+
 
     // ─────────────────────────────────────────────────────────────────────────
     //  SELECT RESPONDER — open a real Firebase chat thread
@@ -303,6 +355,8 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
         messages.clear()
         loadInteragencyGroupMessages(groupId)
+        activeGroupId = groupId
+        startGroupPolling(groupId)
     }
 
     private fun loadInteragencyGroupMessages(groupId: Int) {
@@ -314,7 +368,15 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                     .build()
 
                 val response = OkHttpClient().newCall(request).execute()
-                val body = response.body?.string() ?: ""
+                val body = response.body?.string()?.trim() ?: ""
+
+                if (!response.isSuccessful || body.isBlank()) {
+                    launch(Dispatchers.Main) {
+                        latestNotification.value = "Failed to load groups: empty API response"
+                    }
+                    return@launch
+                }
+
                 val json = JSONObject(body)
 
                 if (!json.optBoolean("success")) return@launch
@@ -324,6 +386,13 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
                 for (i in 0 until (arr?.length() ?: 0)) {
                     val item = arr!!.getJSONObject(i)
+                    val typeText = item.optString("type", "TEXT")
+
+                    val messageType = when (typeText.uppercase()) {
+                        "IMAGE" -> MessageType.IMAGE
+                        "FILE" -> MessageType.FILE
+                        else -> MessageType.TEXT
+                    }
 
                     loaded.add(
                         ChatMessage(
@@ -332,11 +401,13 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                             senderId = item.optString("senderId"),
                             senderName = item.optString("senderName"),
                             role = item.optString("role"),
-                            type = MessageType.TEXT,
+                            type = messageType,
                             text = item.optString("text"),
                             createdAt = item.optLong("createdAt"),
                             status = MessageStatus.SENT,
-                            isOwn = item.optString("senderId") == myUserId
+                            isOwn = item.optString("senderId") == myUserId,
+                            attachmentUri = item.optString("attachmentUri").takeIf { it.isNotBlank() && it != "null" },
+                            attachmentName = item.optString("attachmentName").takeIf { it.isNotBlank() && it != "null" }
                         )
                     )
                 }
@@ -350,6 +421,17 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                 launch(Dispatchers.Main) {
                     latestNotification.value = "Failed to load group messages"
                 }
+            }
+        }
+    }
+
+    private fun startGroupPolling(groupId: Int) {
+        groupPollingJob?.cancel()
+
+        groupPollingJob = viewModelScope.launch {
+            while (activeGroupId == groupId) {
+                loadInteragencyGroupMessages(groupId)
+                kotlinx.coroutines.delay(3000)
             }
         }
     }
@@ -638,17 +720,15 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         fileName: String,
         isImage: Boolean
     ) {
-        val threadId = "dept_$department"
+        val groupId = department.toIntOrNull() ?: return
 
         uploadFileToServer(
             uri = uri,
             fileName = fileName,
             onSuccess = { fileUrl, uploadedName ->
-                pushFileMessageToFirebase(
-                    threadId = threadId,
-                    senderId = meId,
-                    senderName = myUserName.ifBlank { meId },
-                    role = myRole,
+                sendGroupAttachmentToSql(
+                    groupId = groupId,
+                    senderUserId = meId,
                     fileUrl = fileUrl,
                     fileName = uploadedName,
                     isImage = isImage
@@ -658,6 +738,58 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                 latestNotification.value = "Upload failed: $error"
             }
         )
+    }
+
+    private fun sendGroupAttachmentToSql(
+        groupId: Int,
+        senderUserId: String,
+        fileUrl: String,
+        fileName: String,
+        isImage: Boolean
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val mimeType = when {
+                    isImage -> "image/*"
+                    fileName.endsWith(".pdf", true) -> "application/pdf"
+                    fileName.endsWith(".docx", true) -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    fileName.endsWith(".doc", true) -> "application/msword"
+                    else -> "application/octet-stream"
+                }
+
+                val formBody = okhttp3.FormBody.Builder()
+                    .add("group_id", groupId.toString())
+                    .add("sender_user_id", senderUserId)
+                    .add("file_url", fileUrl)
+                    .add("file_name", fileName)
+                    .add("mime_type", mimeType)
+                    .add("file_size", "0")
+                    .add("is_image", if (isImage) "1" else "0")
+                    .build()
+
+                val request = Request.Builder()
+                    .url("https://emergency-response.alertaraqc.com/api/api_app/send-interagency-group-attachment.php")
+                    .post(formBody)
+                    .build()
+
+                val response = OkHttpClient().newCall(request).execute()
+                val body = response.body?.string()?.trim() ?: ""
+                val json = JSONObject(body)
+
+                if (json.optBoolean("success")) {
+                    loadInteragencyGroupMessages(groupId)
+                } else {
+                    launch(Dispatchers.Main) {
+                        latestNotification.value = json.optString("message", "Failed to send attachment")
+                    }
+                }
+
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) {
+                    latestNotification.value = "Failed to send attachment: ${e.message}"
+                }
+            }
+        }
     }
 
     private fun findLatestThreadForResponder(responderId: String): Pair<String, Long>? {
