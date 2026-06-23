@@ -18,6 +18,14 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationResult
+import com.google.android.gms.location.LocationServices
+import com.google.firebase.database.FirebaseDatabase
 
 class RouteMonitoringService : Service() {
 
@@ -41,6 +49,10 @@ class RouteMonitoringService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val running = AtomicBoolean(false)
+    private lateinit var locationCallback: LocationCallback
+    private val fusedClient by lazy {
+        LocationServices.getFusedLocationProviderClient(this)
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -70,44 +82,8 @@ class RouteMonitoringService : Service() {
         // ✅ Only start loop once
         if (running.compareAndSet(false, true)) {
             serviceScope.launch {
-                // TEST: wait 5s then create dummy update + notification
-                delay(5000)
+                startLiveLocationTracking(incidentId)
 
-                val store = RouteUpdateStore(this@RouteMonitoringService)
-
-                if (!destLat.isNaN() && !destLng.isNaN()) {
-                    val dummy = RouteUpdatePayload(
-                        version = 1,
-                        summary = "TEST: Faster route via waypoint",
-                        destLat = destLat,
-                        destLng = destLng,
-                        waypoints = listOf(
-                            Waypoint(14.12345, 120.54321),
-                            Waypoint(14.12400, 120.54000)
-                        )
-                    )
-
-                    store.saveLatest(incidentId, dummy)
-                    store.setLastVersion(incidentId, dummy.version)
-
-                    showUpdateNotification(
-                        incidentId = incidentId,
-                        message = dummy.summary,
-                        destLat = dummy.destLat,
-                        destLng = dummy.destLng,
-                        label = "Incident"
-                    )
-                } else {
-                    showUpdateNotification(
-                        incidentId = incidentId,
-                        message = "TEST: Route update received (no coords).",
-                        destLat = null,
-                        destLng = null,
-                        label = "Incident"
-                    )
-                }
-
-                // Placeholder loop (later: API polling)
                 while (running.get()) {
                     delay(30_000)
                 }
@@ -115,6 +91,70 @@ class RouteMonitoringService : Service() {
         }
 
         return START_STICKY
+    }
+
+
+    private fun startLiveLocationTracking(incidentId: String) {
+        val fineGranted = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (!fineGranted) {
+            stopSelf()
+            return
+        }
+
+        val prefs = getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
+        val responderId = prefs.getString("user_id", "") ?: ""
+        val responderName = prefs.getString("account_username", "") ?: ""
+        val department = prefs.getString("department", "") ?: ""
+        val unitCode = prefs.getString("unit_code", "") ?: ""
+        val unitType = prefs.getString("unit_type", "") ?: ""
+
+        if (responderId.isBlank()) {
+            stopSelf()
+            return
+        }
+
+        val dbRef = FirebaseDatabase
+            .getInstance()
+            .getReference("live_locations")
+            .child("responder_$responderId")
+
+        locationCallback = object : LocationCallback() {
+            override fun onLocationResult(result: LocationResult) {
+                val location = result.lastLocation ?: return
+
+                val data = mapOf(
+                    "responderId" to responderId,
+                    "responderName" to responderName,
+                    "department" to department,
+                    "unitCode" to unitCode,
+                    "unitType" to unitType,
+                    "incidentId" to incidentId,
+                    "lat" to location.latitude,
+                    "lng" to location.longitude,
+                    "speed" to location.speed,
+                    "heading" to location.bearing,
+                    "status" to "en_route",
+                    "updatedAt" to System.currentTimeMillis()
+                )
+
+                dbRef.updateChildren(data)
+            }
+        }
+
+        val request = LocationRequest.Builder(5000L)
+            .setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY)
+            .setMinUpdateIntervalMillis(3000L)
+            .build()
+
+        fusedClient.requestLocationUpdates(
+            request,
+            locationCallback,
+            mainLooper
+        )
     }
 
     private fun buildForegroundNotification(): Notification {
@@ -195,6 +235,11 @@ class RouteMonitoringService : Service() {
 
     override fun onDestroy() {
         running.set(false)
+
+        if (::locationCallback.isInitialized) {
+            fusedClient.removeLocationUpdates(locationCallback)
+        }
+
         serviceScope.cancel()
         super.onDestroy()
     }

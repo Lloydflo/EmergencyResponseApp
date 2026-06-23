@@ -16,8 +16,8 @@ android {
         applicationId = "com.ers.emergencyresponseapp"
         minSdk = 23
         targetSdk = 34
-        versionCode = 3
-        versionName = "2.0"
+        versionCode = 4
+        versionName = "2.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
