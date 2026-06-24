@@ -4,6 +4,31 @@ import com.ers.emergencyresponseapp.features.assigned.IncidentDto
 import retrofit2.Response
 import retrofit2.http.*
 
+data class SaveRoutePointRequest(
+    val incident_id: Int,
+    val responder_id: Int,
+    val latitude: Double,
+    val longitude: Double,
+    val speed: Float?,
+    val heading: Float?,
+    val status: String
+)
+
+data class SaveRoutePointResponse(
+    val success: Boolean,
+    val message: String?
+)
+
+data class MarkRouteArrivedRequest(
+    val incident_id: Int,
+    val responder_id: Int
+)
+
+data class MarkRouteArrivedResponse(
+    val success: Boolean,
+    val message: String?
+)
+
 interface IncidentApi {
 
     @GET("api/api_app/get-assigned-incidents.php")
@@ -48,4 +73,14 @@ interface IncidentApi {
     suspend fun getActiveIncidents(
         @Query("responder_id") responderId: Int
     ): Response<List<IncidentDto>>
+
+    @POST("api/api_app/save-route-point.php")
+    suspend fun saveRoutePoint(
+        @Body request: SaveRoutePointRequest
+    ): SaveRoutePointResponse
+
+    @POST("api/api_app/mark-route-arrived.php")
+    suspend fun markRouteArrived(
+        @Body request: MarkRouteArrivedRequest
+    ): MarkRouteArrivedResponse
 }

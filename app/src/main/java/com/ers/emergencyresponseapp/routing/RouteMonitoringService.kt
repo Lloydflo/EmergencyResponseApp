@@ -26,6 +26,8 @@ import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.firebase.database.FirebaseDatabase
+import com.ers.emergencyresponseapp.network.RetrofitProvider
+import com.ers.emergencyresponseapp.network.SaveRoutePointRequest
 
 class RouteMonitoringService : Service() {
 
@@ -54,6 +56,13 @@ class RouteMonitoringService : Service() {
         LocationServices.getFusedLocationProviderClient(this)
     }
 
+    private var lastSavedLat: Double? = null
+    private var lastSavedLng: Double? = null
+    private var lastSavedAt: Long = 0L
+
+    private val minDistanceMeters = 10f
+    private val minSaveIntervalMs = 5000L
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -63,12 +72,17 @@ class RouteMonitoringService : Service() {
 
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        android.util.Log.d("LiveGPS", "onStartCommand called")
+
         android.os.Handler(mainLooper).post {
             android.widget.Toast.makeText(this, "Service started", android.widget.Toast.LENGTH_SHORT).show()
         }
         // ✅ Extract everything safely BEFORE coroutines
         val incidentId = intent?.getStringExtra(EXTRA_INCIDENT_ID).orEmpty()
+        android.util.Log.d("LiveGPS", "incidentId=$incidentId")
+
         if (incidentId.isBlank()) {
+            android.util.Log.e("LiveGPS", "incidentId is blank. Stopping service.")
             stopSelf()
             return START_NOT_STICKY
         }
@@ -82,7 +96,10 @@ class RouteMonitoringService : Service() {
         // ✅ Only start loop once
         if (running.compareAndSet(false, true)) {
             serviceScope.launch {
-                startLiveLocationTracking(incidentId)
+                android.os.Handler(mainLooper).post {
+                    android.util.Log.d("LiveGPS", "Starting live tracking for incident=$incidentId")
+                    startLiveLocationTracking(incidentId)
+                }
 
                 while (running.get()) {
                     delay(30_000)
@@ -107,7 +124,14 @@ class RouteMonitoringService : Service() {
 
         val prefs = getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
         val responderId = prefs.getString("user_id", "") ?: ""
-        val responderName = prefs.getString("account_username", "") ?: ""
+        android.util.Log.d(
+            "LiveGPS",
+            "responderId=$responderId incidentId=$incidentId"
+        )
+        val responderName =
+            prefs.getString("full_name", "")
+                ?: prefs.getString("account_username", "")
+                ?: "Responder"
         val department = prefs.getString("department", "") ?: ""
         val unitCode = prefs.getString("unit_code", "") ?: ""
         val unitType = prefs.getString("unit_type", "") ?: ""
@@ -125,6 +149,35 @@ class RouteMonitoringService : Service() {
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 val location = result.lastLocation ?: return
+                val now = System.currentTimeMillis()
+
+                val movedEnough = if (lastSavedLat != null && lastSavedLng != null) {
+                    val results = FloatArray(1)
+                    android.location.Location.distanceBetween(
+                        lastSavedLat!!,
+                        lastSavedLng!!,
+                        location.latitude,
+                        location.longitude,
+                        results
+                    )
+                    results[0] >= minDistanceMeters
+                } else {
+                    true
+                }
+
+                val intervalPassed = now - lastSavedAt >= minSaveIntervalMs
+
+                if (!movedEnough || !intervalPassed) {
+                    android.util.Log.d(
+                        "LiveGPS",
+                        "Skipped location update: movedEnough=$movedEnough intervalPassed=$intervalPassed"
+                    )
+                    return
+                }
+
+                lastSavedLat = location.latitude
+                lastSavedLng = location.longitude
+                lastSavedAt = now
 
                 val data = mapOf(
                     "responderId" to responderId,
@@ -141,7 +194,42 @@ class RouteMonitoringService : Service() {
                     "updatedAt" to System.currentTimeMillis()
                 )
 
+                android.util.Log.d(
+                    "LiveGPS",
+                    "Uploading location: ${location.latitude}, ${location.longitude}"
+                )
+
                 dbRef.updateChildren(data)
+                    .addOnSuccessListener {
+                        android.util.Log.d("LiveGPS", "Firebase location uploaded")
+                    }
+                    .addOnFailureListener {
+                        android.util.Log.e("LiveGPS", "Firebase upload failed: ${it.message}")
+                    }
+
+                serviceScope.launch {
+                    try {
+                        val response = RetrofitProvider.incidentApi.saveRoutePoint(
+                            SaveRoutePointRequest(
+                                incident_id = incidentId.toIntOrNull() ?: 0,
+                                responder_id = responderId.toIntOrNull() ?: 0,
+                                latitude = location.latitude,
+                                longitude = location.longitude,
+                                speed = location.speed,
+                                heading = location.bearing,
+                                status = "en_route"
+                            )
+                        )
+
+                        android.util.Log.d(
+                            "LiveGPS",
+                            "MySQL route save: success=${response.success}, message=${response.message}"
+                        )
+
+                    } catch (e: Exception) {
+                        android.util.Log.e("LiveGPS", "MySQL save failed: ${e.message}")
+                    }
+                }
             }
         }
 
@@ -155,6 +243,7 @@ class RouteMonitoringService : Service() {
             locationCallback,
             mainLooper
         )
+        android.util.Log.d("LiveGPS", "Location updates requested")
     }
 
     private fun buildForegroundNotification(): Notification {
@@ -238,6 +327,16 @@ class RouteMonitoringService : Service() {
 
         if (::locationCallback.isInitialized) {
             fusedClient.removeLocationUpdates(locationCallback)
+        }
+
+        val prefs = getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
+        val responderId = prefs.getString("user_id", "") ?: ""
+
+        if (responderId.isNotBlank()) {
+            FirebaseDatabase.getInstance()
+                .getReference("live_locations")
+                .child("responder_$responderId")
+                .removeValue()
         }
 
         serviceScope.cancel()

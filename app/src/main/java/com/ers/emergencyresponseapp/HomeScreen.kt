@@ -142,6 +142,9 @@ import android.os.Vibrator
 import android.app.PendingIntent
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import com.ers.emergencyresponseapp.network.RetrofitProvider
+import com.ers.emergencyresponseapp.network.MarkRouteArrivedRequest
+
 
 
 
@@ -257,6 +260,7 @@ private fun startRouteUpdateMonitoring(
     destAddress: String?
 ) {
     Log.d("RouteMonitor", "Starting service for incident=$incidentId")
+    Log.d("LiveGPS", "Calling startForegroundService incident=$incidentId")
     Toast.makeText(context, "Starting monitor…", Toast.LENGTH_SHORT).show()
     val intent = Intent(context, RouteMonitoringService::class.java).apply {
         putExtra(RouteMonitoringService.EXTRA_INCIDENT_ID,   incidentId)
@@ -441,7 +445,7 @@ private fun AssignedActionButtons(
                     .edit()
                     .putBoolean("pending_en_route_check", true)
                     .putString("pending_en_route_incident_id", inc.id)
-                    .apply()
+                    .commit()
             },
             modifier = Modifier
                 .fillMaxWidth()
@@ -835,12 +839,59 @@ fun HomeScreen(
                 status = "on_scene",
                 responderId = responderId
             )
+            context.stopService(
+                Intent(context, RouteMonitoringService::class.java)
+            )
+
+            context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean("pending_en_route_check", false)
+                .remove("pending_en_route_incident_id")
+                .commit()
 
             assignedVm.load(responderId)
             assignedVm.loadActive(responderId)
             RouteHistoryStore.completeRoute(context, incident.id)
+
+            scope.launch {
+                try {
+                    val response = RetrofitProvider.incidentApi.markRouteArrived(
+                        MarkRouteArrivedRequest(
+                            incident_id = incident.id.toIntOrNull() ?: 0,
+                            responder_id = responderId
+                        )
+                    )
+
+                    Log.d(
+                        "LiveGPS",
+                        "Route arrived save: success=${response.success}, message=${response.message}"
+                    )
+
+                } catch (e: Exception) {
+                    Log.e(
+                        "LiveGPS",
+                        "Route arrived save failed: ${e.message}"
+                    )
+                }
+            }
+
+            context.stopService(
+                Intent(context, RouteMonitoringService::class.java)
+            )
+
+            context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean("pending_en_route_check", false)
+                .remove("pending_en_route_incident_id")
+                .apply()
+
             fusedClient.removeLocationUpdates(onSceneLocationCallback)
-            Toast.makeText(context, "On-scene reported to command", Toast.LENGTH_SHORT).show()
+
+            Toast.makeText(
+                context,
+                "On-scene reported to command",
+                Toast.LENGTH_SHORT
+            ).show()
         } catch (e: Exception) { Toast.makeText(context, "Failed to send on-scene report", Toast.LENGTH_SHORT).show() }
     }
 
@@ -851,6 +902,15 @@ fun HomeScreen(
                 status = "completed",
                 responderId = responderId
             )
+            context.stopService(
+                Intent(context, RouteMonitoringService::class.java)
+            )
+
+            context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean("pending_en_route_check", false)
+                .remove("pending_en_route_incident_id")
+                .commit()
 
             assignedVm.load(responderId)
             assignedVm.loadActive(responderId)
@@ -2040,14 +2100,20 @@ fun HomeScreen(
 
                                         showCancelRouteDialog = false
 
+                                        context.stopService(
+                                            Intent(context, RouteMonitoringService::class.java)
+                                        )
+
+                                        fusedClient.removeLocationUpdates(onSceneLocationCallback)
+
                                         context.getSharedPreferences(
                                             "nav_prefs",
                                             Context.MODE_PRIVATE
                                         )
                                             .edit()
-                                            .remove("pending_en_route_check")
+                                            .putBoolean("pending_en_route_check", false)
                                             .remove("pending_en_route_incident_id")
-                                            .apply()
+                                            .commit()
                                     }
                                 ) {
                                     Text("Cancel Route")

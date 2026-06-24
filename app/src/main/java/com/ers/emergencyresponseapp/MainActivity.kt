@@ -355,10 +355,32 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
-        if (currentUserId.isNotEmpty()) {
-            lifecycleScope.launch {        // ← ADD this
-                firebaseChatRepo.setOnlineStatus(currentUserId, isOnline = false)
-            }                              // ← CLOSE
+
+        val navPrefs =
+            getSharedPreferences(
+                "nav_prefs",
+                MODE_PRIVATE
+            )
+
+        val hasActiveRoute =
+            navPrefs.getBoolean(
+                "pending_en_route_check",
+                false
+            )
+        Log.d(
+            "ONLINE_DEBUG",
+            "onStop hasActiveRoute=$hasActiveRoute"
+        )
+
+        if (!hasActiveRoute &&
+            currentUserId.isNotEmpty()
+        ) {
+            lifecycleScope.launch {
+                firebaseChatRepo.setOnlineStatus(
+                    currentUserId,
+                    isOnline = false
+                )
+            }
         }
     }
 }
