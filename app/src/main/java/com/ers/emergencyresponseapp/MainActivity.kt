@@ -47,6 +47,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
+import com.ers.emergencyresponseapp.routing.RouteMonitoringService
 
 sealed class NavItem(val route: String, val title: String, val icon: ImageVector) {
     object Home              : NavItem("home",                "Home",         Icons.Filled.Home)
@@ -140,15 +141,38 @@ class MainActivity : ComponentActivity() {
                     LaunchedEffect(Unit) {
                         while (true) {
                             delay(1000)
-                            if (System.currentTimeMillis() - lastTouchTime >= 5 * 60 * 1000L) {
+
+                            val navPrefs = context.getSharedPreferences(
+                                "nav_prefs",
+                                Context.MODE_PRIVATE
+                            )
+
+                            val hasActiveRoute =
+                                navPrefs.getBoolean(
+                                    "pending_en_route_check",
+                                    false
+                                )
+
+                            //
+                            val serviceRunning = RouteMonitoringService.isRunning
+
+                            if (
+                                !hasActiveRoute &&
+                                !serviceRunning &&
+                                System.currentTimeMillis() - lastTouchTime >= 5 * 60 * 1000L
+                            ) {
+
                                 context.getSharedPreferences("auth", Context.MODE_PRIVATE)
                                     .edit().clear().commit()
+
                                 context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
                                     .edit().clear().commit()
+
                                 navController.navigate("login") {
                                     popUpTo(0) { inclusive = true }
                                     launchSingleTop = true
                                 }
+
                                 break
                             }
                         }
@@ -345,6 +369,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        AppState.isForeground = true
+
         if (currentUserId.isNotEmpty()) {
             lifecycleScope.launch {
                 firebaseChatRepo.setOnlineStatus(currentUserId, true)
@@ -355,6 +381,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
+        AppState.isForeground = false
 
         val navPrefs =
             getSharedPreferences(

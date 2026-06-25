@@ -11,9 +11,6 @@ package com.ers.emergencyresponseapp.firebase.ui
 //    • An input field and send button at the bottom
 // ═══════════════════════════════════════════════════════════════════════════════
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -36,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.ers.emergencyresponseapp.AppScreenTracker
 import com.ers.emergencyresponseapp.firebase.model.FirebaseMessage
 import com.ers.emergencyresponseapp.firebase.viewmodel.FirebaseChatViewModel
 import java.text.SimpleDateFormat
@@ -89,6 +87,7 @@ fun FirebaseChatScreen(
 
     // ── Open the chat when the screen first loads ─────────────────────────────
     LaunchedEffect(myUserId, partnerUserId) {
+        AppScreenTracker.currentScreen = "CHAT"
         viewModel.openChat(myUserId, partnerUserId)
     }
 

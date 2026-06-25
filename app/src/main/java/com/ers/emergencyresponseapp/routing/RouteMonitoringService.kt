@@ -32,6 +32,9 @@ import com.ers.emergencyresponseapp.network.SaveRoutePointRequest
 class RouteMonitoringService : Service() {
 
     companion object {
+
+        var isRunning = false
+
         const val ACTION_REROUTE = "com.ers.emergencyresponseapp.action.REROUTE"
 
         const val EXTRA_REROUTE_LAT = "extra_reroute_lat"
@@ -60,7 +63,7 @@ class RouteMonitoringService : Service() {
     private var lastSavedLng: Double? = null
     private var lastSavedAt: Long = 0L
 
-    private val minDistanceMeters = 10f
+    private val minDistanceMeters = 5f
     private val minSaveIntervalMs = 5000L
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -72,6 +75,7 @@ class RouteMonitoringService : Service() {
 
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        isRunning = true
         android.util.Log.d("LiveGPS", "onStartCommand called")
 
         android.os.Handler(mainLooper).post {
@@ -323,6 +327,7 @@ class RouteMonitoringService : Service() {
     }
 
     override fun onDestroy() {
+        isRunning = false
         running.set(false)
 
         if (::locationCallback.isInitialized) {

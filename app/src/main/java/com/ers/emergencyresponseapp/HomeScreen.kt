@@ -412,6 +412,7 @@ private fun AssignedActionButtons(
     requestOnScenePermission: () -> Unit,
     navigateToLocation: (Double?, Double?, String?) -> Unit,
     sendOnSceneReport: (Incident) -> Unit,
+    hasLocationPermission: Boolean,
     openMarkDone: (Incident) -> Unit,
     onNavigateStatusUpdate: (Incident) -> Unit
 ) {
@@ -437,7 +438,10 @@ private fun AssignedActionButtons(
                     inc.location
                 )
                 onNavigateStatusUpdate(inc)
-                startOnSceneTracking()
+                if (hasLocationPermission)
+                    startOnSceneTracking()
+                else
+                    requestOnScenePermission()
                 setOnSceneEnabled(false)
 
                 navigateToLocation(inc.latitude, inc.longitude, inc.location)
@@ -462,7 +466,10 @@ private fun AssignedActionButtons(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             OutlinedButton(
-                onClick = { sendOnSceneReport(inc) },
+                onClick = {
+                    sendOnSceneReport(inc)
+                    setOnSceneEnabled(false)
+                },
                 enabled = onSceneEnabled,
                 modifier = Modifier
                     .weight(1f)
@@ -592,6 +599,7 @@ fun HomeScreen(
 
     val assignedUi by assignedVm.ui.collectAsState()
     LaunchedEffect(assignedUi.incidents) {
+        AppScreenTracker.currentScreen = "HOME"
         val latestStatus = assignedUi.incidents.firstOrNull()?.unit_status
 
         if (!latestStatus.isNullOrBlank()) {
@@ -867,11 +875,15 @@ fun HomeScreen(
                         "Route arrived save: success=${response.success}, message=${response.message}"
                     )
 
+                    Toast.makeText(
+                        context,
+                        if (response.success) "On-scene reported to command"
+                        else response.message ?: "Arrival already recorded",
+                        Toast.LENGTH_SHORT
+                    ).show()
+
                 } catch (e: Exception) {
-                    Log.e(
-                        "LiveGPS",
-                        "Route arrived save failed: ${e.message}"
-                    )
+                    Log.e("LiveGPS", "Route arrived save failed: ${e.message}")
                 }
             }
 
@@ -883,15 +895,10 @@ fun HomeScreen(
                 .edit()
                 .putBoolean("pending_en_route_check", false)
                 .remove("pending_en_route_incident_id")
-                .apply()
+                .commit()
 
             fusedClient.removeLocationUpdates(onSceneLocationCallback)
 
-            Toast.makeText(
-                context,
-                "On-scene reported to command",
-                Toast.LENGTH_SHORT
-            ).show()
         } catch (e: Exception) { Toast.makeText(context, "Failed to send on-scene report", Toast.LENGTH_SHORT).show() }
     }
 
@@ -1154,67 +1161,73 @@ fun HomeScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 12.dp, vertical = 8.dp),
-                    shape = RoundedCornerShape(24.dp),
+                    shape = RoundedCornerShape(22.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = Color(0xFF263238)
+                        containerColor = Color(0xFFB71C1C)
                     ),
                     elevation = CardDefaults.cardElevation(10.dp)
                 ) {
-                    Row(
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(18.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                            .padding(16.dp)
                     ) {
-
-                        Icon(
-                            Icons.Default.Warning,
-                            contentDescription = null,
-                            tint = Color(0xFF018786),
-                            modifier = Modifier.size(32.dp)
-                        )
-
-                        Spacer(Modifier.width(12.dp))
-
-                        Column(
-                            modifier = Modifier.weight(1f)
-                        ) {
-
-                            Text(
-                                text = "New Incident Assigned",
-                                color = Color(0xFF018786),
-                                fontWeight = FontWeight.Bold
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(30.dp)
                             )
 
-                            Text(
-                                text = newIncidentMessage,
-                                color = Color.White,
-                                maxLines = 2
-                            )
+                            Spacer(Modifier.width(10.dp))
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "EMERGENCY DISPATCH",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 15.sp
+                                )
+
+                                Text(
+                                    newIncidentMessage,
+                                    color = Color.White.copy(alpha = 0.92f),
+                                    fontSize = 13.sp,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+
+                            Surface(
+                                color = Color.White.copy(alpha = 0.18f),
+                                shape = RoundedCornerShape(999.dp)
+                            ) {
+                                Text(
+                                    "HIGH",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 11.sp,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                )
+                            }
                         }
 
-                        TextButton(
+                        Spacer(Modifier.height(12.dp))
+
+                        Button(
                             onClick = {
                                 showNewIncidentNotification = false
-
-                                scope.launch {
-                                    listState.animateScrollToItem(1)
-                                }
-                            }
+                                scope.launch { listState.animateScrollToItem(1) }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color.White,
+                                contentColor = Color(0xFFB71C1C)
+                            ),
+                            shape = RoundedCornerShape(14.dp)
                         ) {
-                            Text("View")
-                        }
-
-                        IconButton(
-                            onClick = {
-                                showNewIncidentNotification = false
-                            }
-                        ) {
-                            Text(
-                                "×",
-                                color = Color.White,
-                                fontSize = 24.sp
-                            )
+                            Text("View Assigned Incident", fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -1250,19 +1263,23 @@ fun HomeScreen(
 
                 notificationCount += 1
                 showAssignedAfterNotification = false
-                showNewIncidentNotification = true
+                if (
+                    AppState.isForeground &&
+                    AppScreenTracker.currentScreen == "HOME"
+                ) {
 
-                vibratePhone(context)
+                    showNewIncidentNotification = true
+                    vibratePhone(context)
 
-                showAssignedIncidentNotification(
-                    context = context,
-                    title = "New Incident Assigned",
-                    message = newIncidentMessage
-                )
+                } else {
 
-                delay(5000L)
+                    showAssignedIncidentNotification(
+                        context,
+                        "New Incident Assigned",
+                        newIncidentMessage
+                    )
 
-                showNewIncidentNotification = false
+                }
             }
 
             // FIX 8: Removed the duplicate outer `activeListVisible` that was shadowed
@@ -1643,6 +1660,7 @@ fun HomeScreen(
                                         AssignedActionButtons(
                                             inc = inc, context = context, navController = navController,
                                             currentLatitude = currentLatitude, currentLongitude = currentLongitude,
+                                            hasLocationPermission = hasLocationPermission,
                                             onSceneEnabled = (onSceneEnabledMap[inc.id] == true),
                                             setOnSceneEnabled = { e -> onSceneEnabledMap[inc.id] = e },
                                             setNavTarget = { id, lat, lng -> navDestinationIncidentId = id; navDestinationLat = lat; navDestinationLng = lng },

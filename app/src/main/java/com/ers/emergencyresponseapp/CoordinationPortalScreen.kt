@@ -246,6 +246,7 @@ fun CoordinationPortalScreen(
     val vm: CoordinationViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
     var navState by remember { mutableStateOf(NavState.INBOX) }
     LaunchedEffect(navState) {
+        AppScreenTracker.currentScreen = "COORDINATION"
         onChatModeChange(navState == NavState.CHAT)
     }
 
