@@ -31,6 +31,8 @@ import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import kotlinx.coroutines.Dispatchers
+import android.provider.OpenableColumns
+import android.content.Context
 
 class CoordinationViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -88,6 +90,30 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
         // Load static department list (departments are role-based, not user accounts)
         loadInteragencyGroups(userId)
+    }
+
+    private fun getRealFileName(uri: Uri, fallback: String): String {
+        val context = getApplication<Application>()
+
+        return try {
+            context.contentResolver.query(
+                uri,
+                arrayOf(OpenableColumns.DISPLAY_NAME),
+                null,
+                null,
+                null
+            )?.use { cursor ->
+                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+
+                if (cursor.moveToFirst() && nameIndex >= 0) {
+                    cursor.getString(nameIndex)
+                } else {
+                    fallback
+                }
+            } ?: fallback
+        } catch (e: Exception) {
+            fallback
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -394,18 +420,22 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                         else -> MessageType.TEXT
                     }
 
+
+
+                    val senderId = item.optString("senderId")
+                    val senderName = item.optString("senderName")
                     loaded.add(
                         ChatMessage(
                             id = item.optString("id"),
                             threadId = "group_$groupId",
-                            senderId = item.optString("senderId"),
-                            senderName = item.optString("senderName"),
+                            senderId = senderId,
+                            senderName = senderName,
                             role = item.optString("role"),
                             type = messageType,
                             text = item.optString("text"),
                             createdAt = item.optLong("createdAt"),
                             status = MessageStatus.SENT,
-                            isOwn = item.optString("senderId") == myUserId,
+                            isOwn = senderId == myUserId || senderName.equals(myUserName, ignoreCase = true),
                             attachmentUri = item.optString("attachmentUri").takeIf { it.isNotBlank() && it != "null" },
                             attachmentName = item.optString("attachmentName").takeIf { it.isNotBlank() && it != "null" }
                         )
@@ -703,7 +733,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                     senderName = myUserName.ifBlank { meId },
                     role = myRole,
                     fileUrl = fileUrl,
-                    fileName = uploadedName,
+                    fileName = fileName,
                     isImage = isImage
                 )
             },
@@ -721,16 +751,18 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         isImage: Boolean
     ) {
         val groupId = department.toIntOrNull() ?: return
+        val realFileName = getRealFileName(uri, fileName)
+
 
         uploadFileToServer(
             uri = uri,
-            fileName = fileName,
+            fileName = realFileName,
             onSuccess = { fileUrl, uploadedName ->
                 sendGroupAttachmentToSql(
                     groupId = groupId,
                     senderUserId = meId,
                     fileUrl = fileUrl,
-                    fileName = uploadedName,
+                    fileName = realFileName,
                     isImage = isImage
                 )
             },

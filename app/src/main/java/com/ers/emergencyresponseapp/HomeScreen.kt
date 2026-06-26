@@ -140,6 +140,7 @@ import androidx.compose.ui.window.Dialog
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.app.PendingIntent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.ers.emergencyresponseapp.network.RetrofitProvider
@@ -1154,85 +1155,6 @@ fun HomeScreen(
                 }
             }
 
-            // DITO ILAGAY
-            if (showNewIncidentNotification) {
-
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    shape = RoundedCornerShape(22.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = Color(0xFFB71C1C)
-                    ),
-                    elevation = CardDefaults.cardElevation(10.dp)
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp)
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Default.Warning,
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(30.dp)
-                            )
-
-                            Spacer(Modifier.width(10.dp))
-
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    "EMERGENCY DISPATCH",
-                                    color = Color.White,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    fontSize = 15.sp
-                                )
-
-                                Text(
-                                    newIncidentMessage,
-                                    color = Color.White.copy(alpha = 0.92f),
-                                    fontSize = 13.sp,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-
-                            Surface(
-                                color = Color.White.copy(alpha = 0.18f),
-                                shape = RoundedCornerShape(999.dp)
-                            ) {
-                                Text(
-                                    "HIGH",
-                                    color = Color.White,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 11.sp,
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                                )
-                            }
-                        }
-
-                        Spacer(Modifier.height(12.dp))
-
-                        Button(
-                            onClick = {
-                                showNewIncidentNotification = false
-                                scope.launch { listState.animateScrollToItem(1) }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color.White,
-                                contentColor = Color(0xFFB71C1C)
-                            ),
-                            shape = RoundedCornerShape(14.dp)
-                        ) {
-                            Text("View Assigned Incident", fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-
 
             // FIX 7: Use derivedStateOf for count values so recomposition only triggers
             // when the actual count changes, not on every activeIncidents reference change.
@@ -1263,29 +1185,97 @@ fun HomeScreen(
 
                 notificationCount += 1
                 showAssignedAfterNotification = false
-                if (
-                    AppState.isForeground &&
-                    AppScreenTracker.currentScreen == "HOME"
-                ) {
 
+                val isOnHomeScreen =
+                    AppState.isForeground &&
+                            AppScreenTracker.currentScreen == "HOME"
+
+                if (isOnHomeScreen) {
+                    // HOME SCREEN = banner only
                     showNewIncidentNotification = true
                     vibratePhone(context)
-
                 } else {
+                    // OTHER SCREEN / BACKGROUND = Android notification only
+                    showNewIncidentNotification = false
 
                     showAssignedIncidentNotification(
                         context,
                         "New Incident Assigned",
                         newIncidentMessage
                     )
-
                 }
             }
 
-            // FIX 8: Removed the duplicate outer `activeListVisible` that was shadowed
-            // by an identical `remember` inside the LazyColumn item below.
-            // There is now only ONE derivation, inside the item where it is used.
+            AnimatedVisibility(
+                visible = showNewIncidentNotification,
+                enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
+                exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
+                modifier = Modifier.align(Alignment.TopCenter)
+            ) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = Color(0xFFB71C1C)
+                    ),
+                    elevation = CardDefaults.cardElevation(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(30.dp)
+                        )
 
+                        Spacer(Modifier.width(12.dp))
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "EMERGENCY DISPATCH",
+                                color = Color.White,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 14.sp
+                            )
+
+                            Text(
+                                newIncidentMessage,
+                                color = Color.White.copy(alpha = 0.92f),
+                                fontSize = 13.sp,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
+                        TextButton(
+                            onClick = {
+                                showNewIncidentNotification = false
+                                scope.launch {
+                                    listState.animateScrollToItem(2)
+                                }
+                            }
+                        ) {
+                            Text(
+                                "VIEW",
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
+
+            LaunchedEffect(showNewIncidentNotification) {
+                if (showNewIncidentNotification) {
+                    delay(5000)
+                    showNewIncidentNotification = false
+                }
+            }
 
 
             LazyColumn(
@@ -1294,7 +1284,11 @@ fun HomeScreen(
                     .fillMaxSize()
                     .windowInsetsPadding(WindowInsets.navigationBars),
                 contentPadding = PaddingValues(
-                    top = if (showAlwaysLocationNotice) 76.dp else 0.dp,
+                    top = when {
+                        showAlwaysLocationNotice -> 76.dp
+                        showNewIncidentNotification -> 118.dp
+                        else -> 0.dp
+                    },
                     bottom = 10.dp
                 ),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -2650,33 +2644,6 @@ fun HomeScreen(
                     onBack = { showSettingsDialog = false },
                     onLogout = { Toast.makeText(context, "Logged out", Toast.LENGTH_SHORT).show(); showSettingsDialog = false; onLogout() }
                 )
-            }
-
-            // ── NEW INCIDENT NOTIFICATION ──
-            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
-                androidx.compose.animation.AnimatedVisibility(
-                    visible = showNewIncidentNotification,
-                    enter = slideInVertically { -it } + fadeIn(),
-                    exit  = slideOutVertically { -it } + fadeOut(),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(0.95f).padding(top = 16.dp).combinedClickable(onClick = { showNewIncidentNotification = false }, onLongClick = { showNewIncidentNotification = false }),
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFF1B5E20)), elevation = CardDefaults.cardElevation(0.dp), shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Row(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Icon(Icons.Default.LocalHospital, null, tint = Color.White, modifier = Modifier.size(32.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("New Incident Assigned!", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                                Spacer(Modifier.height(4.dp))
-                                Text(newIncidentMessage, color = Color.White.copy(0.9f), fontSize = 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            }
-                            IconButton(onClick = { showNewIncidentNotification = false }) {
-                                Icon(Icons.Default.Done, null, tint = Color.White)
-                            }
-                        }
-                    }
-                }
             }
         }
     }

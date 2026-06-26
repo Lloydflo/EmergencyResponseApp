@@ -56,9 +56,8 @@ import java.util.UUID
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.activity.compose.BackHandler
 import android.content.Intent
-import android.Manifest
-import android.content.pm.PackageManager
-import androidx.core.content.ContextCompat
+import androidx.compose.foundation.lazy.itemsIndexed
+
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1159,7 +1158,14 @@ private fun ChatScreen(vm: CoordinationViewModel, currentResponderId: String, on
                                 showSharedFilesDialog.value = true
                             }
                         )
-                        selectedDepartment != null -> Text("Department: ${selectedDepartment.displayName}")
+                        selectedDepartment != null -> DepartmentChatInfoContent(
+                            department = selectedDepartment,
+                            messages = messages,
+                            onFilesClick = {
+                                showInfoDialog.value = false
+                                showSharedFilesDialog.value = true
+                            }
+                        )
                         else -> Text("No info available")
                     }
                 }
@@ -1208,15 +1214,34 @@ private fun ChatMessagesPanel(messages: List<ChatMessage>, timeFmt: SimpleDateFo
         val cal = Calendar.getInstance().apply { timeInMillis = ts }; val now = Calendar.getInstance(); val yest = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
         return when { sameDay(cal, now) -> "Today"; sameDay(cal, yest) -> "Yesterday"; else -> SimpleDateFormat("MMM dd, yyyy", Locale.getDefault()).format(Date(ts)) }
     }
-    LazyColumn(state = listState, modifier = modifier, contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+    LazyColumn(
+        state = listState,
+        modifier = modifier,
+        contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
         var lastDay: String? = null
-        items(
+
+        itemsIndexed(
             items = messages,
-            key = { it.id.ifBlank { UUID.randomUUID().toString() } }
-        ) { msg ->
+            key = { index, item ->
+                "${item.id}_${item.createdAt}_$index"
+            }
+        ) { _, msg ->
+
             val day = dayLabel(msg.createdAt)
-            if (day != lastDay) { lastDay = day; DayDivider(label = day) }
-            ChatBubble(msg = msg, timeLabel = timeFmt.format(Date(msg.createdAt)), currentResponderId = currentResponderId, onReact = onReact)
+
+            if (day != lastDay) {
+                lastDay = day
+                DayDivider(label = day)
+            }
+
+            ChatBubble(
+                msg = msg,
+                timeLabel = timeFmt.format(Date(msg.createdAt)),
+                currentResponderId = currentResponderId,
+                onReact = onReact
+            )
         }
     }
 }
@@ -1268,10 +1293,70 @@ private fun ChatBubble(msg: ChatMessage, timeLabel: String, currentResponderId: 
                         Text(msg.text ?: "", color = textColor, fontSize = 14.sp, lineHeight = 20.sp)
                     }
                 }
-                MessageType.IMAGE -> Column(modifier = Modifier.clip(bubbleShape).combinedClickable(onClick = { showLightbox = true }, onLongClick = { showEmojiPicker = !showEmojiPicker })) {
-                    if (!isOwn && msg.senderName.isNotBlank()) Text(msg.senderName, fontWeight = FontWeight.SemiBold, fontSize = 11.sp, color = roleColor(msg.role), modifier = Modifier.background(bubbleColor).padding(start = 10.dp, top = 8.dp, end = 10.dp, bottom = 2.dp))
-                    msg.attachmentUri?.let { UriImage(uriString = it, contentDescription = "Image", contentScale = ContentScale.Crop, modifier = Modifier.widthIn(min = 140.dp, max = 260.dp).heightIn(min = 100.dp, max = 200.dp)) }
-                    if (!msg.text.isNullOrBlank()) Text(msg.text, color = textColor, fontSize = 13.sp, modifier = Modifier.background(bubbleColor).padding(horizontal = 10.dp, vertical = 6.dp))
+                MessageType.IMAGE -> Surface(
+                    color = bubbleColor,
+                    shape = bubbleShape,
+                    shadowElevation = if (isOwn) 0.dp else 1.dp,
+                    modifier = Modifier.combinedClickable(
+                        onClick = {
+                            msg.attachmentUri?.let { url ->
+                                try {
+                                    val finalUrl = if (url.startsWith("http")) {
+                                        url
+                                    } else {
+                                        "https://emergency-response.alertaraqc.com/$url"
+                                    }
+
+                                    context.startActivity(
+                                        Intent(Intent.ACTION_VIEW, Uri.parse(finalUrl))
+                                    )
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Unable to open image", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                        onLongClick = { showEmojiPicker = !showEmojiPicker }
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        if (!isOwn && msg.senderName.isNotBlank()) {
+                            Text(
+                                msg.senderName,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 11.sp,
+                                color = roleColor(msg.role)
+                            )
+
+                            Spacer(Modifier.height(4.dp))
+                        }
+
+                        msg.attachmentUri?.let { url ->
+                            val finalUrl = if (url.startsWith("http")) {
+                                url
+                            } else {
+                                "https://emergency-response.alertaraqc.com/$url"
+                            }
+
+                            UriImage(
+                                uriString = finalUrl,
+                                contentDescription = "Image",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .widthIn(min = 180.dp, max = 260.dp)
+                                    .heightIn(min = 140.dp, max = 220.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                            )
+                        }
+
+                        if (!msg.text.isNullOrBlank() && msg.text != "Image") {
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                msg.text,
+                                color = textColor,
+                                fontSize = 13.sp
+                            )
+                        }
+                    }
                 }
                 MessageType.FILE -> Surface(color = bubbleColor, shape = bubbleShape, shadowElevation = if (isOwn) 0.dp else 1.dp,
                     modifier = Modifier.combinedClickable(
@@ -1280,9 +1365,16 @@ private fun ChatBubble(msg: ChatMessage, timeLabel: String, currentResponderId: 
 
                             msg.attachmentUri?.let { url ->
                                 try {
-                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                                    val finalUrl = if (url.startsWith("http")) {
+                                        url
+                                    } else {
+                                        "https://emergency-response.alertaraqc.com/$url"
+                                    }
+
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(finalUrl)).apply {
                                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                     }
+
                                     context.startActivity(intent)
                                 } catch (e: Exception) {
                                     Toast.makeText(
@@ -2231,5 +2323,82 @@ private fun formatLastSeenTime(time: Long): String {
             "MMM dd, hh:mm a",
             Locale.getDefault()
         ).format(Date(time))
+    }
+}
+
+@Composable
+private fun DepartmentChatInfoContent(
+    department: DepartmentInfo,
+    messages: List<ChatMessage>,
+    onFilesClick: () -> Unit
+) {
+    val messageCount = messages.size
+    val fileCount = messages.count {
+        it.type == MessageType.FILE || it.type == MessageType.IMAGE
+    }
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .size(72.dp)
+                .clip(RoundedCornerShape(20.dp))
+                .background(roleColor(department.displayName).copy(alpha = 0.15f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(department.emoji, fontSize = 34.sp)
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        Text(
+            department.displayName,
+            fontWeight = FontWeight.Bold,
+            fontSize = 20.sp
+        )
+
+        Text(
+            "Inter-agency group channel",
+            color = TextSecondary,
+            fontSize = 13.sp
+        )
+
+        Spacer(Modifier.height(18.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            ChatStatTile(
+                value = messageCount.toString(),
+                label = "Messages",
+                modifier = Modifier.weight(1f)
+            )
+
+            ChatStatTile(
+                value = fileCount.toString(),
+                label = "Files",
+                modifier = Modifier.weight(1f),
+                onClick = onFilesClick
+            )
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        InfoGroup {
+            InfoRow(
+                icon = Icons.Default.Groups,
+                label = "Channel",
+                value = "Group chat"
+            )
+            InfoRowDivider()
+            InfoRow(
+                icon = Icons.Default.Security,
+                label = "Access",
+                value = "Approved members"
+            )
+        }
     }
 }
