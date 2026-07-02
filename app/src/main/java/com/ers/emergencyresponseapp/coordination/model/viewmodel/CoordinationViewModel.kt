@@ -444,7 +444,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
                 launch(Dispatchers.Main) {
                     messages.clear()
-                    messages.addAll(loaded)
+                    messages.addAll(loaded.sortedBy { it.createdAt })
                 }
 
             } catch (e: Exception) {

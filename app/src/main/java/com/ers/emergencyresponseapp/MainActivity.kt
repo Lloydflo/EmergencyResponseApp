@@ -159,7 +159,7 @@ class MainActivity : ComponentActivity() {
                             if (
                                 !hasActiveRoute &&
                                 !serviceRunning &&
-                                System.currentTimeMillis() - lastTouchTime >= 5 * 60 * 1000L
+                                System.currentTimeMillis() - lastTouchTime >= 60 * 60 * 1000L
                             ) {
 
                                 context.getSharedPreferences("auth", Context.MODE_PRIVATE)
@@ -503,19 +503,7 @@ fun EmergencyResponseScreen(modifier: Modifier = Modifier, onProceed: () -> Unit
 // ─────────────────────────────────────────────────────────────────────────────
 //  Session timeout watcher
 // ─────────────────────────────────────────────────────────────────────────────
-@Composable
-fun SessionTimeoutWatcher(
-    lastTouchMillis: MutableStateFlow<Long>,
-    timeoutMillis: Long = 2 * 60 * 60 * 1000L,
-    onTimeout: () -> Unit
-) {
-    LaunchedEffect(Unit) {
-        lastTouchMillis.collectLatest { last ->
-            delay(timeoutMillis)
-            if (System.currentTimeMillis() - last >= timeoutMillis) onTimeout()
-        }
-    }
-}
+
 
 @Preview(showBackground = true)
 @Composable

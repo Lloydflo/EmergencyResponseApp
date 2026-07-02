@@ -1259,7 +1259,7 @@ private fun DayDivider(label: String) {
 
 @Composable
 private fun ChatBubble(msg: ChatMessage, timeLabel: String, currentResponderId: String, onReact: (String, String) -> Unit) {
-    val isOwn = msg.senderId == currentResponderId; val bubbleColor = if (isOwn) OwnBubble else PeerBubble; val textColor = if (isOwn) Color.White else TextPrimary
+    val isOwn = msg.isOwn || msg.senderId == currentResponderId; val bubbleColor = if (isOwn) OwnBubble else PeerBubble; val textColor = if (isOwn) Color.White else TextPrimary
     val alignment = if (isOwn) Alignment.End else Alignment.Start; val horizontalArr = if (isOwn) Arrangement.End else Arrangement.Start
     var showEmojiPicker by remember(msg.id) { mutableStateOf(false) }; var showLightbox by remember(msg.id) { mutableStateOf(false) }
     val bubbleShape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomEnd = if (isOwn) 4.dp else 18.dp, bottomStart = if (isOwn) 18.dp else 4.dp)

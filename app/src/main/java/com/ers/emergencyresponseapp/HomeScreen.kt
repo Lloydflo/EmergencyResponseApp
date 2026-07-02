@@ -145,6 +145,8 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.ers.emergencyresponseapp.network.RetrofitProvider
 import com.ers.emergencyresponseapp.network.MarkRouteArrivedRequest
+import androidx.compose.runtime.*
+
 
 
 
@@ -735,6 +737,7 @@ fun HomeScreen(
         }
     }
 
+
     // Location
     var isLocationShared by remember { mutableStateOf(false) }
     var hasLocationPermission by remember {
@@ -744,6 +747,15 @@ fun HomeScreen(
                 Manifest.permission.ACCESS_FINE_LOCATION
             ) == PackageManager.PERMISSION_GRANTED
         )
+    }
+    var showLocationRationale by remember { mutableStateOf(false) }
+    var hasPromptedLocationOnce by remember {
+        mutableStateOf(prefs.getBoolean("location_permission_prompted", false))
+    }
+    LaunchedEffect(Unit) {
+        if (!hasLocationPermission && !hasPromptedLocationOnce) {
+            showLocationRationale = true
+        }
     }
     var currentLatitude  by remember { mutableStateOf<Double?>(null) }
     var currentLongitude by remember { mutableStateOf<Double?>(null) }
@@ -1153,6 +1165,46 @@ fun HomeScreen(
                         }
                     }
                 }
+
+                if (showLocationRationale) {
+                    AlertDialog(
+                        onDismissRequest = {
+                            showLocationRationale = false
+                            prefs.edit().putBoolean("location_permission_prompted", true).apply()
+                        },
+                        shape = RoundedCornerShape(20.dp),
+                        icon = {
+                            Icon(Icons.Default.LocationOn, contentDescription = null, tint = AppColors.Primary)
+                        },
+                        title = { Text("Location Access Required", fontWeight = FontWeight.Bold) },
+                        text = {
+                            Text(
+                                "This app needs your location to enable live GPS tracking during dispatch, " +
+                                        "navigation to incidents, and on-scene verification. Please allow location access.",
+                                color = AppColors.TextSecondary
+                            )
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    showLocationRationale = false
+                                    prefs.edit().putBoolean("location_permission_prompted", true).apply()
+                                    locationPermLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = AppColors.Primary)
+                            ) { Text("Allow Location") }
+                        },
+                        dismissButton = {
+                            TextButton(
+                                onClick = {
+                                    showLocationRationale = false
+                                    prefs.edit().putBoolean("location_permission_prompted", true).apply()
+                                }
+                            ) { Text("Not Now") }
+                        }
+                    )
+                }
+
             }
 
 
@@ -1350,62 +1402,13 @@ fun HomeScreen(
 
                                         Text(
                                             text = when {
-                                                !gpsEnabled -> "GPS Disabled • Tap to open settings"
+                                                !gpsEnabled -> "GPS Disabled"
                                                 !hasLocationPermission -> "GPS Permission Needed"
-                                                isLocationMonitoringEnabled -> "GPS Active • Tap to disable"
-                                                else -> "GPS Available • Tap to enable"
+                                                isLocationMonitoringEnabled -> "GPS Active"
+                                                else -> "GPS Available"
                                             },
                                             color = Color.White,
-                                            fontSize = 12.sp,
-                                            modifier = Modifier.clickable {
-                                                when {
-                                                    !gpsEnabled -> {
-                                                        locationSettingsLauncher.launch(
-                                                            Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)
-                                                        )
-                                                    }
-
-                                                    !hasLocationPermission -> {
-                                                        locationPermLauncher.launch(
-                                                            Manifest.permission.ACCESS_FINE_LOCATION
-                                                        )
-                                                    }
-
-                                                    isLocationMonitoringEnabled -> {
-                                                        isLocationMonitoringEnabled = false
-                                                        isLocationShared = false
-
-                                                        prefs.edit()
-                                                            .putBoolean(locationMonitoringEnabledKey, false)
-                                                            .apply()
-
-                                                        stopLocationUpdates()
-
-                                                        Toast.makeText(
-                                                            context,
-                                                            "GPS monitoring disabled",
-                                                            Toast.LENGTH_SHORT
-                                                        ).show()
-                                                    }
-
-                                                    else -> {
-                                                        isLocationMonitoringEnabled = true
-                                                        isLocationShared = true
-
-                                                        prefs.edit()
-                                                            .putBoolean(locationMonitoringEnabledKey, true)
-                                                            .apply()
-
-                                                        startLocationUpdates()
-
-                                                        Toast.makeText(
-                                                            context,
-                                                            "GPS monitoring enabled",
-                                                            Toast.LENGTH_SHORT
-                                                        ).show()
-                                                    }
-                                                }
-                                            }
+                                            fontSize = 12.sp
                                         )
                                     }
                                 }
