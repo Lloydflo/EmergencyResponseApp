@@ -3,9 +3,8 @@ package com.ers.emergencyresponseapp.home.composables
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -266,8 +265,6 @@ fun BackupResourceSheet(
         if (fullBackup) {
             selected.clear()
             selected.addAll(resources.map { it.id })
-        } else if (selected.size == resources.size) {
-            // user untoggled full backup → keep selection but unmark flag
         }
     }
 
@@ -448,6 +445,22 @@ private fun FullBackupChip(
     active: Boolean,
     onToggle: () -> Unit
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val animBg by animateColorAsState(
+        targetValue = if (active) accent.copy(alpha = 0.12f) else Color.White,
+        animationSpec = tween(160),
+        label = "fullBg"
+    )
+    val animBorder by animateColorAsState(
+        targetValue = if (active) accent else Color(0xFFE5E5E5),
+        animationSpec = tween(160),
+        label = "fullBorder"
+    )
+    val animIconTint by animateColorAsState(
+        targetValue = if (active) accent else Color(0xFF9E9E9E),
+        animationSpec = tween(160),
+        label = "fullIcon"
+    )
     val scale by animateFloatAsState(
         targetValue = if (active) 1.02f else 1f,
         animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
@@ -458,16 +471,20 @@ private fun FullBackupChip(
         modifier = Modifier
             .fillMaxWidth()
             .graphicsLayer(scaleX = scale, scaleY = scale)
-            .clickable(onClick = onToggle),
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onToggle
+            ),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (active) accent.copy(alpha = 0.13f) else Color.White
+            containerColor = animBg
         ),
         border = BorderStroke(
             width = if (active) 2.dp else 1.dp,
-            color = if (active) accent else Color(0xFFE5E5E5)
+            color = animBorder
         ),
-        elevation = CardDefaults.cardElevation(if (active) 4.dp else 2.dp)
+        elevation = CardDefaults.cardElevation(0.dp)
     ) {
         Row(
             modifier = Modifier
@@ -480,26 +497,26 @@ private fun FullBackupChip(
                 modifier = Modifier
                     .size(40.dp)
                     .clip(RoundedCornerShape(11.dp))
-                    .background(if (active) accent.copy(0.18f) else Color(0xFFF0F0F0)),
+                    .background(if (active) accent.copy(0.16f) else Color.Transparent),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    Icons.Default.Bolt,
+                    imageVector = Icons.Default.Bolt,
                     contentDescription = null,
-                    tint = if (active) accent else Color(0xFF9E9E9E),
+                    tint = animIconTint,
                     modifier = Modifier.size(22.dp)
                 )
             }
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    "Full Backup",
+                    text = "Full Backup",
                     fontWeight = FontWeight.Bold,
                     fontSize = 14.sp,
                     color = if (active) accent else Color(0xFF171717)
                 )
                 Text(
-                    "Request all available resources at once",
+                    text = "Request all available resources at once",
                     fontSize = 11.sp,
                     color = Color(0xFF757575)
                 )
@@ -507,7 +524,7 @@ private fun FullBackupChip(
 
             if (active) {
                 Icon(
-                    Icons.Default.CheckCircle,
+                    imageVector = Icons.Default.CheckCircle,
                     contentDescription = "Selected",
                     tint = accent,
                     modifier = Modifier.size(22.dp)
@@ -530,6 +547,12 @@ private fun ResourceChip(
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val scale by animateFloatAsState(
+        targetValue = if (isSelected) 1.02f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+        label = "chipScale"
+    )
     val animBg by animateColorAsState(
         targetValue = if (isSelected) accent.copy(alpha = 0.12f) else Color.White,
         animationSpec = tween(160),
@@ -549,35 +572,56 @@ private fun ResourceChip(
     Card(
         modifier = modifier
             .height(80.dp)
-            .clickable(onClick = onClick),
+            .graphicsLayer(scaleX = scale, scaleY = scale)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick
+            ),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = animBg),
         border = BorderStroke(
             width = if (isSelected) 2.dp else 1.dp,
             color = animBorder
         ),
-        elevation = CardDefaults.cardElevation(if (isSelected) 4.dp else 1.dp)
+        elevation = CardDefaults.cardElevation(if (isSelected) 3.dp else 0.dp)
     ) {
-        Column(
-            modifier = Modifier.fillMaxSize().padding(10.dp),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Icon(
-                imageVector = resource.icon,
-                contentDescription = resource.label,
-                tint = animIconTint,
-                modifier = Modifier.size(22.dp)
-            )
-            Spacer(Modifier.height(5.dp))
-            Text(
-                text = resource.label,
-                fontSize = 11.sp,
-                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                color = if (isSelected) accent else Color(0xFF424242),
-                textAlign = TextAlign.Center,
-                maxLines = 2
-            )
+        Box(modifier = Modifier.fillMaxSize()) {
+            if (isSelected) {
+                Icon(
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(6.dp)
+                        .size(14.dp)
+                )
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(10.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    imageVector = resource.icon,
+                    contentDescription = resource.label,
+                    tint = animIconTint,
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(Modifier.height(5.dp))
+                Text(
+                    text = resource.label,
+                    fontSize = 11.sp,
+                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (isSelected) accent else Color(0xFF424242),
+                    textAlign = TextAlign.Center,
+                    maxLines = 2
+                )
+            }
         }
     }
 }

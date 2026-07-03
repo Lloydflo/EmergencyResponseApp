@@ -1,6 +1,12 @@
 package com.ers.emergencyresponseapp.coordination.model.viewmodel
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Application
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -8,7 +14,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import com.ers.emergencyresponseapp.DepartmentInfo
+import com.ers.emergencyresponseapp.AppState
+import com.ers.emergencyresponseapp.AppScreenTracker
+import com.ers.emergencyresponseapp.MainActivity
+import com.ers.emergencyresponseapp.R
 import com.ers.emergencyresponseapp.ResponderBrief
 import com.ers.emergencyresponseapp.coordination.model.ChatMessage
 import com.ers.emergencyresponseapp.coordination.model.ChatThread
@@ -66,6 +79,8 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
     private var activeGroupId: Int? = null
     private var groupPollingJob: kotlinx.coroutines.Job? = null
+    private val hasPrimedThread = mutableSetOf<String>()
+    private val lastNotifiedMessageIdByThread = mutableMapOf<String, String>()
 
     // ─────────────────────────────────────────────────────────────────────────
     //  CONNECT — called once when CoordinationPortalScreen opens
@@ -345,6 +360,11 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
     //  SELECT RESPONDER — open a real Firebase chat thread
     // ─────────────────────────────────────────────────────────────────────────
     fun selectResponderAndLoadHistory(meId: String, responder: ResponderBrief) {
+        // Leaving department chat: stop group polling immediately to avoid mixed messages.
+        activeGroupId = null
+        groupPollingJob?.cancel()
+        groupPollingJob = null
+
         selectedResponder.value  = responder
         selectedDepartment.value = null
         markResponderRead(responder.id)
@@ -366,6 +386,9 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
     //  SELECT DEPARTMENT — open a department group channel
     // ─────────────────────────────────────────────────────────────────────────
     fun selectDepartmentAndLoadHistory(dept: DepartmentInfo) {
+        // Leaving private chat: remove old Firebase private listener.
+        stopListeningToMessages()
+
         selectedDepartment.value = dept
         selectedResponder.value = null
         markDepartmentRead(dept.name)
@@ -443,9 +466,15 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                 }
 
                 launch(Dispatchers.Main) {
-                    messages.clear()
-                    messages.addAll(loaded.sortedBy { it.createdAt })
+                    // Ignore stale results if user already switched to another chat.
+                    if (currentThread.value?.id == "group_$groupId") {
+                        messages.clear()
+                        messages.addAll(loaded.sortedBy { it.createdAt })
+                    }
                 }
+
+                val threadId = "group_$groupId"
+                maybeNotifyIncoming(threadId, loaded)
 
             } catch (e: Exception) {
                 launch(Dispatchers.Main) {
@@ -476,6 +505,8 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
         messagesListener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
+                // Ignore stale updates from previous private thread.
+                if (currentThread.value?.id != threadId) return
 
                 val loaded = mutableListOf<ChatMessage>()
 
@@ -539,6 +570,8 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
                 messages.clear()
                 messages.addAll(loaded.sortedBy { it.createdAt })
+
+                maybeNotifyIncoming(threadId, loaded)
             }
 
             override fun onCancelled(error: DatabaseError) {
@@ -578,6 +611,98 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         }
         messagesListener = null
         messagesListenerPath = null
+    }
+
+    private fun maybeNotifyIncoming(threadId: String, loadedMessages: List<ChatMessage>) {
+        val latestIncoming = loadedMessages
+            .sortedBy { it.createdAt }
+            .lastOrNull { !it.isOwn }
+            ?: return
+
+        // Prime on first load so old history does not trigger notifications.
+        if (!hasPrimedThread.contains(threadId)) {
+            hasPrimedThread.add(threadId)
+            lastNotifiedMessageIdByThread[threadId] = latestIncoming.id
+            return
+        }
+
+        if (lastNotifiedMessageIdByThread[threadId] == latestIncoming.id) return
+
+        val viewingThisThread =
+            AppState.isForeground &&
+                    AppScreenTracker.currentScreen == "COORDINATION" &&
+                    currentThread.value?.id == threadId
+
+        if (viewingThisThread) {
+            lastNotifiedMessageIdByThread[threadId] = latestIncoming.id
+            return
+        }
+
+        lastNotifiedMessageIdByThread[threadId] = latestIncoming.id
+        showMessageNotification(threadId, latestIncoming)
+    }
+
+    private fun showMessageNotification(threadId: String, message: ChatMessage) {
+        val context = getApplication<Application>()
+        val channelId = "coordination_messages"
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val manager = context.getSystemService(NotificationManager::class.java)
+            val existing = manager.getNotificationChannel(channelId)
+            if (existing == null) {
+                manager.createNotificationChannel(
+                    NotificationChannel(
+                        channelId,
+                        "Coordination Messages",
+                        NotificationManager.IMPORTANCE_HIGH
+                    ).apply {
+                        description = "New coordination chat messages"
+                    }
+                )
+            }
+        }
+
+        val openIntent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra("open_coordination", true)
+        }
+
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            threadId.hashCode(),
+            openIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val sender = message.senderName.ifBlank { "Responder" }
+        val content = when {
+            !message.text.isNullOrBlank() -> message.text!!
+            message.type == MessageType.IMAGE -> "Sent an image"
+            message.type == MessageType.FILE -> "Sent a file"
+            else -> "New message"
+        }
+
+        val notification = NotificationCompat.Builder(context, channelId)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle("$sender sent a message")
+            .setContentText(content)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(content))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .build()
+
+        val hasNotificationPermission =
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                    ContextCompat.checkSelfPermission(
+                        context,
+                        android.Manifest.permission.POST_NOTIFICATIONS
+                    ) == PackageManager.PERMISSION_GRANTED
+
+        if (hasNotificationPermission) {
+            NotificationManagerCompat.from(context).notify(threadId.hashCode(), notification)
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────

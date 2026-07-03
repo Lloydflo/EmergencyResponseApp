@@ -244,12 +244,16 @@ fun CoordinationPortalScreen(
 ) {
     val vm: CoordinationViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
     var navState by remember { mutableStateOf(NavState.INBOX) }
+    // Keep inbox tab across CHAT <-> INBOX transitions.
+    var inboxTabIndex by remember { mutableIntStateOf(0) }
     LaunchedEffect(navState) {
         AppScreenTracker.currentScreen = "COORDINATION"
         onChatModeChange(navState == NavState.CHAT)
     }
 
     val onOpenChat: (ResponderBrief?, DepartmentInfo?) -> Unit = { res, dept ->
+        // Remember where the chat was opened from so Back returns to that tab.
+        if (dept != null) inboxTabIndex = 1 else if (res != null) inboxTabIndex = 0
         if (res != null)       vm.selectResponderAndLoadHistory(currentResponderId, res)
         else if (dept != null) vm.selectDepartmentAndLoadHistory(dept)
         navState = NavState.CHAT
@@ -308,12 +312,17 @@ fun CoordinationPortalScreen(
                 onOpenChat           = onOpenChat,
                 currentResponderRole = currentResponderRole,
                 currentResponderId   = currentResponderId,
-                navController        = navController
+                navController        = navController,
+                initialTabIndex      = inboxTabIndex,
+                onTabIndexChanged    = { inboxTabIndex = it }
             )
             NavState.CHAT -> ChatScreen(
                 vm                 = vm,
                 currentResponderId = currentResponderId,
-                onBack             = { navState = NavState.INBOX }
+                onBack             = {
+                    inboxTabIndex = if (vm.selectedDepartment.value != null) 1 else 0
+                    navState = NavState.INBOX
+                }
             )
         }
     }
@@ -328,9 +337,17 @@ private fun InboxScreen(
     currentResponderRole: String,
     currentResponderId  : String,
     navController       : NavHostController?,
-    onOpenChat          : (ResponderBrief?, DepartmentInfo?) -> Unit
+    onOpenChat          : (ResponderBrief?, DepartmentInfo?) -> Unit,
+    initialTabIndex     : Int,
+    onTabIndexChanged   : (Int) -> Unit
 ) {
-    var tabIndex    by remember { mutableIntStateOf(0) }
+    var tabIndex    by remember { mutableIntStateOf(initialTabIndex.coerceIn(0, 2)) }
+    // If parent updates desired tab (e.g., returning from chat), reflect it.
+    LaunchedEffect(initialTabIndex) {
+        val desired = initialTabIndex.coerceIn(0, 2)
+        if (tabIndex != desired) tabIndex = desired
+    }
+    LaunchedEffect(tabIndex) { onTabIndexChanged(tabIndex) }
     var searchQuery by remember { mutableStateOf("") }
     val responders  = vm.responders
     val departments = vm.departments
@@ -912,6 +929,7 @@ private fun ChatScreen(vm: CoordinationViewModel, currentResponderId: String, on
     val listState          = rememberLazyListState()
     val scope              = rememberCoroutineScope()
     val unseenCount        = remember { mutableIntStateOf(0) }
+    var didInitialAutoScroll by remember(selectedResponder?.id, selectedDepartment?.name) { mutableStateOf(false) }
     val timeFmt            = remember { SimpleDateFormat("hh:mm a", Locale.getDefault()) }
     val showAttach         = remember { mutableStateOf(false) }
     var isRecordingVoice by remember { mutableStateOf(false) }
@@ -1011,10 +1029,28 @@ private fun ChatScreen(vm: CoordinationViewModel, currentResponderId: String, on
         messageInput.value = ""
     }
 
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) {
-            listState.scrollToItem(messages.lastIndex)
-            unseenCount.intValue = 0
+    LaunchedEffect(messages.lastOrNull()?.id, messages.size) {
+        if (messages.isEmpty()) return@LaunchedEffect
+
+        val lastVisibleIndex = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+        val isNearBottom = lastVisibleIndex >= messages.lastIndex - 1
+
+        when {
+            !didInitialAutoScroll -> {
+                // First open: jump to latest message once.
+                listState.scrollToItem(messages.lastIndex)
+                unseenCount.intValue = 0
+                didInitialAutoScroll = true
+            }
+            isNearBottom -> {
+                // While user is already near bottom, keep following new messages.
+                listState.animateScrollToItem(messages.lastIndex)
+                unseenCount.intValue = 0
+            }
+            else -> {
+                // User is reading older messages; don't force scroll.
+                unseenCount.intValue += 1
+            }
         }
     }
     LaunchedEffect(messages.size, selectedResponder?.id) {
@@ -1210,37 +1246,53 @@ private fun ChatMessagesPanel(messages: List<ChatMessage>, timeFmt: SimpleDateFo
         }
         return
     }
-    fun dayLabel(ts: Long): String {
-        val cal = Calendar.getInstance().apply { timeInMillis = ts }; val now = Calendar.getInstance(); val yest = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
-        return when { sameDay(cal, now) -> "Today"; sameDay(cal, yest) -> "Yesterday"; else -> SimpleDateFormat("MMM dd, yyyy", Locale.getDefault()).format(Date(ts)) }
+    val dayLabelFormat = remember { SimpleDateFormat("MMM dd, yyyy", Locale.getDefault()) }
+    val dayKeyFormat = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()) }
+
+    fun dayLabel(ts: Long): String = dayLabelFormat.format(Date(ts))
+    fun dayKey(ts: Long): String = dayKeyFormat.format(Date(ts))
+
+    val orderedMessages = remember(messages) {
+        messages.sortedWith(compareBy<ChatMessage> { it.createdAt }.thenBy { it.id })
     }
+
+    var revealedMessageId by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(revealedMessageId) {
+        val selected = revealedMessageId ?: return@LaunchedEffect
+        delay(2500)
+        if (revealedMessageId == selected) revealedMessageId = null
+    }
+
     LazyColumn(
         state = listState,
         modifier = modifier,
         contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
-        var lastDay: String? = null
 
         itemsIndexed(
-            items = messages,
+            items = orderedMessages,
             key = { index, item ->
                 "${item.id}_${item.createdAt}_$index"
             }
-        ) { _, msg ->
+        ) { index, msg ->
 
-            val day = dayLabel(msg.createdAt)
+            val showDayDivider = index == 0 ||
+                    dayKey(msg.createdAt) != dayKey(orderedMessages[index - 1].createdAt)
 
-            if (day != lastDay) {
-                lastDay = day
-                DayDivider(label = day)
+            if (showDayDivider) {
+                DayDivider(label = dayLabel(msg.createdAt))
             }
 
             ChatBubble(
                 msg = msg,
                 timeLabel = timeFmt.format(Date(msg.createdAt)),
                 currentResponderId = currentResponderId,
-                onReact = onReact
+                onReact = onReact,
+                isTimeVisible = revealedMessageId == msg.id,
+                onToggleTime = {
+                    revealedMessageId = if (revealedMessageId == msg.id) null else msg.id
+                }
             )
         }
     }
@@ -1258,7 +1310,14 @@ private fun DayDivider(label: String) {
 }
 
 @Composable
-private fun ChatBubble(msg: ChatMessage, timeLabel: String, currentResponderId: String, onReact: (String, String) -> Unit) {
+private fun ChatBubble(
+    msg: ChatMessage,
+    timeLabel: String,
+    currentResponderId: String,
+    onReact: (String, String) -> Unit,
+    isTimeVisible: Boolean,
+    onToggleTime: () -> Unit
+) {
     val isOwn = msg.isOwn || msg.senderId == currentResponderId; val bubbleColor = if (isOwn) OwnBubble else PeerBubble; val textColor = if (isOwn) Color.White else TextPrimary
     val alignment = if (isOwn) Alignment.End else Alignment.Start; val horizontalArr = if (isOwn) Arrangement.End else Arrangement.Start
     var showEmojiPicker by remember(msg.id) { mutableStateOf(false) }; var showLightbox by remember(msg.id) { mutableStateOf(false) }
@@ -1279,12 +1338,14 @@ private fun ChatBubble(msg: ChatMessage, timeLabel: String, currentResponderId: 
                 MessageType.TEXT -> Surface(color = bubbleColor, shape = bubbleShape, shadowElevation = if (isOwn) 0.dp else 1.dp,
                     modifier = Modifier.combinedClickable(
                         onClick = {
+                            onToggleTime()
                             msg.attachmentUri?.let { url ->
                                 val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
                                 context.startActivity(intent)
                             }
                         },
                         onLongClick = {
+                            onToggleTime()
                             showEmojiPicker = !showEmojiPicker
                         }
                     )) {
@@ -1299,6 +1360,7 @@ private fun ChatBubble(msg: ChatMessage, timeLabel: String, currentResponderId: 
                     shadowElevation = if (isOwn) 0.dp else 1.dp,
                     modifier = Modifier.combinedClickable(
                         onClick = {
+                            onToggleTime()
                             msg.attachmentUri?.let { url ->
                                 try {
                                     val finalUrl = if (url.startsWith("http")) {
@@ -1315,7 +1377,10 @@ private fun ChatBubble(msg: ChatMessage, timeLabel: String, currentResponderId: 
                                 }
                             }
                         },
-                        onLongClick = { showEmojiPicker = !showEmojiPicker }
+                        onLongClick = {
+                            onToggleTime()
+                            showEmojiPicker = !showEmojiPicker
+                        }
                     )
                 ) {
                     Column(modifier = Modifier.padding(10.dp)) {
@@ -1361,6 +1426,7 @@ private fun ChatBubble(msg: ChatMessage, timeLabel: String, currentResponderId: 
                 MessageType.FILE -> Surface(color = bubbleColor, shape = bubbleShape, shadowElevation = if (isOwn) 0.dp else 1.dp,
                     modifier = Modifier.combinedClickable(
                         onClick = {
+                            onToggleTime()
                             Toast.makeText(context, "Opening file...", Toast.LENGTH_SHORT).show()
 
                             msg.attachmentUri?.let { url ->
@@ -1385,7 +1451,10 @@ private fun ChatBubble(msg: ChatMessage, timeLabel: String, currentResponderId: 
                                 }
                             }
                         },
-                        onLongClick = { showEmojiPicker = !showEmojiPicker }
+                        onLongClick = {
+                            onToggleTime()
+                            showEmojiPicker = !showEmojiPicker
+                        }
                     )) {
                     Row(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Box(modifier = Modifier.size(38.dp).clip(RoundedCornerShape(10.dp)).background(if (isOwn) Color.White.copy(alpha = 0.2f) else Color(0xFFE3F2FD)), contentAlignment = Alignment.Center) {
@@ -1409,11 +1478,15 @@ private fun ChatBubble(msg: ChatMessage, timeLabel: String, currentResponderId: 
                     }
                 }
             }
-            Row(modifier = Modifier.padding(top = 2.dp, start = 2.dp, end = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(timeLabel, fontSize = 10.sp, color = TextSecondary)
-                if (isOwn) {
-                    val (tick, color) = when (msg.status) { MessageStatus.SENT -> "✓" to TextSecondary; MessageStatus.DELIVERED -> "✓✓" to TextSecondary; MessageStatus.READ -> "✓✓" to BrandGreen; else -> "" to TextSecondary }
-                    if (tick.isNotEmpty()) Text(tick, fontSize = 10.sp, color = color, fontWeight = FontWeight.Bold)
+            if (isTimeVisible || isOwn) {
+                Row(modifier = Modifier.padding(top = 2.dp, start = 2.dp, end = 2.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                    if (isTimeVisible) {
+                        Text(timeLabel, fontSize = 10.sp, color = TextSecondary)
+                    }
+                    if (isOwn) {
+                        val (tick, color) = when (msg.status) { MessageStatus.SENT -> "✓" to TextSecondary; MessageStatus.DELIVERED -> "✓✓" to TextSecondary; MessageStatus.READ -> "✓✓" to BrandGreen; else -> "" to TextSecondary }
+                        if (tick.isNotEmpty()) Text(tick, fontSize = 10.sp, color = color, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         }

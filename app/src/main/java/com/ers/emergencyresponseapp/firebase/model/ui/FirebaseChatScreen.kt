@@ -12,9 +12,11 @@ package com.ers.emergencyresponseapp.firebase.ui
 // ═══════════════════════════════════════════════════════════════════════════════
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -36,6 +38,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.ers.emergencyresponseapp.AppScreenTracker
 import com.ers.emergencyresponseapp.firebase.model.FirebaseMessage
 import com.ers.emergencyresponseapp.firebase.viewmodel.FirebaseChatViewModel
+import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -66,7 +69,7 @@ private val OnlineGreen        = Color(0xFF31A24C)
  *       onBack        = { navController.popBackStack() }
  *   )
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun FirebaseChatScreen(
     myUserId      : String,
@@ -84,6 +87,37 @@ fun FirebaseChatScreen(
     var inputText     by remember { mutableStateOf("") }
     val listState     = rememberLazyListState()
     val snackbarHost  = remember { SnackbarHostState() }
+    var revealedTimestampMessageKey by remember { mutableStateOf<String?>(null) }
+    val orderedMessages = remember(messages) {
+        messages.sortedBy { normalizeTimestamp(it.timestamp) }
+    }
+    val chatItems = remember(orderedMessages) {
+        val timeline = mutableListOf<ChatListItem>()
+        var lastDayKey: String? = null
+        orderedMessages.withIndex().forEach { indexedMessage ->
+            val ts = normalizeTimestamp(indexedMessage.value.timestamp)
+            val currentDayKey = dayKey(ts)
+            if (currentDayKey != lastDayKey) {
+                timeline.add(
+                    ChatListItem.DayHeader(
+                        dayKey = currentDayKey,
+                        dayLabel = formatDaySeparatorLabel(ts)
+                    )
+                )
+                lastDayKey = currentDayKey
+            }
+            timeline.add(ChatListItem.MessageRow(indexedMessage))
+        }
+        timeline
+    }
+
+    LaunchedEffect(revealedTimestampMessageKey) {
+        val selected = revealedTimestampMessageKey ?: return@LaunchedEffect
+        delay(2500)
+        if (revealedTimestampMessageKey == selected) {
+            revealedTimestampMessageKey = null
+        }
+    }
 
     // ── Open the chat when the screen first loads ─────────────────────────────
     LaunchedEffect(myUserId, partnerUserId) {
@@ -92,9 +126,17 @@ fun FirebaseChatScreen(
     }
 
     // ── Auto-scroll to bottom when a new message arrives ─────────────────────
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size - 1)
+    // BUT ONLY if the user is already at the bottom (not scrolling up to read old messages)
+    LaunchedEffect(orderedMessages.size) {
+        if (orderedMessages.isNotEmpty()) {
+            // Check if user is currently viewing the bottom of the list
+            val canScroll = listState.canScrollForward
+            
+            // Only auto-scroll if at bottom (canScrollForward = false means we're at bottom)
+            // OR if this is the first message load
+            if (!canScroll || orderedMessages.size <= 1) {
+                listState.animateScrollToItem(orderedMessages.size - 1)
+            }
         }
     }
 
@@ -213,7 +255,7 @@ fun FirebaseChatScreen(
     ) { padding ->
 
         // ── Message list ──────────────────────────────────────────────────────
-        if (messages.isEmpty()) {
+        if (orderedMessages.isEmpty()) {
             // Empty state
             Box(
                 modifier         = Modifier.fillMaxSize().padding(padding),
@@ -242,29 +284,90 @@ fun FirebaseChatScreen(
                 contentPadding = PaddingValues(top = 12.dp, bottom = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                items(
-                    items = messages,
-                    key   = { it.messageId }  // stable key prevents janky animations
-                ) { message ->
-                    MessageBubble(
-                        message  = message,
-                        isMyMsg  = message.senderId == myUserId
-                    )
+                itemsIndexed(
+                    items = chatItems,
+                    key = { _, item ->
+                        when (item) {
+                            is ChatListItem.DayHeader -> "day_${item.dayKey}"
+                            is ChatListItem.MessageRow -> {
+                                stableMessageKey(item.indexedMessage.value, item.indexedMessage.index)
+                            }
+                        }
+                    }
+                ) { _, item ->
+                    when (item) {
+                        is ChatListItem.DayHeader -> DaySeparator(label = item.dayLabel)
+                        is ChatListItem.MessageRow -> {
+                            val message = item.indexedMessage.value
+                            val messageKey = stableMessageKey(message, item.indexedMessage.index)
+                            MessageBubble(
+                                message  = message,
+                                isMyMsg  = message.senderId == myUserId,
+                                isTimestampVisible = revealedTimestampMessageKey == messageKey,
+                                onRevealTimestamp = { revealedTimestampMessageKey = messageKey }
+                            )
+                        }
+                    }
                 }
             }
         }
     }
 }
 
+private sealed class ChatListItem {
+    data class DayHeader(
+        val dayKey: String,
+        val dayLabel: String
+    ) : ChatListItem()
+
+    data class MessageRow(
+        val indexedMessage: IndexedValue<FirebaseMessage>
+    ) : ChatListItem()
+}
+
+@Composable
+private fun DaySeparator(label: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            color = Color(0xFFE8ECF1),
+            shape = RoundedCornerShape(999.dp)
+        ) {
+            Text(
+                text = label,
+                color = Color(0xFF5F6670),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+            )
+        }
+    }
+}
+
+private fun dayKey(timestampMs: Long): String {
+    return SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(timestampMs))
+}
+
+private fun formatDaySeparatorLabel(timestampMs: Long): String {
+    return SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(timestampMs))
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  MESSAGE BUBBLE  —  the individual chat bubble component
 // ─────────────────────────────────────────────────────────────────────────────
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MessageBubble(
     message : FirebaseMessage,
-    isMyMsg : Boolean
+    isMyMsg : Boolean,
+    isTimestampVisible: Boolean,
+    onRevealTimestamp: () -> Unit
 ) {
-    val timeFmt = remember { SimpleDateFormat("hh:mm a", Locale.getDefault()) }
+    val timeLabel = remember(message.timestamp) { formatMessageTimestamp(message.timestamp) }
 
     // isMyMsg = true  → align to the RIGHT (your message, green)
     // isMyMsg = false → align to the LEFT  (their message, white)
@@ -280,6 +383,10 @@ private fun MessageBubble(
         ) {
             // The bubble itself
             Surface(
+                modifier = Modifier.combinedClickable(
+                    onClick = onRevealTimestamp,
+                    onLongClick = onRevealTimestamp
+                ),
                 color  = if (isMyMsg) MyBubbleColor else TheirBubbleColor,
                 shape  = RoundedCornerShape(
                     topStart    = 18.dp,
@@ -297,35 +404,56 @@ private fun MessageBubble(
                 )
             }
 
-            // Timestamp + status indicator
-            Row(
-                modifier              = Modifier.padding(top = 2.dp, start = 4.dp, end = 4.dp),
-                verticalAlignment     = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(3.dp)
-            ) {
-                Text(
-                    text     = timeFmt.format(Date(message.timestamp)),
-                    fontSize = 10.sp,
-                    color    = Color(0xFF65676B)
-                )
-
-                // Show status ticks only on YOUR messages
-                if (isMyMsg) {
-                    val (statusText, statusColor) = when (message.status) {
-                        "seen"      -> "✓✓" to MyBubbleColor        // blue/green double tick
-                        "delivered" -> "✓✓" to Color(0xFF65676B)   // grey double tick
-                        else        -> "✓"  to Color(0xFF65676B)   // grey single tick
+            // Date/time appears only when message is tapped/held; status stays available for my messages.
+            if (isTimestampVisible || isMyMsg) {
+                Row(
+                    modifier              = Modifier.padding(top = 2.dp, start = 4.dp, end = 4.dp),
+                    verticalAlignment     = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    if (isTimestampVisible) {
+                        Text(
+                            text     = timeLabel,
+                            fontSize = 10.sp,
+                            color    = Color(0xFF65676B)
+                        )
                     }
-                    Text(
-                        text       = statusText,
-                        fontSize   = 10.sp,
-                        color      = statusColor,
-                        fontWeight = FontWeight.Bold
-                    )
+
+                    // Show status ticks only on YOUR messages
+                    if (isMyMsg) {
+                        val (statusText, statusColor) = when (message.status) {
+                            "seen"      -> "✓✓" to MyBubbleColor
+                            "delivered" -> "✓✓" to Color(0xFF65676B)
+                            else         -> "✓"  to Color(0xFF65676B)
+                        }
+                        Text(
+                            text       = statusText,
+                            fontSize   = 10.sp,
+                            color      = statusColor,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
         }
     }
+}
+
+private fun stableMessageKey(message: FirebaseMessage, index: Int): String {
+    return message.messageId.ifBlank {
+        "${message.senderId}_${message.receiverId}_${normalizeTimestamp(message.timestamp)}_$index"
+    }
+}
+
+private fun normalizeTimestamp(raw: Long): Long {
+    if (raw <= 0L) return System.currentTimeMillis()
+    // Some rows may be stored in seconds; convert to millis for stable ordering/formatting.
+    return if (raw < 1_000_000_000_000L) raw * 1000L else raw
+}
+
+private fun formatMessageTimestamp(raw: Long): String {
+    val ts = normalizeTimestamp(raw)
+    return SimpleDateFormat("MMM d, yyyy hh:mm a", Locale.getDefault()).format(Date(ts))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

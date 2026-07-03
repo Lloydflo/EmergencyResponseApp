@@ -16,6 +16,7 @@ import com.ers.emergencyresponseapp.firebase.repository.FirebaseChatRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 class FirebaseChatViewModel : ViewModel() {
@@ -45,6 +46,8 @@ class FirebaseChatViewModel : ViewModel() {
     // ── Internal state ────────────────────────────────────────────────────────
     private var currentChatId  = ""
     private var currentUserId  = ""
+    private var messageListenerJob: Job? = null
+    private var presenceListenerJob: Job? = null
 
     // ─────────────────────────────────────────────────────────────────────────
     //  OPEN CHAT — call when navigating to the chat screen
@@ -62,8 +65,16 @@ class FirebaseChatViewModel : ViewModel() {
      *   }
      */
     fun openChat(myUserId: String, partnerUserId: String) {
+        // Cancel old listeners so previous chat data cannot overwrite the new chat.
+        messageListenerJob?.cancel()
+        presenceListenerJob?.cancel()
+
         currentUserId = myUserId
         currentChatId = repository.buildChatId(myUserId, partnerUserId)
+
+        // Reset UI state immediately while new chat listeners warm up.
+        _messages.value = emptyList()
+        _chatPartner.value = null
 
         // Start the real-time message listener
         startListeningToMessages()
@@ -81,7 +92,7 @@ class FirebaseChatViewModel : ViewModel() {
     //  START LISTENING — sets up the real-time Firebase listener
     // ─────────────────────────────────────────────────────────────────────────
     private fun startListeningToMessages() {
-        viewModelScope.launch {
+        messageListenerJob = viewModelScope.launch {
             // collect() runs forever until the coroutine is cancelled
             // Every time a new message arrives, this block runs and updates _messages
             repository.listenToMessages(currentChatId).collect { updatedMessages ->
@@ -128,7 +139,7 @@ class FirebaseChatViewModel : ViewModel() {
     //  LOAD CHAT PARTNER INFO
     // ─────────────────────────────────────────────────────────────────────────
     private fun loadChatPartnerInfo(partnerUserId: String) {
-        viewModelScope.launch {
+        presenceListenerJob = viewModelScope.launch {
             // Load once
             _chatPartner.value = repository.getUserInfo(partnerUserId)
 

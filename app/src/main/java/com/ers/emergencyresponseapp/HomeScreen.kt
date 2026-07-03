@@ -137,6 +137,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.Popup
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.app.PendingIntent
@@ -785,25 +786,7 @@ fun HomeScreen(
         mutableStateOf(isDeviceLocationEnabled(context))
     }
 
-    LaunchedEffect(Unit) {
-        while (true) {
-            val enabledNow = isDeviceLocationEnabled(context)
-
-            deviceLocationEnabled = enabledNow
-
-            if (!enabledNow) {
-                isLocationMonitoringEnabled = false
-                isLocationShared = false
-
-                prefs.edit()
-                    .putBoolean(locationMonitoringEnabledKey, false)
-                    .apply()
-            }
-
-            delay(1000)
-        }
-    }
-
+    // ── Location Helper Functions ──
     @Suppress("DEPRECATION")
     fun startLocationUpdates() {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return
@@ -824,6 +807,35 @@ fun HomeScreen(
 
     fun hasAlwaysLocationPermission() = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
             ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            val enabledNow = isDeviceLocationEnabled(context)
+
+            deviceLocationEnabled = enabledNow
+
+            if (!enabledNow) {
+                // Location service turned OFF - stop monitoring
+                isLocationMonitoringEnabled = false
+                isLocationShared = false
+                prefs.edit()
+                    .putBoolean(locationMonitoringEnabledKey, false)
+                    .apply()
+            } else if (enabledNow && hasLocationPermission && !isLocationMonitoringEnabled) {
+                // Location service turned ON and we have permission - auto-resume monitoring
+                isLocationMonitoringEnabled = true
+                isLocationShared = true
+                prefs.edit()
+                    .putBoolean(locationMonitoringEnabledKey, true)
+                    .apply()
+                startLocationUpdates()
+                Toast.makeText(context, "Location service enabled - GPS monitoring resumed", Toast.LENGTH_SHORT).show()
+            }
+
+            delay(1000)
+        }
+    }
+
 
     fun navigateToLocation(lat: Double?, lng: Double?, address: String?) {
         try {
@@ -961,6 +973,13 @@ fun HomeScreen(
     }
 
     var showAlwaysLocationNotice by remember { mutableStateOf(false) }
+    var showCriticalGpsWarning by remember { mutableStateOf(false) }
+
+    // Check if location is critical (responder role exists and location is not enabled)
+    LaunchedEffect(deviceLocationEnabled, effectiveRole) {
+        val isResponder = !effectiveRole.isNullOrBlank()
+        showCriticalGpsWarning = isResponder && !deviceLocationEnabled
+    }
 
     val backgroundLocationPermLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         showAlwaysLocationNotice = !granted
@@ -993,18 +1012,27 @@ fun HomeScreen(
     val locationPermLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) {
             hasLocationPermission = true
-            if (isDeviceLocationEnabled(context)) {
-                Toast.makeText(context, "Turn on Location to start live monitoring", Toast.LENGTH_LONG).show()
+            if (!isDeviceLocationEnabled(context)) {
+                // Location service is NOT enabled - ask user to enable it
+                Toast.makeText(context, "Location service is OFF. Please enable Location in Settings to start live monitoring.", Toast.LENGTH_LONG).show()
                 locationSettingsLauncher.launch(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                isLocationShared = false
+                isLocationMonitoringEnabled = false
+                prefs.edit().putBoolean(locationMonitoringEnabledKey, false).apply()
+            } else {
+                // Location service IS enabled - start monitoring
+                isLocationShared = true
+                isLocationMonitoringEnabled = true
+                prefs.edit().putBoolean(locationMonitoringEnabledKey, true).apply()
+                startLocationUpdates()
             }
-            isLocationShared = true; isLocationMonitoringEnabled = true
-            prefs.edit().putBoolean(locationMonitoringEnabledKey, true).apply()
-            startLocationUpdates(); showAlwaysLocationNotice = !hasAlwaysLocationPermission()
+            showAlwaysLocationNotice = !hasAlwaysLocationPermission()
         } else {
             hasLocationPermission = false
-            isLocationShared = false; isLocationMonitoringEnabled = false
+            isLocationShared = false
+            isLocationMonitoringEnabled = false
             prefs.edit().putBoolean(locationMonitoringEnabledKey, false).apply()
-            Toast.makeText(context, "Location permission denied", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Location permission denied - GPS features will not work", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -1097,7 +1125,11 @@ fun HomeScreen(
         ) {
 
             if (showAlwaysLocationNotice) {
-                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+                Popup(alignment = Alignment.TopCenter) {
+                    Box(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentAlignment = Alignment.TopCenter
+                    ) {
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1164,9 +1196,84 @@ fun HomeScreen(
                             }
                         }
                     }
+                    }
                 }
 
-                if (showLocationRationale) {
+            }
+
+            // ============ CRITICAL GPS WARNING FOR RESPONDERS ============
+            if (showCriticalGpsWarning) {
+                Popup(alignment = Alignment.TopCenter) {
+                    Box(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentAlignment = Alignment.TopCenter
+                    ) {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color(0xFFFFEBEE)
+                        ),
+                        border = BorderStroke(
+                            2.dp,
+                            Color(0xFFD32F2F)
+                        ),
+                        elevation = CardDefaults.cardElevation(4.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Warning,
+                                contentDescription = "Critical warning",
+                                tint = Color(0xFFD32F2F),
+                                modifier = Modifier.size(24.dp)
+                            )
+
+                            Column(
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(
+                                    "⚠️ GPS Location Disabled",
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 13.sp,
+                                    color = Color(0xFFD32F2F)
+                                )
+
+                                Text(
+                                    "Turn ON location in device settings. GPS is required for emergency response.",
+                                    fontSize = 11.sp,
+                                    color = Color(0xFFC62828),
+                                    lineHeight = 14.sp
+                                )
+                            }
+
+                            Button(
+                                onClick = {
+                                    // Reuse launcher so we reliably return with updated GPS state.
+                                    locationSettingsLauncher.launch(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color(0xFFD32F2F)
+                                ),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.height(40.dp)
+                            ) {
+                                Text("Enable", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                    }
+                }
+            }
+
+            if (showLocationRationale) {
                     AlertDialog(
                         onDismissRequest = {
                             showLocationRationale = false
@@ -1176,12 +1283,18 @@ fun HomeScreen(
                         icon = {
                             Icon(Icons.Default.LocationOn, contentDescription = null, tint = AppColors.Primary)
                         },
-                        title = { Text("Location Access Required", fontWeight = FontWeight.Bold) },
+                        title = { Text("GPS Location Required", fontWeight = FontWeight.Bold, color = Color(0xFFD32F2F)) },
                         text = {
                             Text(
-                                "This app needs your location to enable live GPS tracking during dispatch, " +
-                                        "navigation to incidents, and on-scene verification. Please allow location access.",
-                                color = AppColors.TextSecondary
+                                "🚨 CRITICAL FOR RESPONDERS\n\n" +
+                                "This app requires GPS location access to:\n" +
+                                "• Enable live tracking during dispatch\n" +
+                                "• Navigate to incident locations\n" +
+                                "• Verify on-scene arrival\n" +
+                                "• Ensure responder safety\n\n" +
+                                "Location services must be enabled in your device settings (Settings > Location).",
+                                color = AppColors.TextSecondary,
+                                lineHeight = 18.sp
                             )
                         },
                         confirmButton = {
@@ -1191,21 +1304,20 @@ fun HomeScreen(
                                     prefs.edit().putBoolean("location_permission_prompted", true).apply()
                                     locationPermLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
                                 },
-                                colors = ButtonDefaults.buttonColors(containerColor = AppColors.Primary)
-                            ) { Text("Allow Location") }
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F))
+                            ) { Text("Enable GPS Now", color = Color.White) }
                         },
                         dismissButton = {
                             TextButton(
                                 onClick = {
                                     showLocationRationale = false
                                     prefs.edit().putBoolean("location_permission_prompted", true).apply()
+                                    Toast.makeText(context, "⚠️ GPS is required for emergency response operations", Toast.LENGTH_LONG).show()
                                 }
-                            ) { Text("Not Now") }
+                            ) { Text("Cancel") }
                         }
                     )
                 }
-
-            }
 
 
             // FIX 7: Use derivedStateOf for count values so recomposition only triggers
@@ -1330,13 +1442,14 @@ fun HomeScreen(
             }
 
 
-            LazyColumn(
+             LazyColumn(
                 state = listState,
                 modifier = Modifier
                     .fillMaxSize()
                     .windowInsetsPadding(WindowInsets.navigationBars),
                 contentPadding = PaddingValues(
                     top = when {
+                        showCriticalGpsWarning -> 110.dp
                         showAlwaysLocationNotice -> 76.dp
                         showNewIncidentNotification -> 118.dp
                         else -> 0.dp
