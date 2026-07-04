@@ -2,6 +2,8 @@ package com.ers.emergencyresponseapp.data
 
 import com.ers.emergencyresponseapp.features.assigned.IncidentDto
 import com.ers.emergencyresponseapp.network.BackupRequestStatusDto
+import com.ers.emergencyresponseapp.network.MyResourceRequestDto
+import com.ers.emergencyresponseapp.network.ResourceRequestStatusDto
 import com.ers.emergencyresponseapp.network.RetrofitProvider
 
 class IncidentRepository {
@@ -53,15 +55,19 @@ class IncidentRepository {
         resources: String,
         isFullBackup: Boolean,
         incidentId: String
-    ): Int? {  // returns the new request's id, or null on failure
+    ): Result<Int> {
         return try {
             val response = api.sendBackupRequest(
                 responderId, responderName, department, requestedDepartment,
                 resources, if (isFullBackup) 1 else 0, incidentId
             )
-            if (response.success) response.id else null
+            if (response.success && response.id != null) {
+                Result.success(response.id)
+            } else {
+                Result.failure(Exception(response.message ?: "Unknown server error"))
+            }
         } catch (e: Exception) {
-            null
+            Result.failure(Exception("Network error: ${e.message}"))
         }
     }
 
@@ -82,6 +88,63 @@ class IncidentRepository {
         }
 
         throw Exception("Failed to load active incidents: ${response.code()}")
+    }
+
+    suspend fun sendResourceRequest(
+        responderId: Int,
+        responderName: String,
+        category: String,
+        resourceName: String,
+        quantity: Int,
+        urgency: String,
+        incidentId: String,
+        location: String,
+        notes: String
+    ): Result<Int> {
+        return try {
+            val response = api.sendResourceRequest(
+                responderId, responderName, category, resourceName,
+                quantity, urgency, incidentId, location, notes
+            )
+            if (response.success && response.id != null) {
+                Result.success(response.id)
+            } else {
+                Result.failure(Exception(response.message ?: "Unknown server error"))
+            }
+        } catch (e: Exception) {
+            Result.failure(Exception("Network error: ${e.message}"))
+        }
+    }
+
+    suspend fun getResourceRequestStatus(requestId: Int): ResourceRequestStatusDto? {
+        return try {
+            val response = api.getResourceRequestStatus(requestId)
+            if (response.success) response.request else null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    suspend fun getMyResourceRequests(responderId: Int): List<MyResourceRequestDto> {
+        return try {
+            val response = api.getMyResourceRequests(responderId)
+            if (response.success) response.requests ?: emptyList() else emptyList()
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    suspend fun cancelResourceRequest(requestId: Int, responderId: Int): Result<Unit> {
+        return try {
+            val response = api.cancelResourceRequest(requestId, responderId)
+            if (response.success) {
+                Result.success(Unit)
+            } else {
+                Result.failure(Exception(response.message ?: "Unknown server error"))
+            }
+        } catch (e: Exception) {
+            Result.failure(Exception("Network error: ${e.message}"))
+        }
     }
 
 }

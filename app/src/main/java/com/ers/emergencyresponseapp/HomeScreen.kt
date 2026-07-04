@@ -1188,7 +1188,7 @@ fun HomeScreen(
             try {
                 val repo = com.ers.emergencyresponseapp.data.IncidentRepository()
 
-                val newId = repo.sendBackupRequest(
+                val result = repo.sendBackupRequest(
                     responderId = responderId,
                     responderName = responderName,
                     department = effectiveRole ?: "",
@@ -1198,7 +1198,7 @@ fun HomeScreen(
                     incidentId = request.fromIncidentId
                 )
 
-                if (newId != null) {
+                result.onSuccess { newId ->
                     activeBackupRequestId = newId
                     backupRequestStatus = "pending"
                     backupRequestDept = deptName
@@ -1207,8 +1207,9 @@ fun HomeScreen(
                     prefs.edit().putInt("active_backup_request_id", newId).apply()
 
                     Toast.makeText(context, "Backup request sent to $deptName", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(context, "Failed to send backup request", Toast.LENGTH_SHORT).show()
+                }.onFailure { error ->
+                    Log.e("BackupRequest", "Failed: responderId=$responderId, resources=$resourceList, error=${error.message}")
+                    Toast.makeText(context, "Failed: ${error.message}", Toast.LENGTH_LONG).show()
                 }
 
             } catch (e: Exception) {

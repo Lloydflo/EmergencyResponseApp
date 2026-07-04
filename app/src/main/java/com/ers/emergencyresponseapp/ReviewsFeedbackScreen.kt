@@ -66,6 +66,8 @@ import androidx.core.content.FileProvider
 import java.text.SimpleDateFormat
 import java.util.Date
 import androidx.compose.ui.graphics.graphicsLayer
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
 private object RFColors {
@@ -519,6 +521,9 @@ private fun ResourceRequestFullScreenDialog(
     var isLocating by remember { mutableStateOf(false) }
     var notes by rememberSaveable { mutableStateOf("") }
     var isSending by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val storedPrefs = context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
+    val responderId = storedPrefs.getString("user_id", "")?.toIntOrNull() ?: 0
 
     val maxQty = category.maxQty
     val isFormValid = resourceName.isNotBlank() && quantity > 0 && location.isNotBlank()
@@ -1171,72 +1176,29 @@ private fun ResourceRequestFullScreenDialog(
 
                                 isSending = true
 
-                                val req = ResRequest(
-                                    resourceName = resourceName.trim(),
-                                    category = category,
-                                    quantity = quantity,
-                                    urgency = urgency,
-                                    incidentId = incidentId.trim().ifBlank { "N/A" },
-                                    location = location.trim(),
-                                    notes = notes.trim(),
-                                    requestedBy = responderName
-                                )
-
-                                try {
-                                    Log.i(
-                                        "ResourceRequest",
-                                        "Sending to admin: ${req.id} — ${req.resourceName} x${req.quantity}"
+                                scope.launch {
+                                    val repo = com.ers.emergencyresponseapp.data.IncidentRepository()
+                                    val result = repo.sendResourceRequest(
+                                        responderId = responderId,
+                                        responderName = responderName,
+                                        category = category.displayName,
+                                        resourceName = resourceName.trim(),
+                                        quantity = quantity,
+                                        urgency = urgency.displayName,
+                                        incidentId = incidentId.trim().ifBlank { "N/A" },
+                                        location = location.trim(),
+                                        notes = notes.trim()
                                     )
 
-                                    val json = """
-                                        {
-                                          "id": "${req.id}",
-                                          "resourceName": "${req.resourceName}",
-                                          "category": "${req.category.displayName}",
-                                          "quantity": ${req.quantity},
-                                          "urgency": "${req.urgency.displayName}",
-                                          "incidentId": "${req.incidentId}",
-                                          "location": "${req.location}",
-                                          "notes": "${req.notes}",
-                                          "requestedBy": "${req.requestedBy}",
-                                          "timestamp": ${req.timestamp},
-                                          "status": "Pending"
-                                        }
-                                        """.trimIndent()
-
-                                    val prefs = context.getSharedPreferences(
-                                        "resource_requests",
-                                        Context.MODE_PRIVATE
-                                    )
-
-                                    val old = prefs.getStringSet(
-                                        "requests",
-                                        emptySet()
-                                    ) ?: emptySet()
-
-                                    prefs.edit()
-                                        .putStringSet("requests", old + json)
-                                        .apply()
-
-                                    Toast.makeText(
-                                        context,
-                                        "Request submitted for admin review",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
-
-                                    isSending = false
-                                    onSubmit()
-
-                                } catch (e: Exception) {
-                                    Log.e("ResourceRequest", "Failed: ${e.message}")
-
-                                    Toast.makeText(
-                                        context,
-                                        "Failed to send request",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
-
-                                    isSending = false
+                                    result.onSuccess {
+                                        Toast.makeText(context, "Request submitted for admin review", Toast.LENGTH_SHORT).show()
+                                        isSending = false
+                                        onSubmit()
+                                    }.onFailure { error ->
+                                        Log.e("ResourceRequest", "Failed: ${error.message}")
+                                        Toast.makeText(context, "Failed: ${error.message}", Toast.LENGTH_LONG).show()
+                                        isSending = false
+                                    }
                                 }
                             },
                             enabled = if (formStep == 1) {
@@ -1388,6 +1350,7 @@ fun ReviewsFeedbackScreen() {
     var selectedRequest by remember { mutableStateOf<SavedResourceRequest?>(null) }
     var requestToCancel by remember { mutableStateOf<SavedResourceRequest?>(null) }
     var showAllRequests by remember { mutableStateOf(false) }
+    var dismissedResourceRequestId by remember { mutableStateOf<String?>(null) }
 
     fun submitReview(incident: ReviewableIncident, text: String) {
         val plainId = incident.id.removePrefix("#")
@@ -1438,18 +1401,50 @@ fun ReviewsFeedbackScreen() {
     val reviewPrefs = context.getSharedPreferences("review_ratings", Context.MODE_PRIVATE)
     var ratingRefreshKey by remember { mutableIntStateOf(0) }
 
-    val parsedRequests = remember(requestRefreshKey) {
-        parseSavedResourceRequests(
-            resourcePrefs.getStringSet("requests", emptySet()) ?: emptySet()
-        ).sortedByDescending { it.timestamp }
+    val storedPrefs = context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
+    val responderId = storedPrefs.getString("user_id", "")?.toIntOrNull() ?: 0
+
+    var parsedRequests by remember { mutableStateOf<List<SavedResourceRequest>>(emptyList()) }
+
+    suspend fun refreshResourceRequests() {
+        if (responderId <= 0) return
+        val repo = com.ers.emergencyresponseapp.data.IncidentRepository()
+        val serverRequests = repo.getMyResourceRequests(responderId)
+        parsedRequests = serverRequests.map {
+            SavedResourceRequest(
+                id = it.id.toString(),
+                resourceName = it.resource_name,
+                category = it.category,
+                quantity = it.quantity.toString(),
+                urgency = it.urgency,
+                status = it.status.replaceFirstChar { c -> c.uppercase() },
+                timestamp = 0L
+            )
+        }
     }
+
+// Immediate refresh on manual triggers (submit, cancel, pull-to-refresh button)
+    LaunchedEffect(requestRefreshKey, responderId) {
+        refreshResourceRequests()
+    }
+
+// Background poll every 5s so status changes made by admin show up automatically
+    LaunchedEffect(responderId) {
+        if (responderId <= 0) return@LaunchedEffect
+        while (true) {
+            delay(5000L)
+            refreshResourceRequests()
+        }
+    }
+
+    // Track the most recently created request (not just pending) so status transitions are visible
+    val latestResourceRequest = parsedRequests.firstOrNull { it.id != dismissedResourceRequestId }
+    val showResourceStatusCard = latestResourceRequest != null &&
+            !latestResourceRequest.status.equals("Cancelled", ignoreCase = true)
+
 
 
     val resourceRequests = parsedRequests.size
-
-    val submittedReviews = allIncidents.filter {
-        it.status == ReviewStatus.Submitted || it.status == ReviewStatus.Completed
-    }
 
     val savedRatings = remember(ratingRefreshKey) {
         parseSavedReviewRatings(
@@ -1466,35 +1461,22 @@ fun ReviewsFeedbackScreen() {
     } else {
         0f
     }
+    val scope = rememberCoroutineScope()
 
     fun cancelResourceRequest(requestId: String) {
-        val old = resourcePrefs.getStringSet("requests", emptySet()) ?: emptySet()
+        val idInt = requestId.toIntOrNull() ?: return
 
-        val updated = old.map { json ->
-            if (
-                json.contains("\"id\": \"$requestId\"") ||
-                json.contains("\"id\":\"$requestId\"")
-            ) {
-                json.replace(
-                    Regex("\"status\"\\s*:\\s*\".*?\""),
-                    "\"status\": \"Cancelled\""
-                )
-            } else {
-                json
+        scope.launch {
+            val repo = com.ers.emergencyresponseapp.data.IncidentRepository()
+            val result = repo.cancelResourceRequest(idInt, responderId)
+
+            result.onSuccess {
+                requestRefreshKey++
+                Toast.makeText(context, "Resource request cancelled", Toast.LENGTH_SHORT).show()
+            }.onFailure { error ->
+                Toast.makeText(context, "Failed to cancel: ${error.message}", Toast.LENGTH_LONG).show()
             }
-        }.toSet()
-
-        resourcePrefs.edit()
-            .putStringSet("requests", updated)
-            .apply()
-
-        requestRefreshKey++
-
-        Toast.makeText(
-            context,
-            "Resource request cancelled",
-            Toast.LENGTH_SHORT
-        ).show()
+        }
     }
 
     val recentRequests = parsedRequests.take(3)
@@ -1534,14 +1516,6 @@ fun ReviewsFeedbackScreen() {
                             Text("My Reviews", color = Color.White.copy(alpha = 0.85f), fontSize = 14.sp)
                             Spacer(Modifier.height(6.dp))
                             Text("Reviews & Feedback", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 22.sp)
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                "$pendingCount pending • $submittedCount submitted • $completedCount completed",
-                                color = Color.White.copy(alpha = 0.78f),
-                                fontSize = 12.sp
-                            )
-                            Spacer(Modifier.height(6.dp))
-
                             Text(
                                 "Monitor reviews, reports, and resource requests",
                                 color = Color.White.copy(alpha = 0.68f),
@@ -1731,6 +1705,15 @@ fun ReviewsFeedbackScreen() {
                             }
                         }
                     }
+                }
+            }
+            if (showResourceStatusCard && latestResourceRequest != null) {
+                item {
+                    ResourceRequestStatusCard(
+                        request = latestResourceRequest,
+                        onDismiss = { dismissedResourceRequestId = latestResourceRequest.id },
+                        onViewDetails = { selectedRequest = latestResourceRequest }
+                    )
                 }
             }
 
@@ -2021,6 +2004,76 @@ fun ReviewsFeedbackScreen() {
                             Icon(Icons.Default.Description, contentDescription = null)
                             Spacer(Modifier.width(8.dp))
                             Text("Generate Report", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── WRITE REVIEW FORM DIALOG (the missing piece) ────────────────
+        if (showComposeDialog.value && composeTarget.value != null) {
+            val target = composeTarget.value!!
+
+            Dialog(
+                onDismissRequest = { showComposeDialog.value = false },
+                properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
+            ) {
+                Surface(modifier = Modifier.fillMaxSize(), color = RFColors.SurfaceBg) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .statusBarsPadding()
+                            .navigationBarsPadding()
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Write Review", fontWeight = FontWeight.Bold, fontSize = 20.sp, color = RFColors.Text)
+                                Text("${target.type} • ${target.id}", fontSize = 13.sp, color = RFColors.Primary, fontWeight = FontWeight.SemiBold)
+                            }
+                            IconButton(onClick = { showComposeDialog.value = false }) {
+                                Icon(Icons.Default.Close, contentDescription = "Close", tint = RFColors.TextSecondary)
+                            }
+                        }
+
+                        LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                            item {
+                                SectionCard(title = "Ratings", icon = Icons.Default.Star) {
+                                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                        RatingSelector("Response Time", responseRating) { responseRating = it }
+                                        RatingSelector("Communication", communicationRating) { communicationRating = it }
+                                        RatingSelector("Professionalism", professionalismRating) { professionalismRating = it }
+                                    }
+                                }
+                            }
+                            item {
+                                SectionCard(title = "Outcome", icon = Icons.Default.Flag) {
+                                    OutcomeSelector(selectedOutcome) { selectedOutcome = it }
+                                }
+                            }
+                            item {
+                                SectionCard(title = "Feedback", icon = Icons.AutoMirrored.Filled.Notes) {
+                                    OutlinedTextField(
+                                        value = reviewText.value,
+                                        onValueChange = { reviewText.value = it },
+                                        placeholder = { Text("Describe how the response went…") },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        minLines = 4,
+                                        shape = RoundedCornerShape(12.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        Button(
+                            onClick = { showSubmitReviewConfirm = true },
+                            enabled = reviewText.value.isNotBlank(),
+                            modifier = Modifier.fillMaxWidth().height(52.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = RFColors.Primary)
+                        ) {
+                            Text("Review Summary", fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -2669,6 +2722,85 @@ private fun ResourceRequestHistoryCard(
             if (request.status.equals("Pending", ignoreCase = true)) {
                 TextButton(onClick = onCancel) {
                     Text("Cancel", color = Color(0xFFD32F2F))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ResourceRequestStatusCard(
+    request: SavedResourceRequest,
+    onDismiss: () -> Unit,
+    onViewDetails: () -> Unit
+) {
+    val steps = listOf("Sent", "Under Review", "Approved")
+    val currentStepIndex = when (request.status.lowercase()) {
+        "pending"  -> 1
+        "approved" -> 2
+        else       -> 0
+    }
+    val isRejected  = request.status.equals("Rejected", ignoreCase = true)
+    val isApproved  = request.status.equals("Approved", ignoreCase = true)
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp)
+            .clickable { onViewDetails() },
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = RFColors.Bg),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (isApproved) Color(0xFF2E7D32).copy(alpha = 0.3f) else RFColors.Primary.copy(alpha = 0.2f)
+        ),
+        elevation = CardDefaults.cardElevation(3.dp)
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    if (isApproved) Icons.Default.CheckCircle else Icons.Default.Inventory,
+                    contentDescription = null,
+                    tint = if (isApproved) Color(0xFF2E7D32) else RFColors.Primary,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Resource Request", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = RFColors.Text)
+                    Text(
+                        "${request.resourceName} x${request.quantity} • ${request.urgency}",
+                        fontSize = 12.sp, color = RFColors.TextSecondary,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis
+                    )
+                }
+                IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                    Icon(Icons.Default.Close, contentDescription = "Dismiss", tint = RFColors.TextSecondary, modifier = Modifier.size(16.dp))
+                }
+            }
+
+            if (isRejected) {
+                Text("Request declined by dispatch", color = Color(0xFFD32F2F), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            } else if (isApproved) {
+                Text("Your request has been approved ✓", color = Color(0xFF2E7D32), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            } else {
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    steps.forEachIndexed { index, label ->
+                        val isDone = index <= currentStepIndex
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Box(
+                                modifier = Modifier.size(10.dp).clip(CircleShape)
+                                    .background(if (isDone) RFColors.Primary else RFColors.Border)
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(label, fontSize = 10.sp, color = if (isDone) RFColors.Primary else RFColors.TextSecondary)
+                        }
+                        if (index < steps.size - 1) {
+                            Box(
+                                modifier = Modifier.weight(1f).height(2.dp)
+                                    .background(if (index < currentStepIndex) RFColors.Primary else RFColors.Border)
+                            )
+                        }
+                    }
                 }
             }
         }

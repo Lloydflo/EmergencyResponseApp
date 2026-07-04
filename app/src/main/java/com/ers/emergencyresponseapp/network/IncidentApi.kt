@@ -61,6 +61,54 @@ data class SendBackupRequestResponse(
     val id: Int? = null
 )
 
+data class ResourceRequestStatusDto(
+    val id: Int,
+    val resource_name: String,
+    val category: String,
+    val quantity: Int,
+    val urgency: String,
+    val status: String,
+    val created_at: String,
+    val updated_at: String?
+)
+
+data class ResourceRequestStatusResponse(
+    val success: Boolean,
+    val message: String? = null,
+    val request: ResourceRequestStatusDto? = null
+)
+
+data class SendResourceRequestResponse(
+    val success: Boolean,
+    val message: String? = null,
+    val id: Int? = null
+)
+
+data class MyResourceRequestDto(
+    val id: Int,
+    val resource_name: String,
+    val category: String,
+    val quantity: Int,
+    val urgency: String,
+    val status: String,
+    val incident_id: String?,
+    val location: String,
+    val notes: String?,
+    val created_at: String,
+    val updated_at: String?
+)
+
+data class MyResourceRequestsResponse(
+    val success: Boolean,
+    val message: String? = null,
+    val requests: List<MyResourceRequestDto>? = null
+)
+
+data class CancelResourceRequestResponse(
+    val success: Boolean,
+    val message: String? = null
+)
+
 interface IncidentApi {
 
     @GET("api/api_app/get-assigned-incidents.php")
@@ -129,4 +177,35 @@ interface IncidentApi {
     suspend fun getBackupRequestStatus(
         @Query("request_id") requestId: Int
     ): BackupRequestStatusResponse
+
+    @FormUrlEncoded
+    @POST("api/api_app/send-resource-request.php")
+    suspend fun sendResourceRequest(
+        @Field("responder_id") responderId: Int,
+        @Field("responder_name") responderName: String,
+        @Field("category") category: String,
+        @Field("resource_name") resourceName: String,
+        @Field("quantity") quantity: Int,
+        @Field("urgency") urgency: String,
+        @Field("incident_id") incidentId: String,
+        @Field("location") location: String,
+        @Field("notes") notes: String
+    ): SendResourceRequestResponse
+
+    @GET("api/api_app/get-resource-request-status.php")
+    suspend fun getResourceRequestStatus(
+        @Query("request_id") requestId: Int
+    ): ResourceRequestStatusResponse
+
+    @GET("api/api_app/get-my-resource-requests.php")
+    suspend fun getMyResourceRequests(
+        @Query("responder_id") responderId: Int
+    ): MyResourceRequestsResponse
+
+    @FormUrlEncoded
+    @POST("api/api_app/cancel-resource-request.php")
+    suspend fun cancelResourceRequest(
+        @Field("request_id") requestId: Int,
+        @Field("responder_id") responderId: Int
+    ): CancelResourceRequestResponse
 }
