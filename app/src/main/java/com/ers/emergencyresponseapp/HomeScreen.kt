@@ -146,8 +146,11 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.ers.emergencyresponseapp.network.RetrofitProvider
 import com.ers.emergencyresponseapp.network.MarkRouteArrivedRequest
-import androidx.compose.runtime.*
-
+import com.ers.emergencyresponseapp.network.uriToProfileImagePart
+import com.ers.emergencyresponseapp.network.userIdToRequestBody
+import com.ers.emergencyresponseapp.network.uriStringToMultipartPart
+import com.ers.emergencyresponseapp.network.stringToRequestBody
+import androidx.compose.material.icons.filled.Close
 
 
 
@@ -550,6 +553,74 @@ private fun EmergencyRequestCard(request: EmergencyRequest, showBackupBadge: Boo
     }
 }
 
+@Composable
+private fun BackupRequestStatusCard(
+    department: String,
+    resources: String,
+    status: String,
+    onDismiss: () -> Unit
+) {
+    val steps = listOf("Sent", "Received", "Accepted", "En Route")
+    val currentStepIndex = when (status) {
+        "pending"  -> 0
+        "accepted" -> 2
+        "en_route" -> 3
+        "completed" -> 3
+        else -> 0
+    }
+    val isDeclined = status == "declined"
+
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        border = BorderStroke(1.dp, AppColors.Primary.copy(alpha = 0.2f)),
+        elevation = CardDefaults.cardElevation(3.dp)
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.LocalHospital, contentDescription = null, tint = AppColors.Primary, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Backup Request", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = AppColors.Text)
+                    Text("$department • $resources", fontSize = 12.sp, color = AppColors.TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                    Icon(Icons.Default.Close, contentDescription = "Dismiss", tint = AppColors.TextSecondary, modifier = Modifier.size(16.dp))
+                }
+            }
+
+            if (isDeclined) {
+                Text("Request declined by dispatch", color = Color(0xFFD32F2F), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            } else {
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    steps.forEachIndexed { index, label ->
+                        val isDone = index <= currentStepIndex
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Box(
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .clip(CircleShape)
+                                    .background(if (isDone) AppColors.Primary else AppColors.Border)
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(label, fontSize = 10.sp, color = if (isDone) AppColors.Primary else AppColors.TextSecondary)
+                        }
+                        if (index < steps.size - 1) {
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(2.dp)
+                                    .background(if (index < currentStepIndex) AppColors.Primary else AppColors.Border)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HOME SCREEN
@@ -623,6 +694,7 @@ fun HomeScreen(
             delay(5000L)
         }
     }
+
     val effectiveRole    = storedDepartment?.lowercase() ?: responderRole?.takeIf { it.isNotBlank() }
     val departmentFilter: IncidentType? = when (effectiveRole?.trim()?.lowercase()) {
         "fire"    -> IncidentType.FIRE
@@ -641,13 +713,6 @@ fun HomeScreen(
     var accountPhotoUri by remember { mutableStateOf(prefs.getString("account_photo", null)) }
     var isDarkMode      by remember { mutableStateOf(prefs.getBoolean("dark_mode", false)) }
 
-    val pickProfilePhotoLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
-        if (uri != null) {
-            val stored = saveUriToAppStorage(context, uri) ?: uri.toString()
-            accountPhotoUri = stored
-            try { prefs.edit().putString("account_photo", accountPhotoUri).apply() } catch (_: Exception) {}
-        }
-    }
 
     val responderImageUri = accountPhotoUri
     val responderDrawable by remember { mutableStateOf<Int?>(null) }
@@ -684,6 +749,34 @@ fun HomeScreen(
     var showSettingsDialog      by remember { mutableStateOf(false) }
     var showAllActiveDialog     by remember { mutableStateOf(false) }
     var activeFilter            by remember { mutableStateOf(ActivePriorityFilter.ALL) }
+    var activeBackupRequestId by remember { mutableStateOf<Int?>(prefs.getInt("active_backup_request_id", -1).takeIf { it > 0 }) }
+    var backupRequestStatus by remember { mutableStateOf<String?>(null) }
+    var backupRequestDept by remember { mutableStateOf<String?>(null) }
+    var backupRequestResources by remember { mutableStateOf<String?>(null) }
+    var showBackupStatusCard by remember { mutableStateOf(activeBackupRequestId != null) }
+
+    LaunchedEffect(activeBackupRequestId) {
+        val id = activeBackupRequestId ?: return@LaunchedEffect
+        val repo = com.ers.emergencyresponseapp.data.IncidentRepository()
+
+        while (activeBackupRequestId == id) {
+            val result = repo.getBackupRequestStatus(id)
+            if (result != null) {
+                backupRequestStatus = result.status
+                backupRequestDept = result.requested_department
+                backupRequestResources = result.resources
+
+                if (result.status == "completed" || result.status == "declined") {
+                    delay(4000)
+                    activeBackupRequestId = null
+                    showBackupStatusCard = false
+                    prefs.edit().remove("active_backup_request_id").apply()
+                    break
+                }
+            }
+            delay(5000)
+        }
+    }
 
     // Mark-complete state
     var showMarkCompleteDialog by remember { mutableStateOf(false) }
@@ -715,6 +808,36 @@ fun HomeScreen(
     var isRefreshing by remember { mutableStateOf(false) }
     var showNotificationsDialog by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val pickProfilePhotoLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        if (uri != null) {
+            // Keep local copy for instant UI update
+            val stored = saveUriToAppStorage(context, uri) ?: uri.toString()
+            accountPhotoUri = stored
+            try { prefs.edit().putString("account_photo", accountPhotoUri).apply() } catch (_: Exception) {}
+
+            // Upload to server so profile_image_path gets updated in the DB
+            if (responderId > 0) {
+                scope.launch {
+                    try {
+                        val userIdBody = userIdToRequestBody(responderId)
+                        val imagePart = uriToProfileImagePart(context, uri)
+
+                        val response = RetrofitProvider.authApi.uploadProfileImage(userIdBody, imagePart)
+
+                        if (response.success) {
+                            Toast.makeText(context, "Profile photo updated", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(context, response.message ?: "Upload failed", Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (e: Exception) {
+                        Log.e("HomeScreen", "Profile image upload failed: ${e.message}")
+                        Toast.makeText(context, "Failed to upload profile photo", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }
+    }
+
     fun refreshHomeData() {
         if (isRefreshing) return
 
@@ -928,47 +1051,51 @@ fun HomeScreen(
     }
 
     fun markIncidentDone(incident: Incident, notes: String, proofUri: String?) {
-        try {
-            assignedVm.updateStatus(
-                assignmentId = incident.id,
-                status = "completed",
-                responderId = responderId
-            )
-            context.stopService(
-                Intent(context, RouteMonitoringService::class.java)
-            )
+        if (proofUri == null) {
+            Toast.makeText(context, "Photo proof is required", Toast.LENGTH_SHORT).show()
+            return
+        }
 
-            context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
-                .edit()
-                .putBoolean("pending_en_route_check", false)
-                .remove("pending_en_route_incident_id")
-                .commit()
+        scope.launch {
+            try {
+                val assignmentIdBody = stringToRequestBody(incident.id)
+                val responderIdBody = stringToRequestBody(responderId.toString())
+                val notesBody = stringToRequestBody(notes)
+                val imagePart = uriStringToMultipartPart(context, "proof_image", "completion_proof", proofUri)
 
-            assignedVm.load(responderId)
-            assignedVm.loadActive(responderId)
+                val response = RetrofitProvider.incidentApi.markIncidentComplete(
+                    assignmentIdBody, responderIdBody, notesBody, imagePart
+                )
 
-            if (lastNotifiedIncidentId == incident.id) {
-                lastNotifiedIncidentId = null
-                prefs.edit().remove("last_notified_incident_id").apply()
+                if (response.success) {
+                    context.stopService(Intent(context, RouteMonitoringService::class.java))
+
+                    context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
+                        .edit()
+                        .putBoolean("pending_en_route_check", false)
+                        .remove("pending_en_route_incident_id")
+                        .commit()
+
+                    assignedVm.load(responderId)
+                    assignedVm.loadActive(responderId)
+
+                    if (lastNotifiedIncidentId == incident.id) {
+                        lastNotifiedIncidentId = null
+                        prefs.edit().remove("last_notified_incident_id").apply()
+                    }
+                    if (lastAssignedIncidentId == incident.id) {
+                        lastAssignedIncidentId = null
+                        prefs.edit().remove("last_assigned_incident_id").apply()
+                    }
+
+                    Toast.makeText(context, "Incident marked completed", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, response.message ?: "Failed to mark complete", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                Log.e("HomeScreen", "Mark complete failed: ${e.message}")
+                Toast.makeText(context, "Failed to mark complete", Toast.LENGTH_SHORT).show()
             }
-
-            if (lastAssignedIncidentId == incident.id) {
-                lastAssignedIncidentId = null
-                prefs.edit().remove("last_assigned_incident_id").apply()
-            }
-
-            Toast.makeText(
-                context,
-                "Incident marked completed",
-                Toast.LENGTH_SHORT
-            ).show()
-
-        } catch (e: Exception) {
-            Toast.makeText(
-                context,
-                "Failed to mark complete",
-                Toast.LENGTH_SHORT
-            ).show()
         }
     }
 
@@ -1061,7 +1188,7 @@ fun HomeScreen(
             try {
                 val repo = com.ers.emergencyresponseapp.data.IncidentRepository()
 
-                val success = repo.sendBackupRequest(
+                val newId = repo.sendBackupRequest(
                     responderId = responderId,
                     responderName = responderName,
                     department = effectiveRole ?: "",
@@ -1071,26 +1198,21 @@ fun HomeScreen(
                     incidentId = request.fromIncidentId
                 )
 
-                if (success) {
-                    Toast.makeText(
-                        context,
-                        "Backup request sent to $deptName",
-                        Toast.LENGTH_SHORT
-                    ).show()
+                if (newId != null) {
+                    activeBackupRequestId = newId
+                    backupRequestStatus = "pending"
+                    backupRequestDept = deptName
+                    backupRequestResources = resourceList
+                    showBackupStatusCard = true
+                    prefs.edit().putInt("active_backup_request_id", newId).apply()
+
+                    Toast.makeText(context, "Backup request sent to $deptName", Toast.LENGTH_SHORT).show()
                 } else {
-                    Toast.makeText(
-                        context,
-                        "Failed to send backup request",
-                        Toast.LENGTH_SHORT
-                    ).show()
+                    Toast.makeText(context, "Failed to send backup request", Toast.LENGTH_SHORT).show()
                 }
 
             } catch (e: Exception) {
-                Toast.makeText(
-                    context,
-                    "Error: ${e.message}",
-                    Toast.LENGTH_SHORT
-                ).show()
+                Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -1816,6 +1938,20 @@ fun HomeScreen(
                         }
                     }
                 }
+                 if (showBackupStatusCard && backupRequestStatus != null) {
+                     item {
+                         BackupRequestStatusCard(
+                             department = backupRequestDept ?: "",
+                             resources = backupRequestResources ?: "",
+                             status = backupRequestStatus ?: "pending",
+                             onDismiss = {
+                                 showBackupStatusCard = false
+                                 activeBackupRequestId = null
+                                 prefs.edit().remove("active_backup_request_id").apply()
+                             }
+                         )
+                     }
+                 }
 
                 item { Spacer(Modifier.height(12.dp)) }
 

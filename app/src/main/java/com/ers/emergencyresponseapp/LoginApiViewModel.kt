@@ -121,6 +121,32 @@ class LoginApiViewModel : ViewModel() {
                             isOnline = true
                         )
                         }
+                        
+                        // ── ✅ UPSERT USER TO MYSQL - Persist responder profile ─────────────
+                        try {
+                            val upsertResponse = RetrofitProvider.authApi.upsertUser(
+                                id = user.id,
+                                email = user.email,
+                                name = user.name,
+                                department = user.department,
+                                role = user.role,
+                                status = "active",
+                                isActive = 1,
+                                unitCode = user.unitCode,
+                                unitType = user.unitType,
+                                vehiclePlate = null,
+                                unitStatus = user.unitStatus,
+                                lastLogin = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())
+                            )
+                            if (upsertResponse.success) {
+                                android.util.Log.d("UPSERT_DEBUG", "User profile persisted: ${upsertResponse.message}")
+                            } else {
+                                android.util.Log.e("UPSERT_DEBUG", "Failed to persist profile: ${upsertResponse.message}")
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.e("UPSERT_DEBUG", "Error upserting user: ${e.message}")
+                        }
+                        // ── end of upsert code ───────────────────────────────────
                     }
                     // ── end of Firebase code ───────────────────────────────────
 

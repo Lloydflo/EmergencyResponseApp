@@ -1,6 +1,7 @@
 package com.ers.emergencyresponseapp.data
 
 import com.ers.emergencyresponseapp.features.assigned.IncidentDto
+import com.ers.emergencyresponseapp.network.BackupRequestStatusDto
 import com.ers.emergencyresponseapp.network.RetrofitProvider
 
 class IncidentRepository {
@@ -52,18 +53,25 @@ class IncidentRepository {
         resources: String,
         isFullBackup: Boolean,
         incidentId: String
-    ): Boolean {
-        val response = api.sendBackupRequest(
-            responderId = responderId,
-            responderName = responderName,
-            department = department,
-            requestedDepartment = requestedDepartment,
-            resources = resources,
-            isFullBackup = if (isFullBackup) 1 else 0,
-            incidentId = incidentId
-        )
+    ): Int? {  // returns the new request's id, or null on failure
+        return try {
+            val response = api.sendBackupRequest(
+                responderId, responderName, department, requestedDepartment,
+                resources, if (isFullBackup) 1 else 0, incidentId
+            )
+            if (response.success) response.id else null
+        } catch (e: Exception) {
+            null
+        }
+    }
 
-        return response.isSuccessful
+    suspend fun getBackupRequestStatus(requestId: Int): BackupRequestStatusDto? {
+        return try {
+            val response = api.getBackupRequestStatus(requestId)
+            if (response.success) response.request else null
+        } catch (e: Exception) {
+            null
+        }
     }
 
     suspend fun getActiveIncidents(responderId: Int): List<IncidentDto> {
@@ -75,4 +83,5 @@ class IncidentRepository {
 
         throw Exception("Failed to load active incidents: ${response.code()}")
     }
+
 }

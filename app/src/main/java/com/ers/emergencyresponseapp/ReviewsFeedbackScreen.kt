@@ -65,6 +65,7 @@ import java.io.FileOutputStream
 import androidx.core.content.FileProvider
 import java.text.SimpleDateFormat
 import java.util.Date
+import androidx.compose.ui.graphics.graphicsLayer
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
 private object RFColors {
@@ -522,13 +523,11 @@ private fun ResourceRequestFullScreenDialog(
     val maxQty = category.maxQty
     val isFormValid = resourceName.isNotBlank() && quantity > 0 && location.isNotBlank()
 
-    // When category changes → reset resource name to first item of new category
     LaunchedEffect(category) {
         resourceName = category.items.first()
         if (quantity > category.maxQty) quantity = 1
     }
 
-    // GPS auto-fill — getLastLocation first (instant), then getCurrentLocation as fallback
     val fusedClient = remember { LocationServices.getFusedLocationProviderClient(context) }
 
     val locationPermLauncher =
@@ -682,334 +681,317 @@ private fun ResourceRequestFullScreenDialog(
             modifier = Modifier.fillMaxSize(),
             color = RFColors.SurfaceBg
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .statusBarsPadding()
-                    .navigationBarsPadding()
-                    .padding(horizontal = 18.dp, vertical = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
+            Column(modifier = Modifier.fillMaxSize()) {
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                // ── Fixed header ──────────────────────────────────────────
+                Surface(
+                    color = RFColors.Bg,
+                    shadowElevation = 2.dp
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(44.dp)
-                            .clip(CircleShape)
-                            .background(
-                                Brush.linearGradient(
-                                    listOf(RFColors.Primary, RFColors.Secondary)
-                                )
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            Icons.Default.Inventory,
-                            contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-
-                    Column {
-                        Text(
-                            "Request Resources",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 18.sp,
-                            color = RFColors.Text
-                        )
-                        Text(
-                            "Fill in the details below",
-                            fontSize = 13.sp,
-                            color = RFColors.TextSecondary
-                        )
-                    }
-                    Spacer(Modifier.weight(1f))
-
-                    IconButton(
-                        onClick = {
-                            if (!isSending) onDismiss()
-                        },
-                        enabled = !isSending
-                    ) {
-                        Icon(
-                            Icons.Default.Close,
-                            contentDescription = "Close",
-                            tint = RFColors.TextSecondary
-                        )
-                    }
-                }
-
-                HorizontalDivider(color = RFColors.Border)
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    StepChip("1", "Resource", formStep == 1, Modifier.weight(1f))
-                    StepChip("2", "Details", formStep == 2, Modifier.weight(1f))
-                }
-
-                if (formStep == 1) {
                     Column(
-                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .statusBarsPadding()
+                            .padding(horizontal = 18.dp, vertical = 14.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-
-                        // ── Category chips ────────────────────────────────────────────
-
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text(
-                                "Category",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = RFColors.TextSecondary
-                            )
-                            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                itemsIndexed(ResCategory.entries) { _, cat ->
-                                    val isSel = category == cat
-                                    OutlinedButton(
-                                        onClick = { category = cat },
-                                        shape = RoundedCornerShape(999.dp),
-                                        contentPadding = PaddingValues(
-                                            horizontal = 12.dp,
-                                            vertical = 8.dp
-                                        ),
-                                        colors = ButtonDefaults.outlinedButtonColors(
-                                            containerColor = if (isSel) RFColors.Primary.copy(alpha = 0.13f) else Color.Transparent,
-                                            contentColor = if (isSel) RFColors.Primary else RFColors.TextSecondary
-                                        ),
-                                        border = androidx.compose.foundation.BorderStroke(
-                                            1.dp,
-                                            if (isSel) RFColors.Primary.copy(alpha = 0.6f) else RFColors.Border
-                                        )
-                                    ) {
-                                        Icon(
-                                            cat.icon,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(14.dp)
-                                        )
-                                        Spacer(Modifier.width(5.dp))
-                                        Text(
-                                            cat.displayName,
-                                            fontSize = 12.sp,
-                                            fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-
-                        // ── Resource Name dropdown ────────────────────────────────────
-
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text(
-                                "Resource Name *",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = RFColors.TextSecondary
-                            )
-
-                            ExposedDropdownMenuBox(
-                                expanded = showItemDropdown,
-                                onExpandedChange = { showItemDropdown = it }
-                            ) {
-                                OutlinedTextField(
-                                    value = resourceName,
-                                    onValueChange = {},
-                                    readOnly = true,
-                                    modifier = Modifier.menuAnchor(
-                                        MenuAnchorType.PrimaryNotEditable,
-                                        enabled = true
-                                    ).fillMaxWidth(),
-                                    shape = RoundedCornerShape(12.dp),
-                                    leadingIcon = {
-                                        Icon(
-                                            category.icon,
-                                            contentDescription = null,
-                                            tint = RFColors.Primary,
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    },
-                                    trailingIcon = {
-                                        ExposedDropdownMenuDefaults.TrailingIcon(expanded = showItemDropdown)
-                                    },
-                                    colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors()
-                                )
-
-                                ExposedDropdownMenu(
-                                    expanded = showItemDropdown,
-                                    onDismissRequest = { showItemDropdown = false },
-                                    modifier = Modifier.background(RFColors.Bg)
-                                ) {
-                                    category.items.forEach { item ->
-                                        DropdownMenuItem(
-                                            text = {
-                                                Text(
-                                                    item,
-                                                    fontSize = 14.sp,
-                                                    fontWeight = if (item == resourceName) FontWeight.SemiBold else FontWeight.Normal,
-                                                    color = if (item == resourceName) RFColors.Primary else RFColors.Text
-                                                )
-                                            },
-                                            onClick = {
-                                                resourceName = item
-                                                showItemDropdown = false
-                                            },
-                                            leadingIcon = {
-                                                if (item == resourceName) Icon(
-                                                    Icons.Default.Check,
-                                                    contentDescription = null,
-                                                    tint = RFColors.Primary,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-
-                        // ── Quantity stepper + Urgency ────────────────────────────────
-
                         Row(
                             modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-
-                            // Quantity stepper (–  N  +) with max limit
-                            Column(
-                                modifier = Modifier.width(130.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            Box(
+                                modifier = Modifier
+                                    .size(42.dp)
+                                    .clip(RoundedCornerShape(13.dp))
+                                    .background(
+                                        Brush.linearGradient(
+                                            listOf(RFColors.Primary, RFColors.Secondary)
+                                        )
+                                    ),
+                                contentAlignment = Alignment.Center
                             ) {
-                                Text(
-                                    "Quantity * (max $maxQty)",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = RFColors.TextSecondary
+                                Icon(
+                                    Icons.Default.Inventory,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(21.dp)
                                 )
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .border(1.dp, RFColors.Border, RoundedCornerShape(12.dp))
-                                        .background(RFColors.Bg),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    // Minus
-                                    Box(
-                                        modifier = Modifier
-                                            .size(44.dp)
-                                            .clip(
-                                                RoundedCornerShape(
-                                                    topStart = 12.dp,
-                                                    bottomStart = 12.dp
-                                                )
-                                            )
-                                            .background(
-                                                if (quantity > 1) RFColors.Primary.copy(alpha = 0.10f) else RFColors.Border.copy(
-                                                    alpha = 0.4f
-                                                )
-                                            )
-                                            .clickable(enabled = quantity > 1) { quantity-- },
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Remove,
-                                            contentDescription = "Decrease",
-                                            tint = if (quantity > 1) RFColors.Primary else RFColors.TextSecondary,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
-                                    Text(
-                                        text = quantity.toString(),
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 16.sp,
-                                        color = RFColors.Text
-                                    )
-                                    // Plus
-                                    Box(
-                                        modifier = Modifier
-                                            .size(44.dp)
-                                            .clip(
-                                                RoundedCornerShape(
-                                                    topEnd = 12.dp,
-                                                    bottomEnd = 12.dp
-                                                )
-                                            )
-                                            .background(
-                                                if (quantity < maxQty) RFColors.Primary.copy(
-                                                    alpha = 0.10f
-                                                ) else RFColors.Border.copy(alpha = 0.4f)
-                                            )
-                                            .clickable(enabled = quantity < maxQty) { quantity++ },
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Add,
-                                            contentDescription = "Increase",
-                                            tint = if (quantity < maxQty) RFColors.Primary else RFColors.TextSecondary,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
-                                }
-                                // limit hint
-                                if (quantity >= maxQty) {
-                                    Text(
-                                        "Max limit reached",
-                                        fontSize = 11.sp,
-                                        color = Color(0xFFD32F2F)
-                                    )
-                                }
                             }
 
-                            // Urgency selector
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
+                            Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    "Urgency",
+                                    "Request Resources",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 17.sp,
+                                    color = RFColors.Text
+                                )
+                                Text(
+                                    "Step $formStep of 2",
                                     fontSize = 12.sp,
-                                    fontWeight = FontWeight.SemiBold,
                                     color = RFColors.TextSecondary
                                 )
-                                Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                                    ResUrgency.entries.chunked(2).forEach { row ->
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            }
+
+                            IconButton(
+                                onClick = { if (!isSending) onDismiss() },
+                                enabled = !isSending,
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .clip(CircleShape)
+                                    .background(RFColors.SurfaceBg)
+                            ) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "Close",
+                                    tint = RFColors.TextSecondary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+
+                        // Progress indicator — connected track, not disjoint pills
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            ProgressNode(number = 1, label = "Resource", state = when {
+                                formStep > 1 -> ProgressNodeState.DONE
+                                else -> ProgressNodeState.ACTIVE
+                            })
+                            ProgressConnector(filled = formStep > 1)
+                            ProgressNode(number = 2, label = "Details", state = when {
+                                formStep == 2 -> ProgressNodeState.ACTIVE
+                                else -> ProgressNodeState.PENDING
+                            })
+                        }
+                    }
+                }
+
+                // ── Scrollable content — both steps live in the same LazyColumn so
+                //    layout behavior (and dead-space handling) is identical for both ──
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    if (formStep == 1) {
+                        item {
+                            SectionCard(title = "Category", icon = Icons.Default.Category) {
+                                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    itemsIndexed(ResCategory.entries) { _, cat ->
+                                        val isSel = category == cat
+                                        OutlinedButton(
+                                            onClick = { category = cat },
+                                            shape = RoundedCornerShape(999.dp),
+                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                                            colors = ButtonDefaults.outlinedButtonColors(
+                                                containerColor = if (isSel) RFColors.Primary.copy(alpha = 0.13f) else Color.Transparent,
+                                                contentColor = if (isSel) RFColors.Primary else RFColors.TextSecondary
+                                            ),
+                                            border = androidx.compose.foundation.BorderStroke(
+                                                1.dp,
+                                                if (isSel) RFColors.Primary.copy(alpha = 0.6f) else RFColors.Border
+                                            )
                                         ) {
-                                            row.forEach { u ->
-                                                val isSel = u == urgency
+                                            Icon(cat.icon, contentDescription = null, modifier = Modifier.size(14.dp))
+                                            Spacer(Modifier.width(5.dp))
+                                            Text(
+                                                cat.displayName,
+                                                fontSize = 12.sp,
+                                                fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        item {
+                            SectionCard(title = "Resource Details", icon = Icons.Default.Inventory2) {
+                                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Text(
+                                            "Resource Name *",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = RFColors.TextSecondary
+                                        )
+
+                                        ExposedDropdownMenuBox(
+                                            expanded = showItemDropdown,
+                                            onExpandedChange = { showItemDropdown = it }
+                                        ) {
+                                            OutlinedTextField(
+                                                value = resourceName,
+                                                onValueChange = {},
+                                                readOnly = true,
+                                                modifier = Modifier.menuAnchor(
+                                                    MenuAnchorType.PrimaryNotEditable,
+                                                    enabled = true
+                                                ).fillMaxWidth(),
+                                                shape = RoundedCornerShape(12.dp),
+                                                leadingIcon = {
+                                                    Icon(
+                                                        category.icon,
+                                                        contentDescription = null,
+                                                        tint = RFColors.Primary,
+                                                        modifier = Modifier.size(20.dp)
+                                                    )
+                                                },
+                                                trailingIcon = {
+                                                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = showItemDropdown)
+                                                },
+                                                colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors()
+                                            )
+
+                                            ExposedDropdownMenu(
+                                                expanded = showItemDropdown,
+                                                onDismissRequest = { showItemDropdown = false },
+                                                modifier = Modifier.background(RFColors.Bg)
+                                            ) {
+                                                category.items.forEach { item ->
+                                                    DropdownMenuItem(
+                                                        text = {
+                                                            Text(
+                                                                item,
+                                                                fontSize = 14.sp,
+                                                                fontWeight = if (item == resourceName) FontWeight.SemiBold else FontWeight.Normal,
+                                                                color = if (item == resourceName) RFColors.Primary else RFColors.Text
+                                                            )
+                                                        },
+                                                        onClick = {
+                                                            resourceName = item
+                                                            showItemDropdown = false
+                                                        },
+                                                        leadingIcon = {
+                                                            if (item == resourceName) Icon(
+                                                                Icons.Default.Check,
+                                                                contentDescription = null,
+                                                                tint = RFColors.Primary,
+                                                                modifier = Modifier.size(16.dp)
+                                                            )
+                                                        }
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    HorizontalDivider(color = RFColors.Border, thickness = 0.6.dp)
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(14.dp)
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.width(136.dp),
+                                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text(
+                                                "Quantity * (max $maxQty)",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = RFColors.TextSecondary
+                                            )
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clip(RoundedCornerShape(12.dp))
+                                                    .border(1.dp, RFColors.Border, RoundedCornerShape(12.dp))
+                                                    .background(RFColors.SurfaceBg),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.SpaceBetween
+                                            ) {
                                                 Box(
                                                     modifier = Modifier
-                                                        .weight(1f)
-                                                        .clip(RoundedCornerShape(10.dp))
-                                                        .background(if (isSel) u.bgColor else RFColors.SurfaceBg)
-                                                        .border(
-                                                            1.dp,
-                                                            if (isSel) u.color.copy(alpha = 0.6f) else RFColors.Border,
-                                                            RoundedCornerShape(10.dp)
+                                                        .size(42.dp)
+                                                        .clip(RoundedCornerShape(topStart = 12.dp, bottomStart = 12.dp))
+                                                        .background(
+                                                            if (quantity > 1) RFColors.Primary.copy(alpha = 0.10f) else Color.Transparent
                                                         )
-                                                        .clickable { urgency = u }
-                                                        .padding(vertical = 8.dp),
+                                                        .clickable(enabled = quantity > 1) { quantity-- },
                                                     contentAlignment = Alignment.Center
                                                 ) {
-                                                    Text(
-                                                        u.displayName,
-                                                        fontSize = 11.sp,
-                                                        fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
-                                                        color = if (isSel) u.color else RFColors.TextSecondary
+                                                    Icon(
+                                                        Icons.Default.Remove,
+                                                        contentDescription = "Decrease",
+                                                        tint = if (quantity > 1) RFColors.Primary else RFColors.TextSecondary,
+                                                        modifier = Modifier.size(16.dp)
                                                     )
+                                                }
+                                                Text(
+                                                    text = quantity.toString(),
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 15.sp,
+                                                    color = RFColors.Text
+                                                )
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(42.dp)
+                                                        .clip(RoundedCornerShape(topEnd = 12.dp, bottomEnd = 12.dp))
+                                                        .background(
+                                                            if (quantity < maxQty) RFColors.Primary.copy(alpha = 0.10f) else Color.Transparent
+                                                        )
+                                                        .clickable(enabled = quantity < maxQty) { quantity++ },
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    Icon(
+                                                        Icons.Default.Add,
+                                                        contentDescription = "Increase",
+                                                        tint = if (quantity < maxQty) RFColors.Primary else RFColors.TextSecondary,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                }
+                                            }
+                                            if (quantity >= maxQty) {
+                                                Text("Max limit reached", fontSize = 10.sp, color = Color(0xFFD32F2F))
+                                            }
+                                        }
+
+                                        Column(
+                                            modifier = Modifier.weight(1f),
+                                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text(
+                                                "Urgency",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = RFColors.TextSecondary
+                                            )
+                                            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                                                ResUrgency.entries.chunked(2).forEach { row ->
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                                    ) {
+                                                        row.forEach { u ->
+                                                            val isSel = u == urgency
+                                                            Box(
+                                                                modifier = Modifier
+                                                                    .weight(1f)
+                                                                    .clip(RoundedCornerShape(10.dp))
+                                                                    .background(if (isSel) u.bgColor else RFColors.SurfaceBg)
+                                                                    .border(
+                                                                        1.dp,
+                                                                        if (isSel) u.color.copy(alpha = 0.6f) else RFColors.Border,
+                                                                        RoundedCornerShape(10.dp)
+                                                                    )
+                                                                    .clickable { urgency = u }
+                                                                    .padding(vertical = 8.dp),
+                                                                contentAlignment = Alignment.Center
+                                                            ) {
+                                                                Text(
+                                                                    u.displayName,
+                                                                    fontSize = 11.sp,
+                                                                    fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
+                                                                    color = if (isSel) u.color else RFColors.TextSecondary
+                                                                )
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
@@ -1017,208 +999,138 @@ private fun ResourceRequestFullScreenDialog(
                                 }
                             }
                         }
-                    }
-                }
 
-
-
-                if (formStep == 2) {
-                    LazyColumn(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(14.dp),
-                        contentPadding = PaddingValues(bottom = 8.dp)
-                    ) {
                         item {
-                            // ── Incident ID ───────────────────────────────────────────────
-                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text(
-                                    "Incident ID (optional)",
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = RFColors.TextSecondary
-                                )
-                                OutlinedTextField(
-                                    value = incidentId, onValueChange = { incidentId = it },
-                                    placeholder = {
-                                        Text(
-                                            "e.g. INC-20240727",
-                                            color = RFColors.TextSecondary.copy(alpha = 0.6f)
-                                        )
-                                    },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(58.dp),
-                                    shape = RoundedCornerShape(12.dp),
-                                    singleLine = true,
-                                    leadingIcon = {
-                                        Icon(
-                                            Icons.Default.Badge,
-                                            contentDescription = null,
-                                            tint = RFColors.Primary,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
-                                )
+                            // Live preview so step 1 doesn't feel empty at the bottom
+                            SectionCard(title = "Summary", icon = Icons.Default.Summarize) {
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    InfoRow("Category", category.displayName)
+                                    InfoRow("Resource", resourceName)
+                                    InfoRow("Quantity", quantity.toString())
+                                    InfoRow("Urgency", urgency.displayName)
+                                }
                             }
+                        }
+                    }
 
-
-                            // ── Delivery Location (GPS auto-fill) ─────────────────────────
-                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
+                    if (formStep == 2) {
+                        item {
+                            SectionCard(title = "Incident Reference", icon = Icons.Default.Badge) {
+                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                     Text(
-                                        "Delivery Location *",
-                                        fontSize = 13.sp,
+                                        "Incident ID (optional)",
+                                        fontSize = 12.sp,
                                         fontWeight = FontWeight.SemiBold,
                                         color = RFColors.TextSecondary
                                     )
-                                    // Use My Location button
-                                    OutlinedButton(
-                                        onClick = { fetchLocation() },
-                                        enabled = !isLocating,
-                                        shape = RoundedCornerShape(999.dp),
-                                        contentPadding = PaddingValues(
-                                            horizontal = 10.dp,
-                                            vertical = 4.dp
-                                        ),
-                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = RFColors.Primary),
-                                        border = androidx.compose.foundation.BorderStroke(
-                                            1.dp,
-                                            RFColors.Primary.copy(alpha = 0.5f)
-                                        )
-                                    ) {
-                                        if (isLocating) {
-                                            CircularProgressIndicator(
-                                                modifier = Modifier.size(14.dp),
-                                                strokeWidth = 2.dp,
-                                                color = RFColors.Primary
-                                            )
-                                        } else {
-                                            Icon(
-                                                Icons.Default.MyLocation,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(14.dp)
-                                            )
+                                    OutlinedTextField(
+                                        value = incidentId, onValueChange = { incidentId = it },
+                                        placeholder = {
+                                            Text("e.g. INC-20240727", color = RFColors.TextSecondary.copy(alpha = 0.6f))
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(12.dp),
+                                        singleLine = true,
+                                        leadingIcon = {
+                                            Icon(Icons.Default.Badge, contentDescription = null, tint = RFColors.Primary, modifier = Modifier.size(18.dp))
                                         }
-                                        Spacer(Modifier.width(4.dp))
-                                        Text(
-                                            if (isLocating) "Locating…" else "Use My Location",
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                    }
-                                }
-                                OutlinedTextField(
-                                    value = location,
-                                    onValueChange = { location = it },
-                                    placeholder = {
-                                        Text(
-                                            "Street, barangay, landmark…",
-                                            color = RFColors.TextSecondary.copy(alpha = 0.6f)
-                                        )
-                                    },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    shape = RoundedCornerShape(12.dp),
-                                    singleLine = false,
-                                    minLines = 1,
-                                    maxLines = 2,
-                                    leadingIcon = {
-                                        Icon(
-                                            Icons.Default.LocationOn,
-                                            contentDescription = null,
-                                            tint = RFColors.Primary,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
-                                )
-                                if (location.isNotBlank()) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Default.CheckCircle,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(13.dp),
-                                            tint = Color(0xFF2E7D32)
-                                        )
-                                        Text(
-                                            "Location set",
-                                            fontSize = 11.sp,
-                                            color = Color(0xFF2E7D32)
-                                        )
-                                    }
+                                    )
                                 }
                             }
+                        }
 
+                        item {
+                            SectionCard(title = "Delivery Location", icon = Icons.Default.LocationOn) {
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.End
+                                    ) {
+                                        OutlinedButton(
+                                            onClick = { fetchLocation() },
+                                            enabled = !isLocating,
+                                            shape = RoundedCornerShape(999.dp),
+                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                            colors = ButtonDefaults.outlinedButtonColors(contentColor = RFColors.Primary),
+                                            border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Primary.copy(alpha = 0.5f))
+                                        ) {
+                                            if (isLocating) {
+                                                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = RFColors.Primary)
+                                            } else {
+                                                Icon(Icons.Default.MyLocation, contentDescription = null, modifier = Modifier.size(14.dp))
+                                            }
+                                            Spacer(Modifier.width(5.dp))
+                                            Text(if (isLocating) "Locating…" else "Use My Location", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                        }
+                                    }
+                                    OutlinedTextField(
+                                        value = location,
+                                        onValueChange = { location = it },
+                                        placeholder = {
+                                            Text("Street, barangay, landmark…", color = RFColors.TextSecondary.copy(alpha = 0.6f))
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(12.dp),
+                                        minLines = 1,
+                                        maxLines = 2,
+                                        leadingIcon = {
+                                            Icon(Icons.Default.LocationOn, contentDescription = null, tint = RFColors.Primary, modifier = Modifier.size(18.dp))
+                                        },
+                                        supportingText = {
+                                            if (location.isNotBlank()) {
+                                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                    Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(12.dp), tint = Color(0xFF2E7D32))
+                                                    Text("Location set", fontSize = 11.sp, color = Color(0xFF2E7D32))
+                                                }
+                                            }
+                                        }
+                                    )
+                                }
+                            }
+                        }
 
-                            // ── Additional Notes ──────────────────────────────────────────
-
-                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text(
-                                    "Additional Notes",
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = RFColors.TextSecondary
-                                )
+                        item {
+                            SectionCard(title = "Additional Notes", icon = Icons.AutoMirrored.Filled.Notes) {
                                 OutlinedTextField(
                                     value = notes,
                                     onValueChange = { notes = it },
                                     placeholder = {
-                                        Text(
-                                            "Any special instructions or context…",
-                                            color = RFColors.TextSecondary.copy(alpha = 0.6f)
-                                        )
+                                        Text("Any special instructions or context…", color = RFColors.TextSecondary.copy(alpha = 0.6f))
                                     },
                                     modifier = Modifier.fillMaxWidth(),
                                     shape = RoundedCornerShape(12.dp),
                                     minLines = 2,
-                                    maxLines = 3,
-                                    leadingIcon = {
-                                        Icon(
-                                            Icons.AutoMirrored.Filled.Notes,
-                                            contentDescription = null,
-                                            tint = RFColors.Primary,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
+                                    maxLines = 3
                                 )
                             }
+                        }
 
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(16.dp),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = RFColors.SurfaceBg
-                                )
-                            ) {
+                        item {
+                            SectionCard(title = "Request Info", icon = Icons.Default.Info) {
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    InfoRow("Requested By", responderName)
+                                    InfoRow("Department", "Responder")
+                                    InfoRow("Date", SimpleDateFormat("MMM dd, yyyy hh:mm a", Locale.getDefault()).format(Date()))
+                                }
+                            }
+                        }
 
-                                Column(
-                                    modifier = Modifier.padding(12.dp),
-                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                        if (!isFormValid) {
+                            item {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(Color(0xFFFFF3E0))
+                                        .padding(12.dp)
                                 ) {
-
-                                    InfoRow(
-                                        label = "Requested By",
-                                        value = responderName
-                                    )
-
-                                    InfoRow(
-                                        label = "Department",
-                                        value = "Responder"
-                                    )
-
-                                    InfoRow(
-                                        label = "Date",
-                                        value = SimpleDateFormat(
-                                            "MMM dd, yyyy hh:mm a",
-                                            Locale.getDefault()
-                                        ).format(Date())
+                                    Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFFF57C00), modifier = Modifier.size(16.dp))
+                                    Text(
+                                        "Resource name, quantity, and location are required.",
+                                        fontSize = 12.sp,
+                                        color = Color(0xFFF57C00)
                                     )
                                 }
                             }
@@ -1226,157 +1138,218 @@ private fun ResourceRequestFullScreenDialog(
                     }
                 }
 
-                // ── Validation hint ───────────────────────────────────────────
-                if (formStep == 2 && !isFormValid) {
+                // ── Fixed footer ──────────────────────────────────────────
+                Surface(color = RFColors.Bg, shadowElevation = 6.dp) {
                     Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
-                            .background(Color(0xFFFFF3E0)).padding(8.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Info,
-                            contentDescription = null,
-                            tint = Color(0xFFF57C00),
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Text(
-                            "Resource name, quantity, and location are required.",
-                            fontSize = 12.sp,
-                            color = Color(0xFFF57C00)
-                        )
-                    }
-                }
-
-                // ── Navigation / Submit buttons ───────────────────────────────
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-
-                    if (formStep == 2) {
-                        OutlinedButton(
-                            onClick = { if (!isSending) formStep = 1 },
-                            enabled = !isSending,
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(52.dp),
-                            shape = RoundedCornerShape(14.dp)
-                        ) {
-                            Text("Back")
-                        }
-                    }
-
-                    Button(
-                        onClick = {
-                            if (formStep == 1) {
-                                formStep = 2
-                                return@Button
-                            }
-
-                            if (!isFormValid) return@Button
-
-                            isSending = true
-
-                            val req = ResRequest(
-                                resourceName = resourceName.trim(),
-                                category = category,
-                                quantity = quantity,
-                                urgency = urgency,
-                                incidentId = incidentId.trim().ifBlank { "N/A" },
-                                location = location.trim(),
-                                notes = notes.trim(),
-                                requestedBy = responderName
-                            )
-
-                            try {
-                                Log.i(
-                                    "ResourceRequest",
-                                    "Sending to admin: ${req.id} — ${req.resourceName} x${req.quantity}"
-                                )
-
-                                val json = """
-                                    {
-                                      "id": "${req.id}",
-                                      "resourceName": "${req.resourceName}",
-                                      "category": "${req.category.displayName}",
-                                      "quantity": ${req.quantity},
-                                      "urgency": "${req.urgency.displayName}",
-                                      "incidentId": "${req.incidentId}",
-                                      "location": "${req.location}",
-                                      "notes": "${req.notes}",
-                                      "requestedBy": "${req.requestedBy}",
-                                      "timestamp": ${req.timestamp},
-                                      "status": "Pending"
-                                    }
-                                    """.trimIndent()
-
-                                val prefs = context.getSharedPreferences(
-                                    "resource_requests",
-                                    Context.MODE_PRIVATE
-                                )
-
-                                val old = prefs.getStringSet(
-                                    "requests",
-                                    emptySet()
-                                ) ?: emptySet()
-
-                                prefs.edit()
-                                    .putStringSet("requests", old + json)
-                                    .apply()
-
-                                Toast.makeText(
-                                    context,
-                                    "Request submitted for admin review",
-                                    Toast.LENGTH_SHORT
-                                ).show()
-
-                                isSending = false
-                                onSubmit()
-
-                            } catch (e: Exception) {
-                                Log.e("ResourceRequest", "Failed: ${e.message}")
-
-                                Toast.makeText(
-                                    context,
-                                    "Failed to send request",
-                                    Toast.LENGTH_SHORT
-                                ).show()
-
-                                isSending = false
-                            }
-                        },
-                        enabled = if (formStep == 1) {
-                            resourceName.isNotBlank() && quantity > 0
-                        } else {
-                            isFormValid && !isSending
-                        },
                         modifier = Modifier
-                            .weight(1f)
-                            .height(52.dp),
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = RFColors.Primary,
-                            contentColor = Color.White,
-                            disabledContainerColor = RFColors.Primary.copy(alpha = 0.4f)
-                        )
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .padding(horizontal = 18.dp, vertical = 14.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        if (isSending) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                color = Color.White,
-                                strokeWidth = 2.dp
+                        if (formStep == 2) {
+                            OutlinedButton(
+                                onClick = { if (!isSending) formStep = 1 },
+                                enabled = !isSending,
+                                modifier = Modifier.weight(1f).height(50.dp),
+                                shape = RoundedCornerShape(14.dp)
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, modifier = Modifier.size(16.dp).graphicsLayer(rotationZ = 180f))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Back")
+                            }
+                        }
+
+                        Button(
+                            onClick = {
+                                if (formStep == 1) {
+                                    formStep = 2
+                                    return@Button
+                                }
+
+                                if (!isFormValid) return@Button
+
+                                isSending = true
+
+                                val req = ResRequest(
+                                    resourceName = resourceName.trim(),
+                                    category = category,
+                                    quantity = quantity,
+                                    urgency = urgency,
+                                    incidentId = incidentId.trim().ifBlank { "N/A" },
+                                    location = location.trim(),
+                                    notes = notes.trim(),
+                                    requestedBy = responderName
+                                )
+
+                                try {
+                                    Log.i(
+                                        "ResourceRequest",
+                                        "Sending to admin: ${req.id} — ${req.resourceName} x${req.quantity}"
+                                    )
+
+                                    val json = """
+                                        {
+                                          "id": "${req.id}",
+                                          "resourceName": "${req.resourceName}",
+                                          "category": "${req.category.displayName}",
+                                          "quantity": ${req.quantity},
+                                          "urgency": "${req.urgency.displayName}",
+                                          "incidentId": "${req.incidentId}",
+                                          "location": "${req.location}",
+                                          "notes": "${req.notes}",
+                                          "requestedBy": "${req.requestedBy}",
+                                          "timestamp": ${req.timestamp},
+                                          "status": "Pending"
+                                        }
+                                        """.trimIndent()
+
+                                    val prefs = context.getSharedPreferences(
+                                        "resource_requests",
+                                        Context.MODE_PRIVATE
+                                    )
+
+                                    val old = prefs.getStringSet(
+                                        "requests",
+                                        emptySet()
+                                    ) ?: emptySet()
+
+                                    prefs.edit()
+                                        .putStringSet("requests", old + json)
+                                        .apply()
+
+                                    Toast.makeText(
+                                        context,
+                                        "Request submitted for admin review",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+
+                                    isSending = false
+                                    onSubmit()
+
+                                } catch (e: Exception) {
+                                    Log.e("ResourceRequest", "Failed: ${e.message}")
+
+                                    Toast.makeText(
+                                        context,
+                                        "Failed to send request",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+
+                                    isSending = false
+                                }
+                            },
+                            enabled = if (formStep == 1) {
+                                resourceName.isNotBlank() && quantity > 0
+                            } else {
+                                isFormValid && !isSending
+                            },
+                            modifier = Modifier.weight(1f).height(50.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = RFColors.Primary,
+                                contentColor = Color.White,
+                                disabledContainerColor = RFColors.Primary.copy(alpha = 0.4f)
                             )
-                        } else {
-                            Text(
-                                if (formStep == 1) "Next" else "Submit Request",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 15.sp
-                            )
+                        ) {
+                            if (isSending) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    color = Color.White,
+                                    strokeWidth = 2.dp
+                                )
+                            } else {
+                                Text(
+                                    if (formStep == 1) "Next" else "Submit Request",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp
+                                )
+                                if (formStep == 1) {
+                                    Spacer(Modifier.width(6.dp))
+                                    Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, modifier = Modifier.size(16.dp))
+                                }
+                            }
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+// ─── New helper composables for the redesigned form ───────────────────────────
+
+private enum class ProgressNodeState { DONE, ACTIVE, PENDING }
+
+@Composable
+private fun RowScope.ProgressNode(number: Int, label: String, state: ProgressNodeState) {
+    val circleColor = when (state) {
+        ProgressNodeState.DONE -> RFColors.Primary
+        ProgressNodeState.ACTIVE -> RFColors.Primary
+        ProgressNodeState.PENDING -> RFColors.Border
+    }
+    val textColor = when (state) {
+        ProgressNodeState.DONE, ProgressNodeState.ACTIVE -> RFColors.Text
+        ProgressNodeState.PENDING -> RFColors.TextSecondary
+    }
+
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Box(
+            modifier = Modifier
+                .size(26.dp)
+                .clip(CircleShape)
+                .background(if (state == ProgressNodeState.PENDING) Color.Transparent else circleColor)
+                .border(1.5.dp, circleColor, CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            if (state == ProgressNodeState.DONE) {
+                Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
+            } else {
+                Text(
+                    number.toString(),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (state == ProgressNodeState.ACTIVE) Color.White else RFColors.TextSecondary
+                )
+            }
+        }
+        Text(label, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = textColor)
+    }
+}
+
+@Composable
+private fun RowScope.ProgressConnector(filled: Boolean) {
+    Box(
+        modifier = Modifier
+            .weight(1f)
+            .padding(horizontal = 10.dp)
+            .height(2.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(if (filled) RFColors.Primary else RFColors.Border)
+    )
+}
+
+@Composable
+private fun SectionCard(
+    title: String,
+    icon: ImageVector,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = RFColors.Bg),
+        border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(icon, contentDescription = null, tint = RFColors.Primary, modifier = Modifier.size(16.dp))
+                Text(title, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = RFColors.Text)
+            }
+            content()
         }
     }
 }
@@ -1628,96 +1601,31 @@ fun ReviewsFeedbackScreen() {
 
             // ── REQUEST RESOURCES BUTTON ──────────────────────────────────
             item {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth().padding(horizontal = 12.dp)
-                        .shadow(10.dp, RoundedCornerShape(18.dp))
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(Brush.linearGradient(listOf(RFColors.Primary, RFColors.Secondary)))
-                        .clickable { showResourceForm = true }
-                        .padding(horizontal = 20.dp, vertical = 16.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                        Box(modifier = Modifier.size(46.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.18f)).border(1.dp, Color.White.copy(alpha = 0.45f), CircleShape), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.Inventory, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
-                        }
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Request Resources", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                            Spacer(Modifier.height(2.dp))
-                            Text("Submit a resource request to admin", color = Color.White.copy(alpha = 0.82f), fontSize = 12.sp)
-                        }
-                        Box(modifier = Modifier.size(32.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.15f)), contentAlignment = Alignment.Center) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = Color.White, modifier = Modifier.size(17.dp))
-                        }
-                    }
-                }
-            }
-
-            item {
-                Column(
+                Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                        .padding(horizontal = 12.dp),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = RFColors.Bg),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        Column {
-                            Text(
-                                "Recent Resource Requests",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = RFColors.Text
-                            )
-
-                            Text(
-                                "Last updated ${SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date())}",
-                                fontSize = 11.sp,
-                                color = RFColors.TextSecondary
-                            )
-                        }
-
-                        Row {
-                            TextButton(
-                                onClick = { showAllRequests = true },
-                                enabled = parsedRequests.isNotEmpty()
-                            ) {
-                                Text("View All")
-                            }
-
-                            IconButton(
-                                onClick = { requestRefreshKey++ }
-                            ) {
-                                Icon(
-                                    Icons.Default.Refresh,
-                                    contentDescription = "Refresh",
-                                    tint = RFColors.Primary
-                                )
-                            }
-                        }
-                    }
-
-                    if (recentRequests.isEmpty()) {
-                        Card(
+                        // Header row
+                        Row(
                             modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(18.dp),
-                            colors = CardDefaults.cardColors(containerColor = RFColors.Bg),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(24.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                 Box(
                                     modifier = Modifier
-                                        .size(56.dp)
-                                        .clip(CircleShape)
+                                        .size(38.dp)
+                                        .clip(RoundedCornerShape(11.dp))
                                         .background(RFColors.Primary.copy(alpha = 0.10f)),
                                     contentAlignment = Alignment.Center
                                 ) {
@@ -1725,49 +1633,102 @@ fun ReviewsFeedbackScreen() {
                                         Icons.Default.Inventory,
                                         contentDescription = null,
                                         tint = RFColors.Primary,
-                                        modifier = Modifier.size(28.dp)
+                                        modifier = Modifier.size(19.dp)
                                     )
                                 }
+                                Column {
+                                    Text(
+                                        "Resource Requests",
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = RFColors.Text
+                                    )
+                                    Text(
+                                        if (parsedRequests.isEmpty()) "No requests yet"
+                                        else "${parsedRequests.size} total • updated ${SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date())}",
+                                        fontSize = 11.sp,
+                                        color = RFColors.TextSecondary
+                                    )
+                                }
+                            }
 
-                                Text(
-                                    "No resource requests yet",
-                                    fontWeight = FontWeight.SemiBold,
-                                    fontSize = 14.sp,
-                                    color = RFColors.Text
+                            IconButton(
+                                onClick = { requestRefreshKey++ },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Refresh,
+                                    contentDescription = "Refresh",
+                                    tint = RFColors.TextSecondary,
+                                    modifier = Modifier.size(18.dp)
                                 )
+                            }
+                        }
 
+                        HorizontalDivider(color = RFColors.Border, thickness = 0.8.dp)
+
+                        // Action row — single, unambiguous entry point
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Button(
+                                onClick = { showResourceForm = true },
+                                modifier = Modifier.weight(1f).height(44.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = RFColors.Primary,
+                                    contentColor = Color.White
+                                )
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("New Request", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            }
+
+                            OutlinedButton(
+                                onClick = { showAllRequests = true },
+                                enabled = parsedRequests.isNotEmpty(),
+                                modifier = Modifier.weight(1f).height(44.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = RFColors.Secondary),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
+                            ) {
+                                Text("View All", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+
+                        // List or empty state
+                        if (recentRequests.isEmpty()) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Inbox,
+                                    contentDescription = null,
+                                    tint = RFColors.TextSecondary.copy(alpha = 0.5f),
+                                    modifier = Modifier.size(28.dp)
+                                )
+                                Spacer(Modifier.height(4.dp))
                                 Text(
-                                    "Requests you submit will appear here for tracking.",
+                                    "Requests you submit will appear here",
                                     fontSize = 12.sp,
                                     color = RFColors.TextSecondary,
                                     textAlign = TextAlign.Center
                                 )
-
-                                OutlinedButton(
-                                    onClick = { showResourceForm = true },
-                                    shape = RoundedCornerShape(12.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Default.Add,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(16.dp)
+                            }
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                recentRequests.forEach { request ->
+                                    ResourceRequestHistoryCard(
+                                        request = request,
+                                        onClick = { selectedRequest = request },
+                                        onCancel = { requestToCancel = request }
                                     )
-                                    Spacer(Modifier.width(6.dp))
-                                    Text("Create Request")
                                 }
                             }
-                        }
-                    } else {
-                        recentRequests.forEach { request ->
-                            ResourceRequestHistoryCard(
-                                request = request,
-                                onClick = {
-                                    selectedRequest = request
-                                },
-                                onCancel = {
-                                    requestToCancel = request
-                                }
-                            )
                         }
                     }
                 }

@@ -3,6 +3,8 @@ package com.ers.emergencyresponseapp.network
 import com.ers.emergencyresponseapp.features.assigned.IncidentDto
 import retrofit2.Response
 import retrofit2.http.*
+import okhttp3.MultipartBody
+import okhttp3.RequestBody
 
 data class SaveRoutePointRequest(
     val incident_id: Int,
@@ -27,6 +29,36 @@ data class MarkRouteArrivedRequest(
 data class MarkRouteArrivedResponse(
     val success: Boolean,
     val message: String?
+)
+
+data class MarkIncidentCompleteResponse(
+    val success: Boolean,
+    val message: String? = null,
+    val incident_id: Int? = null,
+    val completion_image_path: String? = null,
+    val review_status: String? = null
+)
+
+data class BackupRequestStatusDto(
+    val id: Int,
+    val status: String,
+    val requested_department: String,
+    val resources: String,
+    val is_full_backup: Int,
+    val created_at: String,
+    val updated_at: String?
+)
+
+data class BackupRequestStatusResponse(
+    val success: Boolean,
+    val message: String? = null,
+    val request: BackupRequestStatusDto? = null
+)
+
+data class SendBackupRequestResponse(
+    val success: Boolean,
+    val message: String? = null,
+    val id: Int? = null
 )
 
 interface IncidentApi {
@@ -67,7 +99,7 @@ interface IncidentApi {
         @Field("resources") resources: String,
         @Field("is_full_backup") isFullBackup: Int,
         @Field("incident_id") incidentId: String
-    ): Response<Unit>
+    ): SendBackupRequestResponse
 
     @GET("api/api_app/get-active-incidents.php")
     suspend fun getActiveIncidents(
@@ -83,4 +115,18 @@ interface IncidentApi {
     suspend fun markRouteArrived(
         @Body request: MarkRouteArrivedRequest
     ): MarkRouteArrivedResponse
+
+    @Multipart
+    @POST("api/api_app/mark-incident-complete.php")
+    suspend fun markIncidentComplete(
+        @Part("assignment_id") assignmentId: RequestBody,
+        @Part("responder_id") responderId: RequestBody,
+        @Part("notes") notes: RequestBody,
+        @Part proofImage: MultipartBody.Part
+    ): MarkIncidentCompleteResponse
+
+    @GET("api/api_app/get-backup-request-status.php")
+    suspend fun getBackupRequestStatus(
+        @Query("request_id") requestId: Int
+    ): BackupRequestStatusResponse
 }

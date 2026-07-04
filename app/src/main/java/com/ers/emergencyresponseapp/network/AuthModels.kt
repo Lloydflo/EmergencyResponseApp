@@ -37,6 +37,22 @@ data class VerifyOtpResponse(
     val user: UserDto? = null
 )
 
+data class UpsertUserResponse(
+    val success: Boolean,
+    val message: String,
+    val user: UserDto? = null,
+    val user_id: Int? = null
+)
+
+data class UploadProfileImageResponse(
+    val success: Boolean,
+    val message: String? = null,
+    val user_id: Int? = null,
+    val profile_image_path: String? = null,
+    val profile_image_url: String? = null
+)
+
+
 data class IncidentDto(
     val id: Long,
     val reference_no: String? = null,
