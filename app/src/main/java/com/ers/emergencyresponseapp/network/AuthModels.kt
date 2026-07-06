@@ -16,7 +16,10 @@ data class UserDto(
     val unitType: String? = null,
 
     @SerializedName("unit_status")
-    val unitStatus: String? = null
+    val unitStatus: String? = null,
+
+    @SerializedName("profile_image_path")
+    val profileImagePath: String? = null
 )
 
 data class LoginResponse(

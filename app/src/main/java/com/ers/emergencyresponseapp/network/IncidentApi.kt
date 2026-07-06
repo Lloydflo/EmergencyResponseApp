@@ -109,6 +109,24 @@ data class CancelResourceRequestResponse(
     val message: String? = null
 )
 
+data class MyBackupRequestDto(
+    val id: Int,
+    val responder_id: Int,
+    val requested_department: String,
+    val resources: String,
+    val is_full_backup: Int,
+    val incident_id: String?,
+    val status: String,
+    val created_at: String,
+    val updated_at: String?
+)
+
+data class MyBackupRequestsResponse(
+    val success: Boolean,
+    val message: String? = null,
+    val requests: List<MyBackupRequestDto>? = null
+)
+
 interface IncidentApi {
 
     @GET("api/api_app/get-assigned-incidents.php")
@@ -208,4 +226,9 @@ interface IncidentApi {
         @Field("request_id") requestId: Int,
         @Field("responder_id") responderId: Int
     ): CancelResourceRequestResponse
+
+    @GET("api/api_app/get-my-backup-requests.php")
+    suspend fun getMyBackupRequests(
+        @Query("responder_id") responderId: Int
+    ): MyBackupRequestsResponse
 }

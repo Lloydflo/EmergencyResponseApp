@@ -363,19 +363,30 @@ private fun ResponderAvatar(
                 contentScale = ContentScale.Crop
             )
             imageUri != null -> {
-                val bitmap = remember(imageUri) {
-                    try {
-                        if (imageUri.startsWith("file://")) {
-                            Uri.parse(imageUri).path?.let { BitmapFactory.decodeFile(it) }
-                        } else {
-                            context.contentResolver.openInputStream(imageUri.toUri())
-                                ?.use { BitmapFactory.decodeStream(it) }
+                var bitmap by remember(imageUri) { mutableStateOf<Bitmap?>(null) }
+
+                LaunchedEffect(imageUri) {
+                    bitmap = try {
+                        when {
+                            imageUri.startsWith("http", ignoreCase = true) -> {
+                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                    java.net.URL(imageUri).openStream().use { BitmapFactory.decodeStream(it) }
+                                }
+                            }
+                            imageUri.startsWith("file://") -> {
+                                Uri.parse(imageUri).path?.let { BitmapFactory.decodeFile(it) }
+                            }
+                            else -> {
+                                context.contentResolver.openInputStream(imageUri.toUri())
+                                    ?.use { BitmapFactory.decodeStream(it) }
+                            }
                         }
                     } catch (_: Exception) { null }
                 }
+
                 if (bitmap != null) {
                     Image(
-                        bitmap = bitmap.asImageBitmap(),
+                        bitmap = bitmap!!.asImageBitmap(),
                         contentDescription = contentDescription,
                         modifier = Modifier.fillMaxSize().clip(CircleShape),
                         contentScale = ContentScale.Crop
@@ -749,33 +760,33 @@ fun HomeScreen(
     var showSettingsDialog      by remember { mutableStateOf(false) }
     var showAllActiveDialog     by remember { mutableStateOf(false) }
     var activeFilter            by remember { mutableStateOf(ActivePriorityFilter.ALL) }
-    var activeBackupRequestId by remember { mutableStateOf<Int?>(prefs.getInt("active_backup_request_id", -1).takeIf { it > 0 }) }
-    var backupRequestStatus by remember { mutableStateOf<String?>(null) }
-    var backupRequestDept by remember { mutableStateOf<String?>(null) }
-    var backupRequestResources by remember { mutableStateOf<String?>(null) }
-    var showBackupStatusCard by remember { mutableStateOf(activeBackupRequestId != null) }
+    var backupRequestsList by remember { mutableStateOf<List<com.ers.emergencyresponseapp.network.MyBackupRequestDto>>(emptyList()) }
+    var dismissedBackupIds by remember {
+        mutableStateOf(
+            (prefs.getStringSet("dismissed_backup_request_ids", emptySet()) ?: emptySet())
+                .mapNotNull { it.toIntOrNull() }
+                .toMutableSet()
+        )
+    }
 
-    LaunchedEffect(activeBackupRequestId) {
-        val id = activeBackupRequestId ?: return@LaunchedEffect
+    fun dismissBackupRequest(id: Int) {
+        dismissedBackupIds = (dismissedBackupIds + id).toMutableSet()
+        prefs.edit()
+            .putStringSet("dismissed_backup_request_ids", dismissedBackupIds.map { it.toString() }.toSet())
+            .apply()
+    }
+
+    LaunchedEffect(responderId) {
+        if (responderId <= 0) return@LaunchedEffect
         val repo = com.ers.emergencyresponseapp.data.IncidentRepository()
-
-        while (activeBackupRequestId == id) {
-            val result = repo.getBackupRequestStatus(id)
-            if (result != null) {
-                backupRequestStatus = result.status
-                backupRequestDept = result.requested_department
-                backupRequestResources = result.resources
-
-                if (result.status == "completed" || result.status == "declined") {
-                    delay(4000)
-                    activeBackupRequestId = null
-                    showBackupStatusCard = false
-                    prefs.edit().remove("active_backup_request_id").apply()
-                    break
-                }
-            }
+        while (true) {
+            backupRequestsList = repo.getMyBackupRequests(responderId)
             delay(5000)
         }
+    }
+
+    val visibleBackupRequests = remember(backupRequestsList, dismissedBackupIds) {
+        backupRequestsList.filter { it.id !in dismissedBackupIds }
     }
 
     // Mark-complete state
@@ -1102,10 +1113,15 @@ fun HomeScreen(
     var showAlwaysLocationNotice by remember { mutableStateOf(false) }
     var showCriticalGpsWarning by remember { mutableStateOf(false) }
 
-    // Check if location is critical (responder role exists and location is not enabled)
-    LaunchedEffect(deviceLocationEnabled, effectiveRole) {
+    // Only show the "please turn location back on" banner once the responder
+    // has already been through the initial permission prompt AND granted it.
+    // This prevents the banner from competing with the first-run rationale dialog.
+    LaunchedEffect(deviceLocationEnabled, hasLocationPermission, hasPromptedLocationOnce, effectiveRole) {
         val isResponder = !effectiveRole.isNullOrBlank()
-        showCriticalGpsWarning = isResponder && !deviceLocationEnabled
+        showCriticalGpsWarning = isResponder &&
+                hasPromptedLocationOnce &&
+                hasLocationPermission &&
+                !deviceLocationEnabled
     }
 
     val backgroundLocationPermLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -1199,13 +1215,9 @@ fun HomeScreen(
                 )
 
                 result.onSuccess { newId ->
-                    activeBackupRequestId = newId
-                    backupRequestStatus = "pending"
-                    backupRequestDept = deptName
-                    backupRequestResources = resourceList
-                    showBackupStatusCard = true
-                    prefs.edit().putInt("active_backup_request_id", newId).apply()
-
+                    scope.launch {
+                        backupRequestsList = com.ers.emergencyresponseapp.data.IncidentRepository().getMyBackupRequests(responderId)
+                    }
                     Toast.makeText(context, "Backup request sent to $deptName", Toast.LENGTH_SHORT).show()
                 }.onFailure { error ->
                     Log.e("BackupRequest", "Failed: responderId=$responderId, resources=$resourceList, error=${error.message}")
@@ -1397,11 +1409,12 @@ fun HomeScreen(
             }
 
             if (showLocationRationale) {
-                    AlertDialog(
-                        onDismissRequest = {
-                            showLocationRationale = false
-                            prefs.edit().putBoolean("location_permission_prompted", true).apply()
-                        },
+                AlertDialog(
+                    onDismissRequest = {
+                        showLocationRationale = false
+                        hasPromptedLocationOnce = true
+                        prefs.edit().putBoolean("location_permission_prompted", true).apply()
+                    },
                         shape = RoundedCornerShape(20.dp),
                         icon = {
                             Icon(Icons.Default.LocationOn, contentDescription = null, tint = AppColors.Primary)
@@ -1420,13 +1433,14 @@ fun HomeScreen(
                                 lineHeight = 18.sp
                             )
                         },
-                        confirmButton = {
-                            Button(
-                                onClick = {
-                                    showLocationRationale = false
-                                    prefs.edit().putBoolean("location_permission_prompted", true).apply()
-                                    locationPermLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
-                                },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                showLocationRationale = false
+                                hasPromptedLocationOnce = true
+                                prefs.edit().putBoolean("location_permission_prompted", true).apply()
+                                locationPermLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                            },
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F))
                             ) { Text("Enable GPS Now", color = Color.White) }
                         },
@@ -1434,6 +1448,7 @@ fun HomeScreen(
                             TextButton(
                                 onClick = {
                                     showLocationRationale = false
+                                    hasPromptedLocationOnce = true
                                     prefs.edit().putBoolean("location_permission_prompted", true).apply()
                                     Toast.makeText(context, "⚠️ GPS is required for emergency response operations", Toast.LENGTH_LONG).show()
                                 }
@@ -1939,17 +1954,21 @@ fun HomeScreen(
                         }
                     }
                 }
-                 if (showBackupStatusCard && backupRequestStatus != null) {
+                 if (visibleBackupRequests.isNotEmpty()) {
                      item {
+                         Text(
+                             "My Backup Requests",
+                             style = MaterialTheme.typography.titleMedium,
+                             fontWeight = FontWeight.SemiBold,
+                             modifier = Modifier.padding(horizontal = 12.dp)
+                         )
+                     }
+                     items(visibleBackupRequests, key = { it.id }) { req ->
                          BackupRequestStatusCard(
-                             department = backupRequestDept ?: "",
-                             resources = backupRequestResources ?: "",
-                             status = backupRequestStatus ?: "pending",
-                             onDismiss = {
-                                 showBackupStatusCard = false
-                                 activeBackupRequestId = null
-                                 prefs.edit().remove("active_backup_request_id").apply()
-                             }
+                             department = req.requested_department,
+                             resources = req.resources,
+                             status = req.status,
+                             onDismiss = { dismissBackupRequest(req.id) }
                          )
                      }
                  }

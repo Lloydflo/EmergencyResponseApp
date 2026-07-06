@@ -1350,7 +1350,7 @@ fun ReviewsFeedbackScreen() {
     var selectedRequest by remember { mutableStateOf<SavedResourceRequest?>(null) }
     var requestToCancel by remember { mutableStateOf<SavedResourceRequest?>(null) }
     var showAllRequests by remember { mutableStateOf(false) }
-    var dismissedResourceRequestId by remember { mutableStateOf<String?>(null) }
+
 
     fun submitReview(incident: ReviewableIncident, text: String) {
         val plainId = incident.id.removePrefix("#")
@@ -1437,10 +1437,8 @@ fun ReviewsFeedbackScreen() {
         }
     }
 
-    // Track the most recently created request (not just pending) so status transitions are visible
-    val latestResourceRequest = parsedRequests.firstOrNull { it.id != dismissedResourceRequestId }
-    val showResourceStatusCard = latestResourceRequest != null &&
-            !latestResourceRequest.status.equals("Cancelled", ignoreCase = true)
+    // Latest request — highlighted in the list, no separate duplicate card needed anymore
+    val latestResourceRequest = parsedRequests.firstOrNull()
 
 
 
@@ -1699,7 +1697,8 @@ fun ReviewsFeedbackScreen() {
                                     ResourceRequestHistoryCard(
                                         request = request,
                                         onClick = { selectedRequest = request },
-                                        onCancel = { requestToCancel = request }
+                                        onCancel = { requestToCancel = request },
+                                        isLatest = request.id == latestResourceRequest?.id
                                     )
                                 }
                             }
@@ -1707,15 +1706,7 @@ fun ReviewsFeedbackScreen() {
                     }
                 }
             }
-            if (showResourceStatusCard && latestResourceRequest != null) {
-                item {
-                    ResourceRequestStatusCard(
-                        request = latestResourceRequest,
-                        onDismiss = { dismissedResourceRequestId = latestResourceRequest.id },
-                        onViewDetails = { selectedRequest = latestResourceRequest }
-                    )
-                }
-            }
+
 
             // ── FILTER PILLS ──────────────────────────────────────────────
             item {
@@ -2282,7 +2273,8 @@ fun ReviewsFeedbackScreen() {
                                     },
                                     onCancel = {
                                         requestToCancel = request
-                                    }
+                                    },
+                                    isLatest = request.id == latestResourceRequest?.id
                                 )
                             }
                         }
@@ -2639,24 +2631,20 @@ private fun resourceStatusColors(status: String): Pair<Color, Color> {
 private fun ResourceRequestHistoryCard(
     request: SavedResourceRequest,
     onClick: () -> Unit,
-    onCancel: () -> Unit
+    onCancel: () -> Unit,
+    isLatest: Boolean = false
 ) {
-    val urgencyColor = when (request.urgency.lowercase()) {
-        "critical" -> Color(0xFF6A1B9A)
-        "high" -> Color(0xFFD32F2F)
-        "medium" -> Color(0xFFF57C00)
-        else -> Color(0xFF388E3C)
-    }
-
-    val statusColor = when (request.status.lowercase()) {
-        "approved" -> Color(0xFF2E7D32)
-        "rejected" -> Color(0xFFD32F2F)
-        "cancelled" -> Color(0xFF757575)
-        else -> Color(0xFFF57C00)
-    }
-
-    val statusBg = statusColor.copy(alpha = 0.12f)
     val statusColors = resourceStatusColors(request.status)
+    val isRejected  = request.status.equals("Rejected", ignoreCase = true)
+    val isApproved  = request.status.equals("Approved", ignoreCase = true)
+    val isCancelled = request.status.equals("Cancelled", ignoreCase = true)
+
+    val steps = listOf("Sent", "Under Review", "Approved")
+    val currentStepIndex = when (request.status.lowercase()) {
+        "pending"  -> 1
+        "approved" -> 2
+        else       -> 0
+    }
 
     Card(
         modifier = Modifier
@@ -2664,148 +2652,138 @@ private fun ResourceRequestHistoryCard(
             .clickable { onClick() },
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = RFColors.Bg),
-        border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
-    ) {
-        Row(
-            modifier = Modifier.padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(42.dp)
-                    .clip(CircleShape)
-                    .background(RFColors.Primary.copy(alpha = 0.12f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    Icons.Default.Inventory,
-                    contentDescription = null,
-                    tint = RFColors.Primary
-                )
-            }
-
-            Spacer(Modifier.width(12.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    "${request.resourceName} x${request.quantity}",
-                    fontWeight = FontWeight.SemiBold,
-                    color = RFColors.Text,
-                    fontSize = 14.sp
-                )
-
-                Text(
-                    "${request.category} • ${request.urgency} urgency",
-                    color = RFColors.TextSecondary,
-                    fontSize = 12.sp
-                )
-            }
-
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(statusColors.second)
-                    .border(
-                        1.dp,
-                        statusColors.first.copy(alpha = 0.45f),
-                        RoundedCornerShape(999.dp)
-                    )
-                    .padding(horizontal = 10.dp, vertical = 5.dp)
-            ) {
-                Text(
-                    request.status,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = statusColors.first
-                )
-            }
-            if (request.status.equals("Pending", ignoreCase = true)) {
-                TextButton(onClick = onCancel) {
-                    Text("Cancel", color = Color(0xFFD32F2F))
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ResourceRequestStatusCard(
-    request: SavedResourceRequest,
-    onDismiss: () -> Unit,
-    onViewDetails: () -> Unit
-) {
-    val steps = listOf("Sent", "Under Review", "Approved")
-    val currentStepIndex = when (request.status.lowercase()) {
-        "pending"  -> 1
-        "approved" -> 2
-        else       -> 0
-    }
-    val isRejected  = request.status.equals("Rejected", ignoreCase = true)
-    val isApproved  = request.status.equals("Approved", ignoreCase = true)
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp)
-            .clickable { onViewDetails() },
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = RFColors.Bg),
         border = androidx.compose.foundation.BorderStroke(
             1.dp,
-            if (isApproved) Color(0xFF2E7D32).copy(alpha = 0.3f) else RFColors.Primary.copy(alpha = 0.2f)
-        ),
-        elevation = CardDefaults.cardElevation(3.dp)
+            if (isLatest && !isCancelled && !isRejected) RFColors.Primary.copy(alpha = 0.4f) else RFColors.Border
+        )
     ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            // ── Top row: icon, name, urgency, status badge ─────────────
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    if (isApproved) Icons.Default.CheckCircle else Icons.Default.Inventory,
-                    contentDescription = null,
-                    tint = if (isApproved) Color(0xFF2E7D32) else RFColors.Primary,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(Modifier.width(8.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Resource Request", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = RFColors.Text)
-                    Text(
-                        "${request.resourceName} x${request.quantity} • ${request.urgency}",
-                        fontSize = 12.sp, color = RFColors.TextSecondary,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis
+                Box(
+                    modifier = Modifier
+                        .size(42.dp)
+                        .clip(CircleShape)
+                        .background(RFColors.Primary.copy(alpha = 0.12f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.Inventory,
+                        contentDescription = null,
+                        tint = RFColors.Primary
                     )
                 }
-                IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Default.Close, contentDescription = "Dismiss", tint = RFColors.TextSecondary, modifier = Modifier.size(16.dp))
+
+                Spacer(Modifier.width(12.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "${request.resourceName} x${request.quantity}",
+                        fontWeight = FontWeight.SemiBold,
+                        color = RFColors.Text,
+                        fontSize = 14.sp
+                    )
+                    Text(
+                        "${request.category} • ${request.urgency} urgency",
+                        color = RFColors.TextSecondary,
+                        fontSize = 12.sp
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(statusColors.second)
+                        .border(
+                            1.dp,
+                            statusColors.first.copy(alpha = 0.45f),
+                            RoundedCornerShape(999.dp)
+                        )
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                ) {
+                    Text(
+                        request.status,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = statusColors.first
+                    )
                 }
             }
 
-            if (isRejected) {
-                Text("Request declined by dispatch", color = Color(0xFFD32F2F), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            } else if (isApproved) {
-                Text("Your request has been approved ✓", color = Color(0xFF2E7D32), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            } else {
-                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    steps.forEachIndexed { index, label ->
-                        val isDone = index <= currentStepIndex
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Box(
-                                modifier = Modifier.size(10.dp).clip(CircleShape)
-                                    .background(if (isDone) RFColors.Primary else RFColors.Border)
-                            )
-                            Spacer(Modifier.height(4.dp))
-                            Text(label, fontSize = 10.sp, color = if (isDone) RFColors.Primary else RFColors.TextSecondary)
+            // ── Progress stepper — replaces the old standalone status card ──
+            when {
+                isRejected -> {
+                    Text(
+                        "Request declined by dispatch",
+                        color = Color(0xFFD32F2F),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                isCancelled -> {
+                    Text(
+                        "This request was cancelled",
+                        color = RFColors.TextSecondary,
+                        fontSize = 12.sp
+                    )
+                }
+                else -> {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        steps.forEachIndexed { index, label ->
+                            val isDone = index <= currentStepIndex
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .clip(CircleShape)
+                                        .background(if (isDone) RFColors.Primary else RFColors.Border)
+                                )
+                                Spacer(Modifier.height(3.dp))
+                                Text(
+                                    label,
+                                    fontSize = 9.sp,
+                                    color = if (isDone) RFColors.Primary else RFColors.TextSecondary
+                                )
+                            }
+                            if (index < steps.size - 1) {
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(2.dp)
+                                        .background(if (index < currentStepIndex) RFColors.Primary else RFColors.Border)
+                                )
+                            }
                         }
-                        if (index < steps.size - 1) {
-                            Box(
-                                modifier = Modifier.weight(1f).height(2.dp)
-                                    .background(if (index < currentStepIndex) RFColors.Primary else RFColors.Border)
-                            )
-                        }
+                    }
+                    if (isApproved) {
+                        Text(
+                            "Your request has been approved ✓",
+                            color = Color(0xFF2E7D32),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
+
+            // ── Cancel action (pending only) ────────────────────────────
+            if (request.status.equals("Pending", ignoreCase = true)) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onCancel) {
+                        Text("Cancel", color = Color(0xFFD32F2F))
                     }
                 }
             }
         }
     }
 }
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

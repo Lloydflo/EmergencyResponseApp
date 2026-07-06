@@ -191,11 +191,22 @@ fun LoginScreen(
                                         .putBoolean("user_verified", true)
                                         .apply()
 
+                                    val rawPhotoPath = user?.profileImagePath?.takeIf { it.isNotBlank() }
+                                    val fullPhotoUrl = rawPhotoPath?.let { path ->
+                                        if (path.startsWith("http", ignoreCase = true)) path
+                                        else "https://emergency-response.alertaraqc.com/$path"
+                                    }
+
                                     context.getSharedPreferences("ers_prefs", Context.MODE_PRIVATE)
                                         .edit()
                                         .putString("account_full_name", user?.name.orEmpty())
                                         .putString("account_username", user?.name.orEmpty())
                                         .putString("account_email", user?.email.orEmpty())
+                                        .apply {
+                                            if (fullPhotoUrl != null) {
+                                                putString("account_photo", fullPhotoUrl)
+                                            }
+                                        }
                                         .apply()
 
                                     context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)

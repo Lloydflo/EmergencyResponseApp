@@ -5,6 +5,7 @@ import com.ers.emergencyresponseapp.network.BackupRequestStatusDto
 import com.ers.emergencyresponseapp.network.MyResourceRequestDto
 import com.ers.emergencyresponseapp.network.ResourceRequestStatusDto
 import com.ers.emergencyresponseapp.network.RetrofitProvider
+import com.ers.emergencyresponseapp.network.MyBackupRequestDto
 
 class IncidentRepository {
 
@@ -144,6 +145,15 @@ class IncidentRepository {
             }
         } catch (e: Exception) {
             Result.failure(Exception("Network error: ${e.message}"))
+        }
+    }
+
+    suspend fun getMyBackupRequests(responderId: Int): List<MyBackupRequestDto> {
+        return try {
+            val response = api.getMyBackupRequests(responderId)
+            if (response.success) response.requests ?: emptyList() else emptyList()
+        } catch (e: Exception) {
+            emptyList()
         }
     }
 

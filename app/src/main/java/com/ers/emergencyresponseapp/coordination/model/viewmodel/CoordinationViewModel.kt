@@ -79,6 +79,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
     private var activeGroupId: Int? = null
     private var groupPollingJob: kotlinx.coroutines.Job? = null
+    private var groupMessagesRequestId = 0
     private val hasPrimedThread = mutableSetOf<String>()
     private val lastNotifiedMessageIdByThread = mutableMapOf<String, String>()
 
@@ -409,6 +410,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
     }
 
     private fun loadInteragencyGroupMessages(groupId: Int) {
+        val requestId = ++groupMessagesRequestId
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val request = Request.Builder()
@@ -421,7 +423,9 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
                 if (!response.isSuccessful || body.isBlank()) {
                     launch(Dispatchers.Main) {
-                        latestNotification.value = "Failed to load groups: empty API response"
+                        if (requestId == groupMessagesRequestId) {
+                            latestNotification.value = "Failed to load groups: empty API response"
+                        }
                     }
                     return@launch
                 }
@@ -466,8 +470,10 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                 }
 
                 launch(Dispatchers.Main) {
-                    // Ignore stale results if user already switched to another chat.
-                    if (currentThread.value?.id == "group_$groupId") {
+                    // Ignore stale results from older, out-of-order requests.
+                    if (requestId == groupMessagesRequestId &&
+                        currentThread.value?.id == "group_$groupId"
+                    ) {
                         messages.clear()
                         messages.addAll(loaded.sortedBy { it.createdAt })
                     }
@@ -478,7 +484,9 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
             } catch (e: Exception) {
                 launch(Dispatchers.Main) {
-                    latestNotification.value = "Failed to load group messages"
+                    if (requestId == groupMessagesRequestId) {
+                        latestNotification.value = "Failed to load group messages"
+                    }
                 }
             }
         }
