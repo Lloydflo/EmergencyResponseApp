@@ -151,6 +151,8 @@ import com.ers.emergencyresponseapp.network.userIdToRequestBody
 import com.ers.emergencyresponseapp.network.uriStringToMultipartPart
 import com.ers.emergencyresponseapp.network.stringToRequestBody
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.ui.window.DialogProperties
 
 
 
@@ -229,10 +231,10 @@ private data class EmergencyRequest(
     val status: String = "Reported"
 )
 
-private fun saveUriToAppStorage(ctx: Context, uri: Uri): String? {
+private fun saveUriToAppStorage(ctx: Context, uri: Uri, userId: Int): String? {
     return try {
         val dir = File(ctx.filesDir, "profile_photos").apply { if (!exists()) mkdirs() }
-        val file = File(dir, "profile_${System.currentTimeMillis()}.jpg")
+        val file = File(dir, "profile_$userId.jpg")
         ctx.contentResolver.openInputStream(uri)?.use { input ->
             FileOutputStream(file).use { output -> input.copyTo(output) }
         } ?: return null
@@ -344,15 +346,6 @@ private fun ResponderAvatar(
     contentDescription: String = "Responder avatar"
 ) {
     val context = LocalContext.current
-    val notifPermLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
-
-    LaunchedEffect(Unit) {
-        if (Build.VERSION.SDK_INT >= 33 &&
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        }
-    }
 
     Box(modifier = modifier.size(36.dp), contentAlignment = Alignment.Center) {
         when {
@@ -571,38 +564,63 @@ private fun BackupRequestStatusCard(
     status: String,
     onDismiss: () -> Unit
 ) {
-    val steps = listOf("Sent", "Received", "Accepted", "En Route")
+    val steps = listOf("Sent", "Under Review", "Approved")
     val currentStepIndex = when (status) {
-        "pending"  -> 0
-        "accepted" -> 2
-        "en_route" -> 3
-        "completed" -> 3
-        else -> 0
+        "pending"   -> 1
+        "accepted"  -> 2
+        "en_route"  -> 2
+        "completed" -> 2
+        else        -> 0
     }
-    val isDeclined = status == "declined"
+    val isDeclined  = status == "declined"
+    val isCancelled = status == "cancelled"
+
+    val (badgeText, badgeColor) = when (status) {
+        "pending"   -> "Pending" to Color(0xFFEF6C00)
+        "accepted"  -> "Accepted" to Color(0xFF2E7D32)
+        "en_route"  -> "En Route" to Color(0xFF1E88E5)
+        "completed" -> "Completed" to Color(0xFF2E7D32)
+        "declined"  -> "Declined" to Color(0xFFD32F2F)
+        "cancelled" -> "Cancelled" to AppColors.TextSecondary
+        else        -> status.replaceFirstChar { it.uppercase() } to AppColors.TextSecondary
+    }
 
     Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-        shape = RoundedCornerShape(20.dp),
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = Color.White),
-        border = BorderStroke(1.dp, AppColors.Primary.copy(alpha = 0.2f)),
-        elevation = CardDefaults.cardElevation(3.dp)
+        border = BorderStroke(1.dp, if (status == "pending") AppColors.Primary.copy(alpha = 0.45f) else AppColors.Border)
     ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.LocalHospital, contentDescription = null, tint = AppColors.Primary, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Backup Request", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = AppColors.Text)
-                    Text("$department • $resources", fontSize = 12.sp, color = AppColors.TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Column(modifier = Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.Top) {
+                Box(
+                    modifier = Modifier.size(40.dp).clip(CircleShape).background(AppColors.Primary.copy(alpha = 0.08f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Default.LocalHospital, contentDescription = null, tint = AppColors.Primary, modifier = Modifier.size(20.dp))
                 }
-                IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Default.Close, contentDescription = "Dismiss", tint = AppColors.TextSecondary, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(department, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = AppColors.Text)
+                    Text(resources, fontSize = 12.sp, color = AppColors.TextSecondary)
+                }
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(badgeColor.copy(alpha = 0.12f))
+                        .border(1.dp, badgeColor.copy(alpha = 0.5f), RoundedCornerShape(999.dp))
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Text(badgeText, color = badgeColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
             }
 
-            if (isDeclined) {
-                Text("Request declined by dispatch", color = Color(0xFFD32F2F), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            if (isDeclined || isCancelled) {
+                Text(
+                    if (isDeclined) "This request was declined by dispatch" else "This request was cancelled",
+                    color = if (isDeclined) Color(0xFFD32F2F) else AppColors.TextSecondary,
+                    fontSize = 13.sp
+                )
             } else {
                 Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     steps.forEachIndexed { index, label ->
@@ -628,6 +646,14 @@ private fun BackupRequestStatusCard(
                     }
                 }
             }
+
+            if (status == "pending") {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) {
+                        Text("Cancel", color = Color(0xFFD32F2F), fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
         }
     }
 }
@@ -646,34 +672,17 @@ fun HomeScreen(
     assignedVm: AssignedIncidentsViewModel = viewModel()
 ) {
     val context = LocalContext.current
+    var resumedFromBackground by remember { mutableStateOf(false) }
+    var wasGpsEnabled by remember {
+        mutableStateOf(isDeviceLocationEnabled(context))
+    }
+    var deviceLocationEnabled by remember {
+        mutableStateOf(isDeviceLocationEnabled(context))
+    }
     val lifecycleOwner = LocalLifecycleOwner.current
     var showCancelRouteDialog by remember { mutableStateOf(false) }
     var pendingRouteIncidentId by remember { mutableStateOf<String?>(null) }
-
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                val navPrefs = context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
-                val pending = navPrefs.getBoolean("pending_en_route_check", false)
-                val incidentId = navPrefs.getString("pending_en_route_incident_id", null)
-
-                if (pending && !incidentId.isNullOrBlank()) {
-                    pendingRouteIncidentId = incidentId
-                    showCancelRouteDialog = true
-                }
-            }
-        }
-
-        lifecycleOwner.lifecycle.addObserver(observer)
-
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-        }
-    }
     var isLocationMonitoringEnabled by remember { mutableStateOf(false) }
-
-
-
     val storedPrefs      = context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
     val storedDepartment = storedPrefs.getString("department", null)
     val responderId = storedPrefs.getString("user_id", "")?.toIntOrNull() ?: 0
@@ -682,6 +691,7 @@ fun HomeScreen(
     var unitStatus by remember {
         mutableStateOf(storedPrefs.getString("unit_status", "available") ?: "available")
     }
+
 
     val assignedUi by assignedVm.ui.collectAsState()
     LaunchedEffect(assignedUi.incidents) {
@@ -759,6 +769,9 @@ fun HomeScreen(
     var showDepartmentSelection by remember { mutableStateOf(false) }
     var showSettingsDialog      by remember { mutableStateOf(false) }
     var showAllActiveDialog     by remember { mutableStateOf(false) }
+    var showAllBackupRequestsDialog by remember { mutableStateOf(false) }
+    var backupSearchQuery by remember { mutableStateOf("") }
+    var lastBackupUpdateTime by remember { mutableStateOf(java.util.Date()) }
     var activeFilter            by remember { mutableStateOf(ActivePriorityFilter.ALL) }
     var backupRequestsList by remember { mutableStateOf<List<com.ers.emergencyresponseapp.network.MyBackupRequestDto>>(emptyList()) }
     var dismissedBackupIds by remember {
@@ -781,6 +794,7 @@ fun HomeScreen(
         val repo = com.ers.emergencyresponseapp.data.IncidentRepository()
         while (true) {
             backupRequestsList = repo.getMyBackupRequests(responderId)
+            lastBackupUpdateTime = java.util.Date()
             delay(5000)
         }
     }
@@ -821,8 +835,7 @@ fun HomeScreen(
     val scope = rememberCoroutineScope()
     val pickProfilePhotoLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         if (uri != null) {
-            // Keep local copy for instant UI update
-            val stored = saveUriToAppStorage(context, uri) ?: uri.toString()
+            val stored = saveUriToAppStorage(context, uri, responderId) ?: uri.toString()
             accountPhotoUri = stored
             try { prefs.edit().putString("account_photo", accountPhotoUri).apply() } catch (_: Exception) {}
 
@@ -848,6 +861,7 @@ fun HomeScreen(
             }
         }
     }
+
 
     fun refreshHomeData() {
         if (isRefreshing) return
@@ -884,6 +898,7 @@ fun HomeScreen(
         )
     }
     var showLocationRationale by remember { mutableStateOf(false) }
+    var showCriticalGpsWarning by remember { mutableStateOf(false) }
     var hasPromptedLocationOnce by remember {
         mutableStateOf(prefs.getBoolean("location_permission_prompted", false))
     }
@@ -916,8 +931,32 @@ fun HomeScreen(
             }
         }
     }
-    var deviceLocationEnabled by remember {
-        mutableStateOf(isDeviceLocationEnabled(context))
+
+    DisposableEffect(lifecycleOwner) {
+
+        val observer = LifecycleEventObserver { _, event ->
+
+            if (event == Lifecycle.Event.ON_RESUME) {
+
+                resumedFromBackground = true
+
+                if (!isDeviceLocationEnabled(context)) {
+
+                    showLocationRationale = true
+
+                    showCriticalGpsWarning = false
+
+                }
+
+                resumedFromBackground = false
+            }
+        }
+
+        lifecycleOwner.lifecycle.addObserver(observer)
+
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
     }
 
     // ── Location Helper Functions ──
@@ -944,29 +983,49 @@ fun HomeScreen(
 
     LaunchedEffect(Unit) {
         while (true) {
+
             val enabledNow = isDeviceLocationEnabled(context)
 
-            deviceLocationEnabled = enabledNow
-
-            if (!enabledNow) {
-                // Location service turned OFF - stop monitoring
-                isLocationMonitoringEnabled = false
-                isLocationShared = false
-                prefs.edit()
-                    .putBoolean(locationMonitoringEnabledKey, false)
-                    .apply()
-            } else if (enabledNow && hasLocationPermission && !isLocationMonitoringEnabled) {
-                // Location service turned ON and we have permission - auto-resume monitoring
-                isLocationMonitoringEnabled = true
-                isLocationShared = true
-                prefs.edit()
-                    .putBoolean(locationMonitoringEnabledKey, true)
-                    .apply()
-                startLocationUpdates()
-                Toast.makeText(context, "Location service enabled - GPS monitoring resumed", Toast.LENGTH_SHORT).show()
+            // GPS turned OFF habang nasa loob ng app
+            if (wasGpsEnabled && !enabledNow && !resumedFromBackground) {
+                showCriticalGpsWarning = true
+                showLocationRationale = false
             }
 
+            // GPS turned back ON
+            if (!wasGpsEnabled && enabledNow) {
+                showCriticalGpsWarning = false
+            }
+
+            wasGpsEnabled = enabledNow
+            deviceLocationEnabled = enabledNow
+
             delay(1000)
+        }
+    }
+
+
+    DisposableEffect(lifecycleOwner) {
+
+        val observer = LifecycleEventObserver { _, event ->
+
+            if (event == Lifecycle.Event.ON_RESUME) {
+
+                resumedFromBackground = true
+
+                if (!isDeviceLocationEnabled(context)) {
+                    showLocationRationale = true
+                    showCriticalGpsWarning = false
+                }
+
+                resumedFromBackground = false
+            }
+        }
+
+        lifecycleOwner.lifecycle.addObserver(observer)
+
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
 
@@ -1110,8 +1169,6 @@ fun HomeScreen(
         }
     }
 
-    var showAlwaysLocationNotice by remember { mutableStateOf(false) }
-    var showCriticalGpsWarning by remember { mutableStateOf(false) }
 
     // Only show the "please turn location back on" banner once the responder
     // has already been through the initial permission prompt AND granted it.
@@ -1124,10 +1181,26 @@ fun HomeScreen(
                 !deviceLocationEnabled
     }
 
-    val backgroundLocationPermLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        showAlwaysLocationNotice = !granted
-        Toast.makeText(context, if (granted) "Always-on location enabled" else "Please enable 'Allow all the time' in App settings", if (granted) Toast.LENGTH_SHORT else Toast.LENGTH_LONG).show()
+
+    // ── NEW: notification permission, prompted once ──
+    var hasPromptedNotifOnce by remember {
+        mutableStateOf(prefs.getBoolean("notif_permission_prompted", false))
     }
+    val notifPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { _ ->
+        hasPromptedNotifOnce = true
+        prefs.edit().putBoolean("notif_permission_prompted", true).apply()
+    }
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            !hasPromptedNotifOnce &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+// ── end NEW ──
 
     val locationSettingsLauncher =
         rememberLauncherForActivityResult(
@@ -1138,8 +1211,6 @@ fun HomeScreen(
                 isDeviceLocationEnabled(context)
 
             if (deviceLocationEnabled && hasLocationPermission) {
-
-                showAlwaysLocationNotice = false
 
                 isLocationMonitoringEnabled = true
                 isLocationShared = true
@@ -1169,7 +1240,6 @@ fun HomeScreen(
                 prefs.edit().putBoolean(locationMonitoringEnabledKey, true).apply()
                 startLocationUpdates()
             }
-            showAlwaysLocationNotice = !hasAlwaysLocationPermission()
         } else {
             hasLocationPermission = false
             isLocationShared = false
@@ -1259,82 +1329,6 @@ fun HomeScreen(
                 .padding(paddingValues)
         ) {
 
-            if (showAlwaysLocationNotice) {
-                Popup(alignment = Alignment.TopCenter) {
-                    Box(
-                        modifier = Modifier.fillMaxWidth(),
-                        contentAlignment = Alignment.TopCenter
-                    ) {
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = Color(0xFFFFEEF3)
-                        ),
-                        border = BorderStroke(
-                            1.dp,
-                            Color(0xFFFFC2D1)
-                        )
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text(
-                                    "Enable background location",
-                                    fontWeight = FontWeight.SemiBold,
-                                    fontSize = 13.sp,
-                                    color = AppColors.Text
-                                )
-
-                                Text(
-                                    "Recommended for safer tracking.",
-                                    fontSize = 11.sp,
-                                    color = AppColors.TextSecondary
-                                )
-                            }
-
-                            TextButton(
-                                onClick = { showAlwaysLocationNotice = false }
-                            ) {
-                                Text("Later")
-                            }
-
-                            Button(
-                                onClick = {
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                                        context.startActivity(
-                                            Intent(
-                                                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                                                Uri.fromParts("package", context.packageName, null)
-                                            )
-                                        )
-                                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                        backgroundLocationPermLauncher.launch(
-                                            Manifest.permission.ACCESS_BACKGROUND_LOCATION
-                                        )
-                                    }
-                                },
-                                shape = RoundedCornerShape(999.dp)
-                            ) {
-                                Text(
-                                    "Open",
-                                    fontSize = 12.sp
-                                )
-                            }
-                        }
-                    }
-                    }
-                }
-
-            }
 
             // ============ CRITICAL GPS WARNING FOR RESPONDERS ============
             if (showCriticalGpsWarning) {
@@ -1588,7 +1582,6 @@ fun HomeScreen(
                 contentPadding = PaddingValues(
                     top = when {
                         showCriticalGpsWarning -> 110.dp
-                        showAlwaysLocationNotice -> 76.dp
                         showNewIncidentNotification -> 118.dp
                         else -> 0.dp
                     },
@@ -1930,46 +1923,93 @@ fun HomeScreen(
                                 }
                             }
                         }
-                        OutlinedButton(
-                            onClick = { showDepartmentSelection = true },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(14.dp),
-                            border = BorderStroke(1.dp, AppColors.Primary.copy(alpha = 0.45f)),
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = AppColors.Primary
-                            )
-                        ) {
-                            Icon(
-                                Icons.Default.LocalHospital,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-
-                            Spacer(Modifier.width(8.dp))
-
-                            Text(
-                                "Request Backup",
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
                     }
                 }
-                 if (visibleBackupRequests.isNotEmpty()) {
-                     item {
-                         Text(
-                             "My Backup Requests",
-                             style = MaterialTheme.typography.titleMedium,
-                             fontWeight = FontWeight.SemiBold,
-                             modifier = Modifier.padding(horizontal = 12.dp)
-                         )
-                     }
-                     items(visibleBackupRequests, key = { it.id }) { req ->
-                         BackupRequestStatusCard(
-                             department = req.requested_department,
-                             resources = req.resources,
-                             status = req.status,
-                             onDismiss = { dismissBackupRequest(req.id) }
-                         )
+
+                 item {
+                     Card(
+                         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                         shape = RoundedCornerShape(20.dp),
+                         colors = CardDefaults.cardColors(containerColor = Color.White),
+                         border = BorderStroke(1.dp, AppColors.Border),
+                         elevation = CardDefaults.cardElevation(1.dp)
+                     ) {
+                         Column(
+                             modifier = Modifier.fillMaxWidth().padding(16.dp),
+                             verticalArrangement = Arrangement.spacedBy(14.dp)
+                         ) {
+                             // Header row
+                             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                 Box(
+                                     modifier = Modifier
+                                         .size(44.dp)
+                                         .clip(RoundedCornerShape(12.dp))
+                                         .background(AppColors.Primary.copy(alpha = 0.10f)),
+                                     contentAlignment = Alignment.Center
+                                 ) {
+                                     Icon(Icons.Default.LocalHospital, contentDescription = null, tint = AppColors.Primary, modifier = Modifier.size(22.dp))
+                                 }
+                                 Spacer(Modifier.width(12.dp))
+                                 Column(modifier = Modifier.weight(1f)) {
+                                     Text("Backup Requests", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = AppColors.Text)
+                                     Text(
+                                         "${visibleBackupRequests.size} total • updated ${java.text.SimpleDateFormat("h:mm a", Locale.getDefault()).format(lastBackupUpdateTime)}",
+                                         fontSize = 12.sp,
+                                         color = AppColors.TextSecondary
+                                     )
+                                 }
+                                 IconButton(onClick = {
+                                     scope.launch {
+                                         backupRequestsList = com.ers.emergencyresponseapp.data.IncidentRepository().getMyBackupRequests(responderId)
+                                         lastBackupUpdateTime = java.util.Date()
+                                     }
+                                 }) {
+                                     Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = AppColors.TextSecondary)
+                                 }
+                             }
+
+                             HorizontalDivider()
+
+                             // Action buttons row
+                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                 Button(
+                                     onClick = { showDepartmentSelection = true },
+                                     modifier = Modifier.weight(1f).height(46.dp),
+                                     shape = RoundedCornerShape(14.dp),
+                                     colors = ButtonDefaults.buttonColors(containerColor = AppColors.Primary, contentColor = Color.White)
+                                 ) {
+                                     Text("+  Request Backup", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                 }
+                                 OutlinedButton(
+                                     onClick = { showAllBackupRequestsDialog = true },
+                                     modifier = Modifier.weight(1f).height(46.dp),
+                                     shape = RoundedCornerShape(14.dp),
+                                     border = BorderStroke(1.dp, AppColors.Border),
+                                     colors = ButtonDefaults.outlinedButtonColors(contentColor = AppColors.Text)
+                                 ) {
+                                     Text("View All", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                 }
+                             }
+
+                             if (visibleBackupRequests.isEmpty()) {
+                                 Text(
+                                     "No backup requests yet.",
+                                     color = AppColors.TextSecondary,
+                                     fontSize = 13.sp
+                                 )
+                             } else {
+                                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                     visibleBackupRequests.take(2).forEach { req ->
+                                         BackupRequestStatusCard(
+                                             department = req.requested_department,
+                                             resources = req.resources,
+                                             status = req.status,
+                                             onDismiss = { dismissBackupRequest(req.id) }
+                                         )
+                                     }
+                                 }
+                             }
+                         }
                      }
                  }
 
@@ -2465,6 +2505,66 @@ fun HomeScreen(
                     },
                     confirmButton = { TextButton(onClick = { showAllActiveDialog = false }) { Text("Close") } }
                 )
+            }
+
+            // ── ALL BACKUP REQUESTS DIALOG ──
+            if (showAllBackupRequestsDialog) {
+                Dialog(
+                    onDismissRequest = { showAllBackupRequestsDialog = false },
+                    properties = DialogProperties(usePlatformDefaultWidth = false)
+                ) {
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = Color(0xFFF5F7F7)
+                    ) {
+                        Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.Top
+                            ) {
+                                Column {
+                                    Text("All Backup Requests", fontWeight = FontWeight.Bold, fontSize = 22.sp, color = AppColors.Text)
+                                    Text("${visibleBackupRequests.size} total requests", fontSize = 13.sp, color = AppColors.TextSecondary)
+                                }
+                                IconButton(onClick = { showAllBackupRequestsDialog = false }) {
+                                    Icon(Icons.Default.Close, contentDescription = "Close")
+                                }
+                            }
+
+                            Spacer(Modifier.height(12.dp))
+
+                            OutlinedTextField(
+                                value = backupSearchQuery,
+                                onValueChange = { backupSearchQuery = it },
+                                placeholder = { Text("Search department or resource") },
+                                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                shape = RoundedCornerShape(14.dp)
+                            )
+
+                            Spacer(Modifier.height(12.dp))
+
+                            val filteredRequests = visibleBackupRequests.filter {
+                                backupSearchQuery.isBlank() ||
+                                        it.requested_department.contains(backupSearchQuery, ignoreCase = true) ||
+                                        it.resources.contains(backupSearchQuery, ignoreCase = true)
+                            }
+
+                            LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                items(filteredRequests, key = { it.id }) { req ->
+                                    BackupRequestStatusCard(
+                                        department = req.requested_department,
+                                        resources = req.resources,
+                                        status = req.status,
+                                        onDismiss = { dismissBackupRequest(req.id) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // ── MARK COMPLETE DIALOG ──

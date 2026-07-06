@@ -74,7 +74,7 @@ class LoginApiViewModel : ViewModel() {
         }
     }
 
-    fun verifyOtp(onSuccess: (String) -> Unit) {
+    fun verifyOtp(context: android.content.Context, onSuccess: (String) -> Unit) {
         val email = _uiState.value.email.trim()
         val otp   = _uiState.value.otp.trim()
 
@@ -106,6 +106,21 @@ class LoginApiViewModel : ViewModel() {
                     android.util.Log.d("LOGIN_DEBUG",
                         "id=${user?.id} name=${user?.name} role=${user?.role} department=${user?.department}")
                     if (user != null) {
+
+                        // ── ✅ NEW: persist resolved profile photo URL (or null) on EVERY login ──
+                        val resolvedPhotoUrl = resolveProfileImageUrl(user.profileImagePath)
+                        context.applicationContext
+                            .getSharedPreferences("user_prefs", android.content.Context.MODE_PRIVATE)
+                            .edit()
+                            .putString("user_id", user.id.toString())
+                            .apply()
+                        context.applicationContext
+                            .getSharedPreferences("ers_prefs", android.content.Context.MODE_PRIVATE)
+                            .edit()
+                            .putString("account_photo", resolvedPhotoUrl)
+                            .apply()
+                        // ── end NEW ──
+
                         viewModelScope.launch {
                         firebaseChatRepo.saveUserToFirebase(
                             userId     = user.id.toString(),        // MySQL user ID
@@ -161,6 +176,13 @@ class LoginApiViewModel : ViewModel() {
             }
         }
     }
+
+    private fun resolveProfileImageUrl(path: String?): String? {
+        if (path.isNullOrBlank()) return null
+        return if (path.startsWith("http", ignoreCase = true)) path
+        else "https://emergency-response.alertaraqc.com/${path.trimStart('/')}"
+    }
+
     private fun startResendTimer() {
         viewModelScope.launch {
             for (sec in 180 downTo 0) {

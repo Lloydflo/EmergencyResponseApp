@@ -129,6 +129,7 @@ fun LoginScreen(
                         Spacer(Modifier.height(8.dp))
 
                         val focusRequester = remember { FocusRequester() }
+                        val context = LocalContext.current
 
                         LaunchedEffect(Unit) {
                             focusRequester.requestFocus()
@@ -180,9 +181,10 @@ fun LoginScreen(
                         Spacer(Modifier.height(20.dp))
 
                         Button(
+
                             enabled = !uiState.loading && uiState.otp.length == 6,
                             onClick = {
-                                viewModel.verifyOtp { email ->
+                                viewModel.verifyOtp(context = context) { email ->
                                     val user = viewModel.uiState.value.loggedInUser
 
                                     context.getSharedPreferences("auth", Context.MODE_PRIVATE)
