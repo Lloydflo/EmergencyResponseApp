@@ -72,9 +72,9 @@ class IncidentRepository {
         }
     }
 
-    suspend fun getBackupRequestStatus(requestId: Int): BackupRequestStatusDto? {
+    suspend fun getBackupRequestStatus(requestId: Int, responderId: Int): BackupRequestStatusDto? {
         return try {
-            val response = api.getBackupRequestStatus(requestId)
+            val response = api.getBackupRequestStatus(requestId, responderId)
             if (response.success) response.request else null
         } catch (e: Exception) {
             null
@@ -154,6 +154,19 @@ class IncidentRepository {
             if (response.success) response.requests ?: emptyList() else emptyList()
         } catch (e: Exception) {
             emptyList()
+        }
+    }
+
+    suspend fun cancelBackupRequest(requestId: Int, responderId: Int): Result<String> {
+        return try {
+            val response = RetrofitProvider.incidentApi.cancelBackupRequest(requestId, responderId)
+            if (response.success) {
+                Result.success(response.message ?: "Cancelled")
+            } else {
+                Result.failure(Exception(response.message ?: "Failed to cancel"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
         }
     }
 

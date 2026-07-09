@@ -37,8 +37,9 @@ import android.util.Log
 import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.Alignment
 import android.view.MotionEvent
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.collectLatest
+import androidx.navigation.NavType
+import androidx.navigation.navArgument
+import com.ers.emergencyresponseapp.map.LiveRouteMapScreen
 import com.ers.emergencyresponseapp.firebase.ui.FirebaseChatScreen
 import com.ers.emergencyresponseapp.firebase.ui.ResponderListScreen
 import com.ers.emergencyresponseapp.firebase.repository.FirebaseChatRepository
@@ -191,7 +192,9 @@ class MainActivity : ComponentActivity() {
                             !hideBottomBarRoutes.contains(currentRoute) &&
                             !currentRoute.startsWith("responder_list/") &&
                             !currentRoute.startsWith("firebase_chat/") &&
+                            !currentRoute.startsWith("live_map/") &&
                             !(currentRoute == "coordination_portal" && isCoordinationChatOpen)
+
 
                     Scaffold(
                         bottomBar = {
@@ -355,6 +358,28 @@ class MainActivity : ComponentActivity() {
                                     FirebaseChatScreen(
                                         myUserId = myUserId,
                                         partnerUserId = partnerUserId,
+                                        onBack = { navController.popBackStack() }
+                                    )
+                                }
+
+                                // ── Live MapLibre navigation screen ───────────
+                                composable(
+                                    "live_map/{lat}/{lng}/{address}",
+                                    arguments = listOf(
+                                        navArgument("lat") { type = NavType.StringType },
+                                        navArgument("lng") { type = NavType.StringType },
+                                        navArgument("address") { type = NavType.StringType }
+                                    )
+                                ) { backStackEntry ->
+                                    val lat = backStackEntry.arguments?.getString("lat")?.toDoubleOrNull()
+                                    val lng = backStackEntry.arguments?.getString("lng")?.toDoubleOrNull()
+                                    val address = backStackEntry.arguments?.getString("address")
+
+                                    LiveRouteMapScreen(
+                                        modifier = Modifier.fillMaxSize(),
+                                        destinationLat = lat,
+                                        destinationLng = lng,
+                                        destinationAddress = address,
                                         onBack = { navController.popBackStack() }
                                     )
                                 }

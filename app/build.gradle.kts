@@ -16,16 +16,20 @@ android {
         applicationId = "com.ers.emergencyresponseapp"
         minSdk = 23
         targetSdk = 34
-        versionCode = 11
-        versionName = "5.5"
+        versionCode = 12
+        versionName = "6.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         buildConfigField(
             "String",
-            "BASE_URL",
-            "\"https://emergency-response.alertaraqc.com/\""
+            "MAPTILER_API_KEY",
+            "\"${project.findProperty("MAPTILER_API_KEY") ?: ""}\""
         )
+        buildConfigField(
+            "String",
+            "ORS_API_KEY",
+            "\"${project.findProperty("ORS_API_KEY") ?: ""}\"")
     }
 
     buildTypes {
@@ -92,6 +96,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.3")
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    implementation("org.maplibre.gl:android-sdk:11.11.0")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

@@ -127,6 +127,16 @@ data class MyBackupRequestsResponse(
     val requests: List<MyBackupRequestDto>? = null
 )
 
+data class CancelBackupRequestBody(
+    val request_id: Int,
+    val responder_id: Int
+)
+
+data class CancelBackupRequestResponse(
+    val success: Boolean,
+    val message: String?
+)
+
 interface IncidentApi {
 
     @GET("api/api_app/get-assigned-incidents.php")
@@ -193,7 +203,8 @@ interface IncidentApi {
 
     @GET("api/api_app/get-backup-request-status.php")
     suspend fun getBackupRequestStatus(
-        @Query("request_id") requestId: Int
+        @Query("request_id") requestId: Int,
+        @Query("responder_id") responderId: Int
     ): BackupRequestStatusResponse
 
     @FormUrlEncoded
@@ -231,4 +242,12 @@ interface IncidentApi {
     suspend fun getMyBackupRequests(
         @Query("responder_id") responderId: Int
     ): MyBackupRequestsResponse
+
+    @FormUrlEncoded
+    @POST("api/api_app/cancel-backup-request.php")
+    suspend fun cancelBackupRequest(
+        @Field("request_id") requestId: Int,
+        @Field("responder_id") responderId: Int
+    ): CancelBackupRequestResponse
+
 }

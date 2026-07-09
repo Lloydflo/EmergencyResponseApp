@@ -321,6 +321,25 @@ private fun timeAgoLabel(timeReported: java.util.Date): String {
     }
 }
 
+private fun isOlderThan24Hours(dateString: String?): Boolean {
+    if (dateString.isNullOrBlank()) return false
+    return try {
+        val formats = listOf("yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss")
+        var parsedDate: java.util.Date? = null
+        for (pattern in formats) {
+            try {
+                parsedDate = java.text.SimpleDateFormat(pattern, Locale.getDefault()).parse(dateString)
+                if (parsedDate != null) break
+            } catch (_: Exception) { }
+        }
+        val date = parsedDate ?: return false
+        val diffMs = System.currentTimeMillis() - date.time
+        diffMs > (24 * 60 * 60 * 1000L)
+    } catch (e: Exception) {
+        false
+    }
+}
+
 private enum class ActivePriorityFilter { ALL, HIGH, MEDIUM, LOW }
 
 // FIX 4: Stable incident sort comparator hoisted to top-level so it is not
@@ -562,9 +581,10 @@ private fun BackupRequestStatusCard(
     department: String,
     resources: String,
     status: String,
-    onDismiss: () -> Unit
+    onCancelClick: () -> Unit,
+    onRefreshClick: (() -> Unit)? = null
 ) {
-    val steps = listOf("Sent", "Under Review", "Approved")
+    val steps = listOf("Sent", "Review", "Approved")
     val currentStepIndex = when (status) {
         "pending"   -> 1
         "accepted"  -> 2
@@ -587,60 +607,83 @@ private fun BackupRequestStatusCard(
 
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = Color.White),
-        border = BorderStroke(1.dp, if (status == "pending") AppColors.Primary.copy(alpha = 0.45f) else AppColors.Border)
+        border = BorderStroke(1.dp, if (status == "pending") AppColors.Primary.copy(alpha = 0.35f) else AppColors.Border)
     ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(verticalAlignment = Alignment.Top) {
+        Column(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
-                    modifier = Modifier.size(40.dp).clip(CircleShape).background(AppColors.Primary.copy(alpha = 0.08f)),
+                    modifier = Modifier.size(30.dp).clip(CircleShape).background(AppColors.Primary.copy(alpha = 0.08f)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(Icons.Default.LocalHospital, contentDescription = null, tint = AppColors.Primary, modifier = Modifier.size(20.dp))
+                    Icon(Icons.Default.LocalHospital, contentDescription = null, tint = AppColors.Primary, modifier = Modifier.size(15.dp))
                 }
-                Spacer(Modifier.width(10.dp))
+                Spacer(Modifier.width(8.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(department, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = AppColors.Text)
-                    Text(resources, fontSize = 12.sp, color = AppColors.TextSecondary)
+                    Text(department, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = AppColors.Text)
+                    Text(resources, fontSize = 11.sp, color = AppColors.TextSecondary)
+                }
+                if (onRefreshClick != null) {
+                    IconButton(onClick = onRefreshClick, modifier = Modifier.size(24.dp)) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Refresh status", tint = AppColors.TextSecondary, modifier = Modifier.size(14.dp))
+                    }
+                    Spacer(Modifier.width(4.dp))
                 }
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(999.dp))
                         .background(badgeColor.copy(alpha = 0.12f))
-                        .border(1.dp, badgeColor.copy(alpha = 0.5f), RoundedCornerShape(999.dp))
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
-                    Text(badgeText, color = badgeColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text(badgeText, color = badgeColor, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                 }
             }
 
             if (isDeclined || isCancelled) {
                 Text(
-                    if (isDeclined) "This request was declined by dispatch" else "This request was cancelled",
+                    if (isDeclined) "Declined by dispatch" else "Request cancelled",
                     color = if (isDeclined) Color(0xFFD32F2F) else AppColors.TextSecondary,
-                    fontSize = 13.sp
+                    fontSize = 11.sp
                 )
             } else {
-                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    steps.forEachIndexed { index, label ->
-                        val isDone = index <= currentStepIndex
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    // Dots + connector track
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        steps.forEachIndexed { index, _ ->
+                            val isDone = index <= currentStepIndex
                             Box(
                                 modifier = Modifier
-                                    .size(10.dp)
+                                    .size(8.dp)
                                     .clip(CircleShape)
                                     .background(if (isDone) AppColors.Primary else AppColors.Border)
                             )
-                            Spacer(Modifier.height(4.dp))
-                            Text(label, fontSize = 10.sp, color = if (isDone) AppColors.Primary else AppColors.TextSecondary)
+                            if (index < steps.size - 1) {
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(2.dp)
+                                        .background(if (index < currentStepIndex) AppColors.Primary else AppColors.Border)
+                                )
+                            }
                         }
-                        if (index < steps.size - 1) {
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(2.dp)
-                                    .background(if (index < currentStepIndex) AppColors.Primary else AppColors.Border)
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    // Labels aligned under each dot
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        steps.forEachIndexed { index, label ->
+                            val isDone = index <= currentStepIndex
+                            Text(
+                                label,
+                                fontSize = 9.sp,
+                                fontWeight = if (index == currentStepIndex) FontWeight.SemiBold else FontWeight.Normal,
+                                color = if (isDone) AppColors.Primary else AppColors.TextSecondary,
+                                modifier = Modifier.weight(1f),
+                                textAlign = when (index) {
+                                    0 -> TextAlign.Start
+                                    steps.size - 1 -> TextAlign.End
+                                    else -> TextAlign.Center
+                                }
                             )
                         }
                     }
@@ -649,9 +692,13 @@ private fun BackupRequestStatusCard(
 
             if (status == "pending") {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = onDismiss) {
-                        Text("Cancel", color = Color(0xFFD32F2F), fontWeight = FontWeight.SemiBold)
-                    }
+                    Text(
+                        "Cancel",
+                        color = Color(0xFFD32F2F),
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 12.sp,
+                        modifier = Modifier.clickable { onCancelClick() }
+                    )
                 }
             }
         }
@@ -770,6 +817,8 @@ fun HomeScreen(
     var showSettingsDialog      by remember { mutableStateOf(false) }
     var showAllActiveDialog     by remember { mutableStateOf(false) }
     var showAllBackupRequestsDialog by remember { mutableStateOf(false) }
+    var showCancelBackupConfirm by remember { mutableStateOf(false) }
+    var pendingCancelBackupId by remember { mutableStateOf<Int?>(null) }
     var backupSearchQuery by remember { mutableStateOf("") }
     var lastBackupUpdateTime by remember { mutableStateOf(java.util.Date()) }
     var activeFilter            by remember { mutableStateOf(ActivePriorityFilter.ALL) }
@@ -780,13 +829,6 @@ fun HomeScreen(
                 .mapNotNull { it.toIntOrNull() }
                 .toMutableSet()
         )
-    }
-
-    fun dismissBackupRequest(id: Int) {
-        dismissedBackupIds = (dismissedBackupIds + id).toMutableSet()
-        prefs.edit()
-            .putStringSet("dismissed_backup_request_ids", dismissedBackupIds.map { it.toString() }.toSet())
-            .apply()
     }
 
     LaunchedEffect(responderId) {
@@ -800,7 +842,11 @@ fun HomeScreen(
     }
 
     val visibleBackupRequests = remember(backupRequestsList, dismissedBackupIds) {
-        backupRequestsList.filter { it.id !in dismissedBackupIds }
+        backupRequestsList.filter { req ->
+            val manuallyDismissed = req.id in dismissedBackupIds
+            val autoHiddenAsOldCancelled = req.status == "cancelled" && isOlderThan24Hours(req.updated_at)
+            !manuallyDismissed && !autoHiddenAsOldCancelled
+        }
     }
 
     // Mark-complete state
@@ -828,11 +874,67 @@ fun HomeScreen(
         }
     }
 
-    val activeIncidents = assignedUi.activeIncidents.map { it.toDomain() }
+    val rawActiveIncidents = assignedUi.activeIncidents.map { it.toDomain() }
+    var stableActiveIncidents by remember { mutableStateOf<List<Incident>>(emptyList()) }
+    var activeEmptyStreak by remember { mutableStateOf(0) }
+
+    LaunchedEffect(rawActiveIncidents) {
+        if (rawActiveIncidents.isNotEmpty()) {
+            activeEmptyStreak = 0
+            stableActiveIncidents = rawActiveIncidents
+        } else {
+            activeEmptyStreak++
+            // Only treat as "truly empty" after 2 consecutive empty polls (~10s),
+            // so a single transient/glitchy empty response doesn't flicker the UI.
+            if (activeEmptyStreak >= 2) {
+                stableActiveIncidents = emptyList()
+            }
+        }
+    }
+
+    val activeIncidents = stableActiveIncidents
     var isLoading by remember { mutableStateOf(false) }
     var isRefreshing by remember { mutableStateOf(false) }
     var showNotificationsDialog by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    fun cancelBackupRequest(id: Int) {
+        scope.launch {
+            val repo = com.ers.emergencyresponseapp.data.IncidentRepository()
+            val result = repo.cancelBackupRequest(requestId = id, responderId = responderId)
+
+            result.onSuccess {
+                backupRequestsList = repo.getMyBackupRequests(responderId)
+                lastBackupUpdateTime = java.util.Date()
+                Toast.makeText(context, "Backup request cancelled", Toast.LENGTH_SHORT).show()
+            }.onFailure { error ->
+                Toast.makeText(context, "Failed to cancel: ${error.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    fun refreshSingleBackupRequest(requestId: Int) {
+        scope.launch {
+            val repo = com.ers.emergencyresponseapp.data.IncidentRepository()
+            val updated = repo.getBackupRequestStatus(requestId, responderId)
+
+            if (updated != null) {
+                backupRequestsList = backupRequestsList.map { existing ->
+                    if (existing.id == updated.id) {
+                        existing.copy(
+                            status = updated.status,
+                            resources = updated.resources,
+                            requested_department = updated.requested_department,
+                            is_full_backup = updated.is_full_backup,
+                            updated_at = updated.updated_at
+                        )
+                    } else existing
+                }
+                lastBackupUpdateTime = java.util.Date()
+            } else {
+                Toast.makeText(context, "Unable to refresh this request", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
     val pickProfilePhotoLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         if (uri != null) {
             val stored = saveUriToAppStorage(context, uri, responderId) ?: uri.toString()
@@ -1030,32 +1132,35 @@ fun HomeScreen(
     }
 
 
-    fun navigateToLocation(lat: Double?, lng: Double?, address: String?) {
-        try {
-            val navPrefs = context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
-            if (lat != null && lng != null) navPrefs.edit().putString("last_nav_lat", lat.toString()).putString("last_nav_lng", lng.toString()).putString("last_nav_addr", address).apply()
-            else if (!address.isNullOrBlank()) navPrefs.edit().putString("last_nav_lat", "").putString("last_nav_lng", "").putString("last_nav_addr", address).apply()
+    fun navigateToLocation(lat: Double?, lng: Double?, address: String?, incidentId: String? = null) {
+        val navPrefs = context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
 
-            val rLat  = lat  ?: navPrefs.getString("last_nav_lat", "")?.toDoubleOrNull()
-            val rLng  = lng  ?: navPrefs.getString("last_nav_lng", "")?.toDoubleOrNull()
-            val rAddr = address ?: navPrefs.getString("last_nav_addr", null)
+        if (lat != null && lng != null) {
+            navPrefs.edit()
+                .putString("last_nav_lat", lat.toString())
+                .putString("last_nav_lng", lng.toString())
+                .putString("last_nav_addr", address)
+                .apply()
+            navController.navigate(
+                "live_map/$lat/$lng/${Uri.encode(address ?: "")}" +
+                        "?incidentId=${Uri.encode(incidentId ?: "")}&responderId=$responderId"
+            )
+            return
+        }
 
-            if (rLat != null && rLng != null) {
-                val intent = Intent(Intent.ACTION_VIEW, "google.navigation:q=$rLat,$rLng".toUri()).apply { setPackage("com.google.android.apps.maps") }
-                if (context.packageManager.resolveActivity(intent, 0) != null) {
-                    val act = context as? Activity
-                    if (act != null) act.startActivity(intent) else { intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); context.startActivity(intent) }
-                    return
-                }
-                val geo = Intent(Intent.ACTION_VIEW, "geo:$rLat,$rLng?q=$rLat,$rLng(${Uri.encode(rAddr ?: "Incident")})".toUri())
-                if (context.packageManager.resolveActivity(geo, 0) != null) { context.startActivity(geo); return }
-            }
-            if (!rAddr.isNullOrBlank()) {
-                val intent = Intent(Intent.ACTION_VIEW, "google.navigation:q=${Uri.encode(rAddr)}".toUri()).apply { setPackage("com.google.android.apps.maps") }
-                if (context.packageManager.resolveActivity(intent, 0) != null) { context.startActivity(intent); return }
-            }
-            Toast.makeText(context, "No location available for navigation", Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) { Toast.makeText(context, "Unable to open navigation", Toast.LENGTH_SHORT).show() }
+        val rLat = navPrefs.getString("last_nav_lat", "")?.toDoubleOrNull()
+        val rLng = navPrefs.getString("last_nav_lng", "")?.toDoubleOrNull()
+        val rAddr = address ?: navPrefs.getString("last_nav_addr", null)
+
+        if (rLat != null && rLng != null) {
+            navController.navigate(
+                "live_map/$rLat/$rLng/${Uri.encode(rAddr ?: "")}" +
+                        "?incidentId=${Uri.encode(incidentId ?: "")}&responderId=$responderId"
+            )
+            return
+        }
+
+        Toast.makeText(context, "No location available for navigation", Toast.LENGTH_SHORT).show()
     }
 
     fun sendOnSceneReport(incident: Incident) {
@@ -1452,11 +1557,12 @@ fun HomeScreen(
                 }
 
 
-            // FIX 7: Use derivedStateOf for count values so recomposition only triggers
-            // when the actual count changes, not on every activeIncidents reference change.
-            val fireCount    by remember { derivedStateOf { activeIncidents.count { it.type == IncidentType.FIRE } } }
-            val medicalCount by remember { derivedStateOf { activeIncidents.count { it.type == IncidentType.MEDICAL } } }
-            val crimeCount   by remember { derivedStateOf { activeIncidents.count { it.type == IncidentType.CRIME } } }
+            // FIX 7: Recompute counts whenever activeIncidents changes.
+            // (Previously this used remember{} with no key, so it captured
+            // activeIncidents only once and never updated after that.)
+            val fireCount    = remember(activeIncidents) { activeIncidents.count { it.type == IncidentType.FIRE } }
+            val medicalCount = remember(activeIncidents) { activeIncidents.count { it.type == IncidentType.MEDICAL } }
+            val crimeCount   = remember(activeIncidents) { activeIncidents.count { it.type == IncidentType.CRIME } }
 
 
             val assignedListForRole =
@@ -1929,65 +2035,70 @@ fun HomeScreen(
                  item {
                      Card(
                          modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-                         shape = RoundedCornerShape(20.dp),
+                         shape = RoundedCornerShape(16.dp),
                          colors = CardDefaults.cardColors(containerColor = Color.White),
                          border = BorderStroke(1.dp, AppColors.Border),
                          elevation = CardDefaults.cardElevation(1.dp)
                      ) {
                          Column(
-                             modifier = Modifier.fillMaxWidth().padding(16.dp),
-                             verticalArrangement = Arrangement.spacedBy(14.dp)
+                             modifier = Modifier.fillMaxWidth().padding(14.dp),
+                             verticalArrangement = Arrangement.spacedBy(10.dp)
                          ) {
                              // Header row
                              Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                                  Box(
                                      modifier = Modifier
-                                         .size(44.dp)
-                                         .clip(RoundedCornerShape(12.dp))
+                                         .size(34.dp)
+                                         .clip(RoundedCornerShape(10.dp))
                                          .background(AppColors.Primary.copy(alpha = 0.10f)),
                                      contentAlignment = Alignment.Center
                                  ) {
-                                     Icon(Icons.Default.LocalHospital, contentDescription = null, tint = AppColors.Primary, modifier = Modifier.size(22.dp))
+                                     Icon(Icons.Default.LocalHospital, contentDescription = null, tint = AppColors.Primary, modifier = Modifier.size(16.dp))
                                  }
-                                 Spacer(Modifier.width(12.dp))
+                                 Spacer(Modifier.width(10.dp))
                                  Column(modifier = Modifier.weight(1f)) {
-                                     Text("Backup Requests", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = AppColors.Text)
+                                     Text("Backup Requests", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = AppColors.Text)
                                      Text(
-                                         "${visibleBackupRequests.size} total • updated ${java.text.SimpleDateFormat("h:mm a", Locale.getDefault()).format(lastBackupUpdateTime)}",
-                                         fontSize = 12.sp,
+                                         "${visibleBackupRequests.size} total • ${java.text.SimpleDateFormat("h:mm a", Locale.getDefault()).format(lastBackupUpdateTime)}",
+                                         fontSize = 11.sp,
                                          color = AppColors.TextSecondary
                                      )
                                  }
-                                 IconButton(onClick = {
-                                     scope.launch {
-                                         backupRequestsList = com.ers.emergencyresponseapp.data.IncidentRepository().getMyBackupRequests(responderId)
-                                         lastBackupUpdateTime = java.util.Date()
-                                     }
-                                 }) {
-                                     Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = AppColors.TextSecondary)
+                                 IconButton(
+                                     onClick = {
+                                         scope.launch {
+                                             backupRequestsList = com.ers.emergencyresponseapp.data.IncidentRepository().getMyBackupRequests(responderId)
+                                             lastBackupUpdateTime = java.util.Date()
+                                         }
+                                     },
+                                     modifier = Modifier.size(32.dp)
+                                 ) {
+                                     Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = AppColors.TextSecondary, modifier = Modifier.size(18.dp))
                                  }
                              }
 
-                             HorizontalDivider()
-
                              // Action buttons row
-                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                  Button(
                                      onClick = { showDepartmentSelection = true },
-                                     modifier = Modifier.weight(1f).height(46.dp),
-                                     shape = RoundedCornerShape(14.dp),
+                                     modifier = Modifier.weight(1f).height(38.dp),
+                                     shape = RoundedCornerShape(10.dp),
+                                     contentPadding = PaddingValues(horizontal = 8.dp),
                                      colors = ButtonDefaults.buttonColors(containerColor = AppColors.Primary, contentColor = Color.White)
                                  ) {
-                                     Text("+  Request Backup", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                     Icon(Icons.Default.LocalHospital, contentDescription = null, modifier = Modifier.size(14.dp))
+                                     Spacer(Modifier.width(6.dp))
+                                     Text("Request Backup", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
                                  }
                                  OutlinedButton(
                                      onClick = { showAllBackupRequestsDialog = true },
-                                     modifier = Modifier.weight(1f).height(46.dp),
-                                     shape = RoundedCornerShape(14.dp),
+                                     modifier = Modifier.weight(1f).height(38.dp),
+                                     shape = RoundedCornerShape(10.dp),
+                                     contentPadding = PaddingValues(horizontal = 8.dp),
                                      border = BorderStroke(1.dp, AppColors.Border),
                                      colors = ButtonDefaults.outlinedButtonColors(contentColor = AppColors.Text)
                                  ) {
-                                     Text("View All", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                     Text("View All", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
                                  }
                              }
 
@@ -1995,16 +2106,20 @@ fun HomeScreen(
                                  Text(
                                      "No backup requests yet.",
                                      color = AppColors.TextSecondary,
-                                     fontSize = 13.sp
+                                     fontSize = 12.sp
                                  )
                              } else {
-                                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                      visibleBackupRequests.take(2).forEach { req ->
                                          BackupRequestStatusCard(
                                              department = req.requested_department,
                                              resources = req.resources,
                                              status = req.status,
-                                             onDismiss = { dismissBackupRequest(req.id) }
+                                             onCancelClick = {
+                                                 pendingCancelBackupId = req.id
+                                                 showCancelBackupConfirm = true
+                                             },
+                                             onRefreshClick = { refreshSingleBackupRequest(req.id) }
                                          )
                                      }
                                  }
@@ -2558,13 +2673,57 @@ fun HomeScreen(
                                         department = req.requested_department,
                                         resources = req.resources,
                                         status = req.status,
-                                        onDismiss = { dismissBackupRequest(req.id) }
+                                        onCancelClick = {
+                                            pendingCancelBackupId = req.id
+                                            showCancelBackupConfirm = true
+                                        },
+                                        onRefreshClick = { refreshSingleBackupRequest(req.id) }
                                     )
                                 }
                             }
                         }
                     }
                 }
+            }
+            // ── CANCEL BACKUP REQUEST CONFIRMATION ──
+            if (showCancelBackupConfirm && pendingCancelBackupId != null) {
+                AlertDialog(
+                    onDismissRequest = {
+                        showCancelBackupConfirm = false
+                        pendingCancelBackupId = null
+                    },
+                    shape = RoundedCornerShape(20.dp),
+                    icon = { Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFD32F2F)) },
+                    title = { Text("Cancel Backup Request?", fontWeight = FontWeight.Bold) },
+                    text = {
+                        Text(
+                            "This will cancel your backup request. This action cannot be undone.",
+                            color = AppColors.TextSecondary
+                        )
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                pendingCancelBackupId?.let { id -> cancelBackupRequest(id) }
+                                showCancelBackupConfirm = false
+                                pendingCancelBackupId = null
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F))
+                        ) {
+                            Text("Yes, Cancel", color = Color.White)
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = {
+                                showCancelBackupConfirm = false
+                                pendingCancelBackupId = null
+                            }
+                        ) {
+                            Text("Keep Request")
+                        }
+                    }
+                )
             }
 
             // ── MARK COMPLETE DIALOG ──
