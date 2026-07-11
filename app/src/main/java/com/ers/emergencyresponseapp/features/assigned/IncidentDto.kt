@@ -25,6 +25,7 @@ data class IncidentDto(
 fun IncidentDto.toDomain(): Incident {
     return Incident(
         id = this.id,
+        assignmentId = this.assignment_id,
         type = IncidentType.entries.firstOrNull {
             it.name.equals(this.type.trim(), ignoreCase = true)
         } ?: IncidentType.MEDICAL,

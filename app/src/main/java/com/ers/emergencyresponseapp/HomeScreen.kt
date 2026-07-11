@@ -280,25 +280,6 @@ private fun startRouteUpdateMonitoring(
     ContextCompat.startForegroundService(context, intent)
 }
 
-private fun openMapPin(context: Context, lat: Double?, lng: Double?, address: String?) {
-    try {
-        val primaryUri = when {
-            !address.isNullOrBlank() -> "geo:0,0?q=${Uri.encode(address)}".toUri()
-            lat != null && lng != null -> "geo:$lat,$lng?q=$lat,$lng(${Uri.encode(address ?: "Incident")})".toUri()
-            else -> null
-        }
-        if (primaryUri != null) {
-            val mapIntent = Intent(Intent.ACTION_VIEW, primaryUri).apply { setPackage("com.google.android.apps.maps") }
-            if (context.packageManager.resolveActivity(mapIntent, 0) != null) { context.startActivity(mapIntent); return }
-            val fallback = Intent(Intent.ACTION_VIEW, primaryUri)
-            if (context.packageManager.resolveActivity(fallback, 0) != null) { context.startActivity(fallback); return }
-        }
-        Toast.makeText(context, "No map application available", Toast.LENGTH_SHORT).show()
-    } catch (e: Exception) {
-        Toast.makeText(context, "Unable to open map", Toast.LENGTH_SHORT).show()
-    }
-}
-
 private fun formatUnitStatus(status: String): String {
     return when (status.lowercase()) {
         "available" -> "Available"
@@ -440,7 +421,8 @@ private fun AssignedActionButtons(
     setNavTarget: (id: String, lat: Double?, lng: Double?) -> Unit,
     startOnSceneTracking: () -> Unit,
     requestOnScenePermission: () -> Unit,
-    navigateToLocation: (Double?, Double?, String?) -> Unit,
+    // AssignedActionButtons signature
+    navigateToLocation: (Double?, Double?, String?, String?, String?) -> Unit,
     sendOnSceneReport: (Incident) -> Unit,
     hasLocationPermission: Boolean,
     openMarkDone: (Incident) -> Unit,
@@ -474,7 +456,8 @@ private fun AssignedActionButtons(
                     requestOnScenePermission()
                 setOnSceneEnabled(false)
 
-                navigateToLocation(inc.latitude, inc.longitude, inc.location)
+                // inside AssignedActionButtons's "Navigate to Incident" onClick
+                navigateToLocation(inc.latitude, inc.longitude, inc.location, inc.id, inc.assignmentId)
                 context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
                     .edit()
                     .putBoolean("pending_en_route_check", true)
@@ -491,41 +474,20 @@ private fun AssignedActionButtons(
             Text("Navigate to Incident", fontWeight = FontWeight.SemiBold)
         }
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        Button(
+            onClick = { openMarkDone(inc) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp),
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color(0xFF2E7D32),
+                contentColor = Color.White
+            )
         ) {
-            OutlinedButton(
-                onClick = {
-                    sendOnSceneReport(inc)
-                    setOnSceneEnabled(false)
-                },
-                enabled = onSceneEnabled,
-                modifier = Modifier
-                    .weight(1f)
-                    .height(48.dp),
-                shape = RoundedCornerShape(14.dp)
-            ) {
-                Icon(Icons.Default.MyLocation, contentDescription = null)
-                Spacer(Modifier.width(6.dp))
-                Text("On Scene", fontSize = 13.sp)
-            }
-
-            Button(
-                onClick = { openMarkDone(inc) },
-                modifier = Modifier
-                    .weight(1f)
-                    .height(48.dp),
-                shape = RoundedCornerShape(14.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF2E7D32),
-                    contentColor = Color.White
-                )
-            ) {
-                Icon(Icons.Default.Done, contentDescription = null)
-                Spacer(Modifier.width(6.dp))
-                Text("Complete", fontSize = 13.sp)
-            }
+            Icon(Icons.Default.Done, contentDescription = null)
+            Spacer(Modifier.width(6.dp))
+            Text("Complete", fontSize = 13.sp)
         }
     }
 }
@@ -536,45 +498,6 @@ private fun AssignedActionButtons(
 // ─────────────────────────────────────────────────────────────────────────────
 // EMERGENCY REQUEST CARD  (incoming backup requests)
 // ─────────────────────────────────────────────────────────────────────────────
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun EmergencyRequestCard(request: EmergencyRequest, showBackupBadge: Boolean = false) {
-    Card(modifier = Modifier.fillMaxWidth(), elevation = CardDefaults.cardElevation(1.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.LocalHospital, contentDescription = request.type, tint = MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.width(8.dp))
-                Text(request.type, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
-                Spacer(Modifier.weight(1f))
-                if (showBackupBadge) {
-                    Box(modifier = Modifier.background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.08f), RoundedCornerShape(8.dp)).padding(horizontal = 8.dp, vertical = 4.dp)) {
-                        Text("Backup", color = MaterialTheme.colorScheme.secondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                    }
-                    Spacer(Modifier.width(8.dp))
-                }
-                Badge(containerColor = request.priority.color) {
-                    Text(request.priority.name, color = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp), fontSize = 12.sp)
-                }
-            }
-            Spacer(Modifier.height(6.dp))
-            Text("${request.distance} • ${request.timestamp}", color = MaterialTheme.colorScheme.onSurface)
-            if (showBackupBadge) {
-                Spacer(Modifier.height(4.dp))
-                Text(request.address ?: "Address unknown", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            Spacer(Modifier.height(8.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                val ctx = LocalContext.current
-                OutlinedButton(onClick = { openMapPin(ctx, request.latitude, request.longitude, request.address) }, modifier = Modifier.height(36.dp)) { Text("View") }
-                if (!showBackupBadge) {
-                    Spacer(Modifier.width(8.dp))
-                    OutlinedButton(onClick = { }, modifier = Modifier.height(36.dp)) { Text("Accept") }
-                }
-            }
-        }
-    }
-}
 
 @Composable
 private fun BackupRequestStatusCard(
@@ -727,8 +650,6 @@ fun HomeScreen(
         mutableStateOf(isDeviceLocationEnabled(context))
     }
     val lifecycleOwner = LocalLifecycleOwner.current
-    var showCancelRouteDialog by remember { mutableStateOf(false) }
-    var pendingRouteIncidentId by remember { mutableStateOf<String?>(null) }
     var isLocationMonitoringEnabled by remember { mutableStateOf(false) }
     val storedPrefs      = context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
     val storedDepartment = storedPrefs.getString("department", null)
@@ -1016,7 +937,34 @@ fun HomeScreen(
     val locationCallback = remember {
         object : LocationCallback() {
             override fun onLocationResult(r: LocationResult) {
-                r.lastLocation?.let { currentLatitude = it.latitude; currentLongitude = it.longitude }
+                r.lastLocation?.let { loc ->
+                    currentLatitude = loc.latitude
+                    currentLongitude = loc.longitude
+
+                    // Only push idle presence when NOT actively en route —
+                    // RouteMonitoringService already owns the node during navigation.
+                    if (!RouteMonitoringService.isRunning && responderId > 0) {
+                        val dbRef = com.google.firebase.database.FirebaseDatabase.getInstance()
+                            .getReference("live_locations")
+                            .child("responder_$responderId")
+                        dbRef.updateChildren(
+                            mapOf(
+                                "responderId" to responderId.toString(),
+                                "responderName" to responderName,
+                                "department" to (effectiveRole ?: ""),
+                                "unitCode" to unitCode,
+                                "unitType" to unitType,
+                                "lat" to loc.latitude,
+                                "lng" to loc.longitude,
+                                "heading" to loc.bearing,
+                                "speed" to loc.speed,
+                                "status" to "available",
+                                "updatedAt" to System.currentTimeMillis()
+                            )
+                        )
+                        dbRef.onDisconnect().updateChildren(mapOf("status" to "offline"))
+                    }
+                }
             }
         }
     }
@@ -1132,7 +1080,14 @@ fun HomeScreen(
     }
 
 
-    fun navigateToLocation(lat: Double?, lng: Double?, address: String?, incidentId: String? = null) {
+    fun navigateToLocation(
+        lat: Double?,
+        lng: Double?,
+        address: String?,
+        incidentId: String? = null,
+        assignmentId: String? = null,
+        viewOnly: Boolean = false
+    ) {
         val navPrefs = context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
 
         if (lat != null && lng != null) {
@@ -1143,7 +1098,9 @@ fun HomeScreen(
                 .apply()
             navController.navigate(
                 "live_map/$lat/$lng/${Uri.encode(address ?: "")}" +
-                        "?incidentId=${Uri.encode(incidentId ?: "")}&responderId=$responderId"
+                        "?incidentId=${Uri.encode(incidentId ?: "")}" +
+                        "&assignmentId=${Uri.encode(assignmentId ?: "")}" +
+                        "&responderId=$responderId&viewOnly=$viewOnly"
             )
             return
         }
@@ -1155,7 +1112,9 @@ fun HomeScreen(
         if (rLat != null && rLng != null) {
             navController.navigate(
                 "live_map/$rLat/$rLng/${Uri.encode(rAddr ?: "")}" +
-                        "?incidentId=${Uri.encode(incidentId ?: "")}&responderId=$responderId"
+                        "?incidentId=${Uri.encode(incidentId ?: "")}" +
+                        "&assignmentId=${Uri.encode(assignmentId ?: "")}" +
+                        "&responderId=$responderId&viewOnly=$viewOnly"
             )
             return
         }
@@ -1165,8 +1124,9 @@ fun HomeScreen(
 
     fun sendOnSceneReport(incident: Incident) {
         try {
+            // sendOnSceneReport(incident)
             assignedVm.updateStatus(
-                assignmentId = incident.id,
+                assignmentId = incident.assignmentId ?: incident.id,
                 status = "on_scene",
                 responderId = responderId
             )
@@ -1233,7 +1193,8 @@ fun HomeScreen(
 
         scope.launch {
             try {
-                val assignmentIdBody = stringToRequestBody(incident.id)
+                // markIncidentDone(...)
+                val assignmentIdBody = stringToRequestBody(incident.assignmentId ?: incident.id)
                 val responderIdBody = stringToRequestBody(responderId.toString())
                 val notesBody = stringToRequestBody(notes)
                 val imagePart = uriStringToMultipartPart(context, "proof_image", "completion_proof", proofUri)
@@ -1679,6 +1640,20 @@ fun HomeScreen(
                 }
             }
 
+            // Add near the other LaunchedEffects, after hasLocationPermission/deviceLocationEnabled are declared
+            LaunchedEffect(hasLocationPermission, deviceLocationEnabled) {
+                if (hasLocationPermission && deviceLocationEnabled) {
+                    isLocationMonitoringEnabled = true
+                    isLocationShared = true
+                    prefs.edit().putBoolean(locationMonitoringEnabledKey, true).apply()
+                    startLocationUpdates()
+                } else {
+                    isLocationMonitoringEnabled = false
+                    isLocationShared = false
+                    stopLocationUpdates()
+                }
+            }
+
 
              LazyColumn(
                 state = listState,
@@ -2013,12 +1988,16 @@ fun HomeScreen(
                                             setNavTarget = { id, lat, lng -> navDestinationIncidentId = id; navDestinationLat = lat; navDestinationLng = lng },
                                             startOnSceneTracking = { startOnSceneTracking() },
                                             requestOnScenePermission = { onScenePermLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION) },
-                                            navigateToLocation = { lat, lng, addr -> navigateToLocation(lat, lng, addr) },
+                                            // HomeScreen.kt wiring
+                                            navigateToLocation = { lat, lng, addr, incId, assignId ->
+                                                navigateToLocation(lat, lng, addr, incidentId = incId, assignmentId = assignId)
+                                            },
                                             sendOnSceneReport = { sendOnSceneReport(it) },
                                             openMarkDone = { markTargetIncidentInc = it; proofNotes = ""; selectedProofUri = null; showMarkCompleteDialog = true },
+                                            // AssignedActionButtons's onNavigateStatusUpdate
                                             onNavigateStatusUpdate = {
                                                 assignedVm.updateStatus(
-                                                    assignmentId = it.id,
+                                                    assignmentId = it.assignmentId ?: it.id,
                                                     status = "en_route",
                                                     responderId = responderId
                                                 )
@@ -2476,113 +2455,6 @@ fun HomeScreen(
                 }
             } // end LazyColumn
 
-            if (showCancelRouteDialog && pendingRouteIncidentId != null) {
-                Dialog(
-                    onDismissRequest = { showCancelRouteDialog = false }
-                ) {
-                    Card(
-                        shape = RoundedCornerShape(24.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = Color.White
-                        ),
-                        elevation = CardDefaults.cardElevation(12.dp)
-                    ) {
-
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(24.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-
-                            Icon(
-                                imageVector = Icons.Default.Navigation,
-                                contentDescription = null,
-                                tint = Color(0xFF0F766E),
-                                modifier = Modifier.size(48.dp)
-                            )
-
-                            Spacer(Modifier.height(16.dp))
-
-                            Text(
-                                text = "Navigation Check",
-                                fontSize = 22.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF111827)
-                            )
-
-                            Spacer(Modifier.height(8.dp))
-
-                            Text(
-                                text = "We detected that you exited navigation.\nAre you still responding to this incident?",
-                                textAlign = TextAlign.Center,
-                                color = Color.Gray,
-                                fontSize = 15.sp
-                            )
-
-                            Spacer(Modifier.height(24.dp))
-
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-
-                                OutlinedButton(
-                                    modifier = Modifier.weight(1f),
-                                    onClick = {
-                                        val id = pendingRouteIncidentId ?: return@OutlinedButton
-
-                                        assignedVm.updateStatus(
-                                            assignmentId = id,
-                                            status = "received",
-                                            responderId = responderId
-                                        )
-
-                                        showCancelRouteDialog = false
-
-                                        context.stopService(
-                                            Intent(context, RouteMonitoringService::class.java)
-                                        )
-
-                                        fusedClient.removeLocationUpdates(onSceneLocationCallback)
-
-                                        context.getSharedPreferences(
-                                            "nav_prefs",
-                                            Context.MODE_PRIVATE
-                                        )
-                                            .edit()
-                                            .putBoolean("pending_en_route_check", false)
-                                            .remove("pending_en_route_incident_id")
-                                            .commit()
-                                    }
-                                ) {
-                                    Text("Cancel Route")
-                                }
-
-                                Button(
-                                    modifier = Modifier.weight(1f),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = Color(0xFF0F766E)
-                                    ),
-                                    onClick = {
-                                        showCancelRouteDialog = false
-
-                                        context.getSharedPreferences(
-                                            "nav_prefs",
-                                            Context.MODE_PRIVATE
-                                        )
-                                            .edit()
-                                            .remove("pending_en_route_check")
-                                            .remove("pending_en_route_incident_id")
-                                            .apply()
-                                    }
-                                ) {
-                                    Text("Continue")
-                                }
-                            }
-                        }
-                    }
-                }
-            }
 
             // ── ALL ACTIVE DIALOG ──
             if (showAllActiveDialog) {
@@ -3106,11 +2978,14 @@ fun HomeScreen(
                         ) {
                             OutlinedButton(
                                 onClick = {
-                                    openMapPin(
-                                        context,
-                                        inc.latitude,
-                                        inc.longitude,
-                                        inc.location
+                                    showActiveDetailsSheet = false
+                                    selectedActiveIncident = null
+                                    navigateToLocation(
+                                        lat = inc.latitude,
+                                        lng = inc.longitude,
+                                        address = inc.location,
+                                        incidentId = inc.id,
+                                        viewOnly = true
                                     )
                                 },
                                 modifier = Modifier.weight(1f),

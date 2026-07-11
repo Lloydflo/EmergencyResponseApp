@@ -91,11 +91,18 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.window.Dialog
 import com.ers.emergencyresponseapp.routing.RouteMonitoringService
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.ers.emergencyresponseapp.features.assigned.AssignedIncidentsViewModel
+import kotlinx.coroutines.launch
+import com.ers.emergencyresponseapp.network.RetrofitProvider
+import com.ers.emergencyresponseapp.network.MarkRouteArrivedRequest
+import com.ers.emergencyresponseapp.analytics.RouteHistoryStore
+import androidx.compose.foundation.layout.width
+import android.widget.Toast
 
 
 /**
@@ -110,7 +117,9 @@ fun LiveRouteMapScreen(
     destinationLng: Double?,
     destinationAddress: String? = null,
     incidentId: String? = null,
+    assignmentId: String? = null,   // ADD
     responderId: Int = 0,
+    viewOnly: Boolean = false,
     onBack: () -> Unit = {},
     onCancelRoute: () -> Unit = {}
 ) {
@@ -127,7 +136,7 @@ fun LiveRouteMapScreen(
 
 // Intercept the hardware/gesture back button too, not just the on-screen arrow
     BackHandler(enabled = true) {
-        showExitConfirmDialog = true
+        if (viewOnly) onBack() else showExitConfirmDialog = true
     }
 
     DisposableEffect(Unit) {
@@ -179,6 +188,55 @@ fun LiveRouteMapScreen(
     // opt back into follow mode.
     var isFollowingUser by remember { mutableStateOf(true) }
 
+    // ── On-scene proximity detection ──
+    // Hysteresis band (10m to arm, 25m to disarm) so GPS jitter right at the
+    // boundary doesn't flicker the button in and out.
+    var isNearDestination by remember { mutableStateOf(false) }
+    var onSceneSubmitted by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    fun confirmOnScene() {
+        if (onSceneSubmitted) return
+        onSceneSubmitted = true
+
+        assignedVm.updateStatus(
+            assignmentId = assignmentId ?: incidentId ?: "",
+            status = "on_scene",
+            responderId = responderId
+        )
+
+        context.stopService(Intent(context, RouteMonitoringService::class.java))
+
+        context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("pending_en_route_check", false)
+            .remove("pending_en_route_incident_id")
+            .commit()
+
+        incidentId?.let { id -> RouteHistoryStore.completeRoute(context, id) }
+
+        scope.launch {
+            try {
+                val response = RetrofitProvider.incidentApi.markRouteArrived(
+                    MarkRouteArrivedRequest(
+                        incident_id = incidentId?.toIntOrNull() ?: 0,
+                        responder_id = responderId
+                    )
+                )
+                Toast.makeText(
+                    context,
+                    if (response.success) "On-scene reported to command"
+                    else response.message ?: "Arrival already recorded",
+                    Toast.LENGTH_SHORT
+                ).show()
+            } catch (e: Exception) {
+                Log.e("LiveGPS", "Route arrived save failed: ${e.message}")
+            }
+        }
+
+        onBack()
+    }
+
     Box(modifier = modifier.fillMaxSize()) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
@@ -211,7 +269,7 @@ fun LiveRouteMapScreen(
 
         // Back button overlay
         IconButton(
-            onClick = { showExitConfirmDialog = true },
+            onClick = { if (viewOnly) onBack() else showExitConfirmDialog = true },
             modifier = Modifier
                 .padding(12.dp)
                 .align(Alignment.TopStart)
@@ -227,7 +285,7 @@ fun LiveRouteMapScreen(
 
         // ── Turn-by-turn instruction card ──
         val step = routeResult.steps.getOrNull(currentStepIndex)
-        if (step != null) {
+        if (!viewOnly && step != null) {
             Column(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
@@ -255,7 +313,7 @@ fun LiveRouteMapScreen(
 
         // Recenter button — only shown once the user has panned/zoomed away
         // from live-follow mode.
-        if (!isFollowingUser) {
+        if (!viewOnly && !isFollowingUser) {
             IconButton(
                 onClick = { isFollowingUser = true },
                 modifier = Modifier
@@ -272,16 +330,51 @@ fun LiveRouteMapScreen(
             }
         }
 
-        // ── Bottom summary card: total distance / ETA / recalculating ──
-        Row(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(16.dp)
-                .fillMaxWidth()
-                .background(Color.White, RoundedCornerShape(12.dp))
-                .padding(14.dp),
-        ) {
-            if (isFetchingRoute && routeResult.points.isEmpty()) {
+            // ── On Scene confirmation — appears once within ~10m of the destination ──
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+            ) {
+                if (!viewOnly && isNearDestination) {
+                    Button(
+                        onClick = { confirmOnScene() },
+                        modifier = Modifier
+                            .padding(horizontal = 16.dp)
+                            .fillMaxWidth()
+                            .height(52.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
+                    ) {
+                        Icon(Icons.Filled.LocationOn, contentDescription = null, tint = Color.White)
+                        Spacer(Modifier.width(8.dp))
+                        Text("You're on scene — Confirm Arrival", color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+
+                // ── Bottom summary card: total distance / ETA / recalculating ──
+                Row(
+                    modifier = Modifier
+                        .padding(horizontal = 16.dp, vertical = if (!viewOnly && isNearDestination) 0.dp else 16.dp)
+                        .fillMaxWidth()
+                        .background(Color.White, RoundedCornerShape(12.dp))
+                        .padding(14.dp),
+                ) {
+            if (viewOnly) {
+                Column {
+                    Text(
+                        text = destinationAddress ?: "Pinned location",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        text = "Viewing pinned location",
+                        fontSize = 12.sp,
+                        color = Color(0xFF757575)
+                    )
+                }
+            } else if (isFetchingRoute && routeResult.points.isEmpty()) {
                 CircularProgressIndicator(modifier = Modifier.size(18.dp))
                 Text(
                     text = "  Finding route…",
@@ -322,8 +415,10 @@ fun LiveRouteMapScreen(
             } else {
                 Text(text = destinationAddress ?: "Waiting for GPS…", fontSize = 14.sp)
             }
+                }
+                Spacer(Modifier.height(16.dp))
+            }
         }
-    }
     if (showExitConfirmDialog) {
         Dialog(onDismissRequest = { showExitConfirmDialog = false }) {
             Card(
@@ -372,7 +467,7 @@ fun LiveRouteMapScreen(
                                 // Flip the assignment back to "received" server-side, same as HomeScreen's dialog
                                 if (!incidentId.isNullOrBlank() && responderId > 0) {
                                     assignedVm.updateStatus(
-                                        assignmentId = incidentId,
+                                        assignmentId = assignmentId ?: incidentId ?: "",
                                         status = "received",
                                         responderId = responderId
                                     )
@@ -411,7 +506,7 @@ fun LiveRouteMapScreen(
     }
 
     // Update current position marker + camera (follow mode) as GPS updates
-    LaunchedEffect(currentLat, currentLng, currentBearing, mapLibreMap, styleReady) {
+    LaunchedEffect(currentLat, currentLng, currentBearing, mapLibreMap, styleReady, viewOnly) {
         val map = mapLibreMap ?: return@LaunchedEffect
         if (!styleReady) return@LaunchedEffect
         val lat = currentLat ?: return@LaunchedEffect
@@ -420,25 +515,54 @@ fun LiveRouteMapScreen(
         // gated on follow mode, so the blue arrow stays accurate even while
         // the user is looking elsewhere on the map.
         map.style?.let { style -> updateCurrentPositionMarker(style, lat, lng, currentBearing) }
-        if (!isFollowingUser) return@LaunchedEffect
+        if (viewOnly || !isFollowingUser) return@LaunchedEffect
         map.cameraPosition = CameraPosition.Builder()
             .target(LatLng(lat, lng))
             .zoom(map.cameraPosition.zoom.takeIf { it > 1.0 } ?: 16.0)
             .build()
     }
 
+    // Continuously check proximity to destination so the On Scene button
+    // arms itself automatically — no manual tap-in/tap-out needed.
+    LaunchedEffect(currentLat, currentLng, destinationLat, destinationLng, viewOnly) {
+        if (viewOnly) {
+            isNearDestination = false
+            return@LaunchedEffect
+        }
+        val lat = currentLat ?: return@LaunchedEffect
+        val lng = currentLng ?: return@LaunchedEffect
+        val destLat = destinationLat ?: return@LaunchedEffect
+        val destLng = destinationLng ?: return@LaunchedEffect
+        val distance = haversineDistanceMeters(lat, lng, destLat, destLng)
+        isNearDestination = when {
+            distance <= 10.0 -> true
+            distance > 25.0 -> false
+            else -> isNearDestination // inside the hysteresis band — keep prior state
+        }
+    }
+
     // Update destination marker
-    LaunchedEffect(destinationLat, destinationLng, mapLibreMap, styleReady) {
+    LaunchedEffect(destinationLat, destinationLng, mapLibreMap, styleReady, viewOnly) {
         val map = mapLibreMap ?: return@LaunchedEffect
         if (!styleReady) return@LaunchedEffect
         val lat = destinationLat ?: return@LaunchedEffect
         val lng = destinationLng ?: return@LaunchedEffect
         map.style?.let { style -> updateDestinationMarker(style, lat, lng) }
+        if (viewOnly) {
+            map.cameraPosition = CameraPosition.Builder()
+                .target(LatLng(lat, lng))
+                .zoom(16.0)
+                .build()
+        }
     }
 
     // Fetch and draw a real road-following route (throttled so we don't
     // hammer the routing API on every 1-3s GPS tick)
-    LaunchedEffect(currentLat, currentLng, destinationLat, destinationLng, mapLibreMap, styleReady) {
+    LaunchedEffect(currentLat, currentLng, destinationLat, destinationLng, mapLibreMap, styleReady, viewOnly) {
+        if (viewOnly) {
+            mapLibreMap?.style?.let { style -> updateRouteLine(style, emptyList()) }
+            return@LaunchedEffect
+        }
         val map = mapLibreMap ?: return@LaunchedEffect
         if (!styleReady) return@LaunchedEffect
         val cLat = currentLat; val cLng = currentLng
@@ -515,7 +639,8 @@ fun LiveRouteMapScreen(
     }
 
     // Advance the current instruction as the user nears each maneuver point
-    LaunchedEffect(currentLat, currentLng, routeResult) {
+    LaunchedEffect(currentLat, currentLng, routeResult, viewOnly) {
+        if (viewOnly) return@LaunchedEffect
         val lat = currentLat ?: return@LaunchedEffect
         val lng = currentLng ?: return@LaunchedEffect
         val steps = routeResult.steps

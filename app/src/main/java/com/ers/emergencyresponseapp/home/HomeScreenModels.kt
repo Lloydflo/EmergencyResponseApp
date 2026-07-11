@@ -36,6 +36,7 @@ enum class ResponderStatus(val displayName: String, val color: Color) {
 @Immutable
 data class Incident(
     val id: String,
+    val assignmentId: String? = null,
     val type: IncidentType,
     val priority: IncidentPriority,
     val location: String,

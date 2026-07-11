@@ -8,7 +8,7 @@ import androidx.compose.runtime.mutableStateListOf
  */
 object IncidentStore {
     // Observable list so Compose recomposes on changes
-    val incidents = mutableStateListOf<Incident>().apply { addAll(getMockIncidents()) }
+    val incidents = mutableStateListOf<Incident>()
 
     // Simple in-memory proof map: incidentId -> proofUri (file:// or content://)
     private val proofMap = mutableMapOf<String, String?>()

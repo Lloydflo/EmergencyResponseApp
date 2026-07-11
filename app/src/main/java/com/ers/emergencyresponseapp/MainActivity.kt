@@ -364,22 +364,34 @@ class MainActivity : ComponentActivity() {
 
                                 // ── Live MapLibre navigation screen ───────────
                                 composable(
-                                    "live_map/{lat}/{lng}/{address}",
+                                    "live_map/{lat}/{lng}/{address}?incidentId={incidentId}&assignmentId={assignmentId}&responderId={responderId}&viewOnly={viewOnly}",
                                     arguments = listOf(
                                         navArgument("lat") { type = NavType.StringType },
                                         navArgument("lng") { type = NavType.StringType },
-                                        navArgument("address") { type = NavType.StringType }
+                                        navArgument("address") { type = NavType.StringType },
+                                        navArgument("incidentId") { type = NavType.StringType; nullable = true; defaultValue = null },
+                                        navArgument("assignmentId") { type = NavType.StringType; nullable = true; defaultValue = null }, // ADD
+                                        navArgument("responderId") { type = NavType.IntType; defaultValue = 0 },
+                                        navArgument("viewOnly") { type = NavType.BoolType; defaultValue = false }
                                     )
                                 ) { backStackEntry ->
                                     val lat = backStackEntry.arguments?.getString("lat")?.toDoubleOrNull()
                                     val lng = backStackEntry.arguments?.getString("lng")?.toDoubleOrNull()
                                     val address = backStackEntry.arguments?.getString("address")
+                                    val incidentIdArg = backStackEntry.arguments?.getString("incidentId")
+                                    val assignmentIdArg = backStackEntry.arguments?.getString("assignmentId") // ADD
+                                    val responderIdArg = backStackEntry.arguments?.getInt("responderId") ?: 0
+                                    val viewOnlyArg = backStackEntry.arguments?.getBoolean("viewOnly") ?: false
 
                                     LiveRouteMapScreen(
                                         modifier = Modifier.fillMaxSize(),
                                         destinationLat = lat,
                                         destinationLng = lng,
                                         destinationAddress = address,
+                                        incidentId = incidentIdArg,
+                                        assignmentId = assignmentIdArg,  // ADD
+                                        responderId = responderIdArg,
+                                        viewOnly = viewOnlyArg,
                                         onBack = { navController.popBackStack() }
                                     )
                                 }
@@ -519,6 +531,8 @@ fun EmergencyResponseScreen(modifier: Modifier = Modifier, onProceed: () -> Unit
         ) { Text("Proceed") }
     }
 }
+
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Animated home screen wrapper

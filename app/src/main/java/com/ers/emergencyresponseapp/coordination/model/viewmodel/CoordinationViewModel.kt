@@ -46,6 +46,7 @@ import java.io.FileOutputStream
 import kotlinx.coroutines.Dispatchers
 import android.provider.OpenableColumns
 import android.content.Context
+import java.util.concurrent.atomic.AtomicInteger
 
 class CoordinationViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -79,9 +80,10 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
     private var activeGroupId: Int? = null
     private var groupPollingJob: kotlinx.coroutines.Job? = null
-    private var groupMessagesRequestId = 0
+    private val groupMessagesRequestId = AtomicInteger(0)
     private val hasPrimedThread = mutableSetOf<String>()
     private val lastNotifiedMessageIdByThread = mutableMapOf<String, String>()
+
 
     // ─────────────────────────────────────────────────────────────────────────
     //  CONNECT — called once when CoordinationPortalScreen opens
@@ -410,11 +412,11 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
     }
 
     private fun loadInteragencyGroupMessages(groupId: Int) {
-        val requestId = ++groupMessagesRequestId
+        val requestId = groupMessagesRequestId.incrementAndGet()
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val request = Request.Builder()
-                    .url("https://emergency-response.alertaraqc.com/api/api_app/get-interagency-group-messages.php?group_id=$groupId")
+                    .url("https://emergency-response.alertaraqc.com/api/api_app/get-interagency-group-messages.php?group_id=$groupId&user_id=$myUserId")
                     .get()
                     .build()
 
@@ -423,7 +425,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
                 if (!response.isSuccessful || body.isBlank()) {
                     launch(Dispatchers.Main) {
-                        if (requestId == groupMessagesRequestId) {
+                        if (requestId == groupMessagesRequestId.get() && currentThread.value?.id == "group_$groupId") {
                             latestNotification.value = "Failed to load groups: empty API response"
                         }
                     }
@@ -451,6 +453,12 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
                     val senderId = item.optString("senderId")
                     val senderName = item.optString("senderName")
+                    val statusText = item.optString("status", "sent")
+                    val messageStatus = when (statusText.lowercase()) {
+                        "read" -> MessageStatus.READ
+                        "delivered" -> MessageStatus.DELIVERED
+                        else -> MessageStatus.SENT
+                    }
                     loaded.add(
                         ChatMessage(
                             id = item.optString("id"),
@@ -461,7 +469,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                             type = messageType,
                             text = item.optString("text"),
                             createdAt = item.optLong("createdAt"),
-                            status = MessageStatus.SENT,
+                            status = messageStatus,   // <-- was hardcoded MessageStatus.SENT
                             isOwn = senderId == myUserId || senderName.equals(myUserName, ignoreCase = true),
                             attachmentUri = item.optString("attachmentUri").takeIf { it.isNotBlank() && it != "null" },
                             attachmentName = item.optString("attachmentName").takeIf { it.isNotBlank() && it != "null" }
@@ -471,11 +479,26 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
                 launch(Dispatchers.Main) {
                     // Ignore stale results from older, out-of-order requests.
-                    if (requestId == groupMessagesRequestId &&
-                        currentThread.value?.id == "group_$groupId"
-                    ) {
+                    if (requestId == groupMessagesRequestId.get() && currentThread.value?.id == "group_$groupId") {
+                        // Keep optimistic (locally sent, not-yet-confirmed) bubbles alive if the
+                        // server hasn't caught up to them yet. Without this, a reload/poll that
+                        // races ahead of DB read-after-write wipes the bubble you just sent,
+                        // and it won't reappear until the next full reload catches it.
+                        val stillPendingLocal = messages.filter { local ->
+                            local.id.startsWith("local_") &&
+                                    loaded.none {
+                                        it.senderId == local.senderId &&
+                                                it.text == local.text &&
+                                                kotlin.math.abs(it.createdAt - local.createdAt) < 15000
+                                    }
+                        }
                         messages.clear()
-                        messages.addAll(loaded.sortedBy { it.createdAt })
+                        messages.addAll((loaded + stillPendingLocal).sortedBy { it.createdAt })
+
+                        // We're actively viewing this thread — mark the latest message as read
+                        loaded.maxOfOrNull { it.id.toIntOrNull() ?: 0 }?.let { maxId ->
+                            if (maxId > 0) markGroupThreadRead(groupId, maxId)
+                        }
                     }
                 }
 
@@ -484,7 +507,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
             } catch (e: Exception) {
                 launch(Dispatchers.Main) {
-                    if (requestId == groupMessagesRequestId) {
+                    if (requestId == groupMessagesRequestId.get() && currentThread.value?.id == "group_$groupId") {
                         latestNotification.value = "Failed to load group messages"
                     }
                 }
@@ -499,6 +522,28 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
             while (activeGroupId == groupId) {
                 loadInteragencyGroupMessages(groupId)
                 kotlinx.coroutines.delay(3000)
+            }
+        }
+    }
+
+    private fun markGroupThreadRead(groupId: Int, lastReadId: Int) {
+        if (lastReadId <= 0 || myUserId.isBlank()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val formBody = okhttp3.FormBody.Builder()
+                    .add("group_id", groupId.toString())
+                    .add("user_id", myUserId)
+                    .add("last_read_id", lastReadId.toString())
+                    .build()
+
+                val request = Request.Builder()
+                    .url("https://emergency-response.alertaraqc.com/api/api_app/mark-group-thread-read.php")
+                    .post(formBody)
+                    .build()
+
+                OkHttpClient().newCall(request).execute().close()
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
     }
@@ -578,6 +623,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
                 messages.clear()
                 messages.addAll(loaded.sortedBy { it.createdAt })
+
 
                 maybeNotifyIncoming(threadId, loaded)
             }
@@ -729,6 +775,25 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
     fun sendMockDepartmentMessage(meId: String, department: String, body: String) {
         val groupId = department.toIntOrNull() ?: return
+        val threadId = "group_$groupId"
+
+        // Optimistic local append so it appears instantly, matching private chat UX.
+        val optimisticId = "local_${System.currentTimeMillis()}"
+        val optimisticMessage = ChatMessage(
+            id = optimisticId,
+            threadId = threadId,
+            senderId = meId,
+            senderName = myUserName.ifBlank { meId },
+            role = myRole,
+            type = MessageType.TEXT,
+            text = body,
+            createdAt = System.currentTimeMillis(),
+            status = MessageStatus.SENT,
+            isOwn = true
+        )
+        if (currentThread.value?.id == threadId) {
+            messages.add(optimisticMessage)
+        }
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -747,15 +812,21 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                 val json = JSONObject(response.body?.string() ?: "")
 
                 if (json.optBoolean("success")) {
-                    loadInteragencyGroupMessages(groupId)
+                    loadInteragencyGroupMessages(groupId)   // reconciles/replaces optimistic entry with the real one
                 } else {
                     launch(Dispatchers.Main) {
+                        // Sending failed — remove the optimistic bubble so it doesn't look sent when it wasn't.
+                        if (currentThread.value?.id == threadId) {
+                            messages.removeAll { it.id == optimisticId }
+                        }
                         latestNotification.value = json.optString("message", "Failed to send message")
                     }
                 }
-
             } catch (e: Exception) {
                 launch(Dispatchers.Main) {
+                    if (currentThread.value?.id == threadId) {
+                        messages.removeAll { it.id == optimisticId }
+                    }
                     latestNotification.value = "Failed to send message"
                 }
             }

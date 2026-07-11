@@ -932,6 +932,7 @@ private fun ChatScreen(vm: CoordinationViewModel, currentResponderId: String, on
     var didInitialAutoScroll by remember(selectedResponder?.id, selectedDepartment?.name) { mutableStateOf(false) }
     val timeFmt            = remember { SimpleDateFormat("hh:mm a", Locale.getDefault()) }
     val showAttach         = remember { mutableStateOf(false) }
+    var showQuickReplies by remember { mutableStateOf(false) }   // <-- add this
     var isRecordingVoice by remember { mutableStateOf(false) }
     val showInfoDialog     = remember { mutableStateOf(false) }
     val showSharedFilesDialog = remember { mutableStateOf(false) }
@@ -1142,20 +1143,34 @@ private fun ChatScreen(vm: CoordinationViewModel, currentResponderId: String, on
                     Text("↓ ${unseenCount.intValue} new", color = Color.White, fontSize = 13.sp)
                 }
             }
-            ChatComposer(
-                modifier      = Modifier.align(Alignment.BottomCenter),
-                text          = messageInput.value,
-                onTextChange  = { messageInput.value = it },
-                onSend        = { doSend() },
-                onAttachClick = { showAttach.value = true },
-                onLike        = {                              // <-- add this
-                    when {
-                        selectedResponder  != null -> vm.sendMockPrivateMessage(currentResponderId, selectedResponder, "👍")
-                        selectedDepartment != null -> vm.sendMockDepartmentMessage(currentResponderId, selectedDepartment.name, "👍")
-                        else -> Toast.makeText(ctx, "Select a chat first", Toast.LENGTH_SHORT).show()
-                    }
+            Column(modifier = Modifier.align(Alignment.BottomCenter)) {
+                AnimatedVisibility(visible = showQuickReplies) {
+                    QuickReplyBar(
+                        onSelect = { reply ->
+                            when {
+                                selectedResponder  != null -> vm.sendMockPrivateMessage(currentResponderId, selectedResponder, reply)
+                                selectedDepartment != null -> vm.sendMockDepartmentMessage(currentResponderId, selectedDepartment.name, reply)
+                                else -> Toast.makeText(ctx, "Select a chat first", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    )
                 }
-            )
+                ChatComposer(
+                    modifier            = Modifier,
+                    text                = messageInput.value,
+                    onTextChange        = { messageInput.value = it },
+                    onSend              = { doSend() },
+                    onAttachClick       = { showAttach.value = true },
+                    onQuickReplyToggle  = { showQuickReplies = !showQuickReplies },
+                    onLike              = {
+                        when {
+                            selectedResponder  != null -> vm.sendMockPrivateMessage(currentResponderId, selectedResponder, "👍")
+                            selectedDepartment != null -> vm.sendMockDepartmentMessage(currentResponderId, selectedDepartment.name, "👍")
+                            else -> Toast.makeText(ctx, "Select a chat first", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                )
+            }
         }
     }
 
@@ -1252,9 +1267,10 @@ private fun ChatMessagesPanel(messages: List<ChatMessage>, timeFmt: SimpleDateFo
     fun dayLabel(ts: Long): String = dayLabelFormat.format(Date(ts))
     fun dayKey(ts: Long): String = dayKeyFormat.format(Date(ts))
 
-    val orderedMessages = remember(messages) {
-        messages.sortedWith(compareBy<ChatMessage> { it.createdAt }.thenBy { it.id })
-    }
+    // Recompute on every recomposition — messages is a SnapshotStateList mutated
+    // in place, so remember(messages) would never see it as "changed" and would
+    // freeze the displayed list after the first render.
+    val orderedMessages = messages.sortedWith(compareBy<ChatMessage> { it.createdAt }.thenBy { it.id })
 
     var revealedMessageId by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(revealedMessageId) {
@@ -1269,14 +1285,12 @@ private fun ChatMessagesPanel(messages: List<ChatMessage>, timeFmt: SimpleDateFo
         contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
-
         itemsIndexed(
             items = orderedMessages,
             key = { index, item ->
                 "${item.id}_${item.createdAt}_$index"
             }
         ) { index, msg ->
-
             val showDayDivider = index == 0 ||
                     dayKey(msg.createdAt) != dayKey(orderedMessages[index - 1].createdAt)
 
@@ -1501,11 +1515,53 @@ private fun ChatBubble(
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  QUICK REPLIES — fast, one-tap responses for responders on scene / driving
+// ─────────────────────────────────────────────────────────────────────────────
+private val QuickReplies = listOf(
+    "Copy",
+    "En route",
+    "Arrived on scene",
+    "Need backup",
+    "Situation clear",
+    "Stand by",
+    "Received",
+    "Negative"
+)
+
 @Composable
-private fun ChatComposer(modifier: Modifier = Modifier, text: String, onTextChange: (String) -> Unit, onSend: () -> Unit, onAttachClick: () -> Unit, onLike: () -> Unit) {
+private fun QuickReplyBar(onSelect: (String) -> Unit) {
+    Surface(color = BgCard, shadowElevation = 2.dp) {
+        LazyRow(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp)
+        ) {
+            items(QuickReplies) { reply ->
+                Surface(
+                    shape = RoundedCornerShape(18.dp),
+                    color = BrandGreen.copy(alpha = 0.10f),
+                    modifier = Modifier.clickable { onSelect(reply) }
+                ) {
+                    Text(
+                        reply,
+                        color = BrandGreen,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChatComposer(modifier: Modifier = Modifier, text: String, onTextChange: (String) -> Unit, onSend: () -> Unit, onAttachClick: () -> Unit, onLike: () -> Unit, onQuickReplyToggle: () -> Unit) {
     Surface(modifier = modifier.fillMaxWidth(), color = BgCard, shadowElevation = 8.dp) {
         Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp).navigationBarsPadding().imePadding(), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onAttachClick) { Icon(Icons.Default.AddCircleOutline, contentDescription = "Attach", tint = BrandGreen, modifier = Modifier.size(26.dp)) }
+            IconButton(onClick = onQuickReplyToggle) { Icon(Icons.Default.Bolt, contentDescription = "Quick replies", tint = BrandGreen, modifier = Modifier.size(24.dp)) }
             OutlinedTextField(value = text, onValueChange = onTextChange, placeholder = { Text("Aa", fontSize = 15.sp, color = TextSecondary) }, modifier = Modifier.weight(1f), singleLine = false, maxLines = 4, shape = RoundedCornerShape(24.dp),
                 colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = BgPage, unfocusedContainerColor = BgPage, focusedBorderColor = BrandGreen, unfocusedBorderColor = Color.Transparent))
             Spacer(Modifier.width(8.dp))
