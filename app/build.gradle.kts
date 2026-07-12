@@ -98,6 +98,8 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     implementation("org.maplibre.gl:android-sdk:11.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:X.X.X")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:X.X.X")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

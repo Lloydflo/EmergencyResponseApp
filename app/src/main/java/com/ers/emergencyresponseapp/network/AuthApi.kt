@@ -62,4 +62,13 @@ interface AuthApi {
         @Part profileImage: MultipartBody.Part
     ): UploadProfileImageResponse
 
+    @FormUrlEncoded
+    @POST("api/api_app/update_profile.php")
+    suspend fun updateProfile(
+        @Field("user_id") userId: Int,
+        @Field("full_name") fullName: String,
+        @Field("username") username: String,
+        @Field("email") email: String
+    ): UpdateProfileResponse
+
 }

@@ -49,6 +49,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
 import com.ers.emergencyresponseapp.routing.RouteMonitoringService
+import com.ers.emergencyresponseapp.ui.theme.ThemeController
 
 sealed class NavItem(val route: String, val title: String, val icon: ImageVector) {
     object Home              : NavItem("home",                "Home",         Icons.Filled.Home)
@@ -122,6 +123,11 @@ class MainActivity : ComponentActivity() {
             val startDestination = if (DEV_BYPASS_LOGIN) homeRoute
             else if (isLoggedIn) homeRoute else "entry"
 
+            // ADD THIS — one-time init of ThemeController from persisted prefs
+            LaunchedEffect(Unit) {
+                ThemeController.init(context)
+            }
+
             var isDarkMode by remember { mutableStateOf(prefs.getBoolean("dark_mode", false)) }
 
             DisposableEffect(prefs) {
@@ -132,7 +138,7 @@ class MainActivity : ComponentActivity() {
                 onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
             }
 
-            EmergencyResponseAppTheme(darkTheme = isDarkMode) {
+            EmergencyResponseAppTheme(darkTheme = ThemeController.isDarkMode.value) {
                 Surface(color = MaterialTheme.colorScheme.background) {
 
                     val navController = rememberNavController()
@@ -216,185 +222,227 @@ class MainActivity : ComponentActivity() {
                         }
                     ) { innerPadding ->
                         Box(modifier = Modifier.padding(innerPadding)) {
-                            NavHost(
-                                navController = navController,
-                                startDestination = startDestination
-                            ) {
-
-                                // Entry / splash
-                                composable("entry") {
-                                    EmergencyResponseScreen(onProceed = {
-                                        navController.navigate("login") {
-                                            popUpTo("entry") { inclusive = true }
-                                            launchSingleTop = true
-                                        }
-                                    })
-                                }
-
-                                // Login
-                                composable("login") {
-                                    LoginScreen(onLoggedIn = { _email: String ->
-                                        navController.navigate(homeRoute) {
-                                            popUpTo("entry") { inclusive = true }
-                                            popUpTo("login") { inclusive = true }
-                                            launchSingleTop = true
-                                        }
-                                    })
-                                }
-
-                                // Home (no role)
-                                composable("home") {
-                                    HomeScreen(
+                                    NavHost(
                                         navController = navController,
-                                        responderRole = null,
-                                        onLogout = {
-                                            authPrefs.edit().clear().commit()
-                                            context.getSharedPreferences("user_prefs", MODE_PRIVATE)
-                                                .edit().clear().commit()
-                                            navController.navigate("entry") {
-                                                popUpTo(0) { inclusive = true }
-                                                launchSingleTop = true
+                                        startDestination = startDestination
+                                    ) {
+
+                                        // Entry / splash
+                                        composable("entry") {
+                                            EmergencyResponseScreen(onProceed = {
+                                                navController.navigate("login") {
+                                                    popUpTo("entry") { inclusive = true }
+                                                    launchSingleTop = true
+                                                }
+                                            })
+                                        }
+
+                                        // Login
+                                        composable("login") {
+                                            LoginScreen(onLoggedIn = { _email: String ->
+                                                navController.navigate(homeRoute) {
+                                                    popUpTo("entry") { inclusive = true }
+                                                    popUpTo("login") { inclusive = true }
+                                                    launchSingleTop = true
+                                                }
+                                            })
+                                        }
+
+                                        // Home (no role)
+                                        composable("home") {
+                                            HomeScreen(
+                                                navController = navController,
+                                                responderRole = null,
+                                                onLogout = {
+                                                    authPrefs.edit().clear().commit()
+                                                    context.getSharedPreferences(
+                                                        "user_prefs",
+                                                        MODE_PRIVATE
+                                                    )
+                                                        .edit().clear().commit()
+                                                    navController.navigate("entry") {
+                                                        popUpTo(0) { inclusive = true }
+                                                        launchSingleTop = true
+                                                    }
+                                                }
+                                            )
+                                        }
+
+                                        // Home with role
+                                        composable("home/{role}") { backStackEntry ->
+                                            val roleArg =
+                                                backStackEntry.arguments?.getString("role")
+                                            val innerContext = LocalContext.current
+                                            val innerPrefs =
+                                                innerContext.getSharedPreferences(
+                                                    "ers_prefs",
+                                                    MODE_PRIVATE
+                                                )
+
+                                            HomeScreen(
+                                                navController = navController,
+                                                responderRole = roleArg?.takeIf { it.isNotBlank() },
+                                                onLogout = {
+                                                    innerContext.getSharedPreferences(
+                                                        "auth",
+                                                        MODE_PRIVATE
+                                                    )
+                                                        .edit().clear().commit()
+                                                    innerContext.getSharedPreferences(
+                                                        "user_prefs",
+                                                        MODE_PRIVATE
+                                                    )
+                                                        .edit().clear().commit()
+                                                    navController.navigate("login") {
+                                                        popUpTo(0) { inclusive = true }
+                                                        launchSingleTop = true
+                                                    }
+                                                }
+                                            )
+                                            LaunchedEffect(Unit) {
+                                                if (innerPrefs.getBoolean(
+                                                        "navigate_to_reviews",
+                                                        false
+                                                    )
+                                                ) {
+                                                    innerPrefs.edit()
+                                                        .putBoolean("navigate_to_reviews", false)
+                                                        .commit()
+                                                    navController.navigate("reviews_feedback") {
+                                                        launchSingleTop = true
+                                                    }
+                                                }
                                             }
                                         }
-                                    )
-                                }
 
-                                // Home with role
-                                composable("home/{role}") { backStackEntry ->
-                                    val roleArg = backStackEntry.arguments?.getString("role")
-                                    val innerContext = LocalContext.current
-                                    val innerPrefs =
-                                        innerContext.getSharedPreferences("ers_prefs", MODE_PRIVATE)
-
-                                    HomeScreen(
-                                        navController = navController,
-                                        responderRole = roleArg?.takeIf { it.isNotBlank() },
-                                        onLogout = {
-                                            innerContext.getSharedPreferences("auth", MODE_PRIVATE)
-                                                .edit().clear().commit()
-                                            innerContext.getSharedPreferences(
+                                        // ── Coordination portal ───────────────────────
+                                        composable("coordination_portal") {
+                                            val localContext = LocalContext.current
+                                            val localPrefs = localContext.getSharedPreferences(
                                                 "user_prefs",
                                                 MODE_PRIVATE
                                             )
-                                                .edit().clear().commit()
-                                            navController.navigate("login") {
-                                                popUpTo(0) { inclusive = true }
-                                                launchSingleTop = true
-                                            }
-                                        }
-                                    )
-                                    LaunchedEffect(Unit) {
-                                        if (innerPrefs.getBoolean("navigate_to_reviews", false)) {
-                                            innerPrefs.edit()
-                                                .putBoolean("navigate_to_reviews", false).commit()
-                                            navController.navigate("reviews_feedback") {
-                                                launchSingleTop = true
-                                            }
-                                        }
-                                    }
-                                }
+                                            val department =
+                                                localPrefs.getString("department", "fire") ?: "fire"
+                                            val myUserId =
+                                                localPrefs.getString("user_id", "current_user")
+                                                    ?: "current_user"
+                                            // FIX: read the saved full name — use the same key your login saves it with
+                                            val myUserName =
+                                                localPrefs.getString("full_name", "Responder")
+                                                    ?: "Responder"
 
-                                // ── Coordination portal ───────────────────────
-                                composable("coordination_portal") {
-                                    val localContext = LocalContext.current
-                                    val localPrefs = localContext.getSharedPreferences(
-                                        "user_prefs",
-                                        MODE_PRIVATE
-                                    )
-                                    val department =
-                                        localPrefs.getString("department", "fire") ?: "fire"
-                                    val myUserId = localPrefs.getString("user_id", "current_user")
-                                        ?: "current_user"
-                                    // FIX: read the saved full name — use the same key your login saves it with
-                                    val myUserName = localPrefs.getString("full_name", "Responder")
-                                        ?: "Responder"
+                                            // ADD THIS:
+                                            android.util.Log.d(
+                                                "COORD_DEBUG",
+                                                "userId=$myUserId name=$myUserName dept=$department"
+                                            )
 
-                                    // ADD THIS:
-                                    android.util.Log.d(
-                                        "COORD_DEBUG",
-                                        "userId=$myUserId name=$myUserName dept=$department"
-                                    )
-
-                                    CoordinationPortalScreen(
-                                        currentResponderId = myUserId,
-                                        currentResponderName = myUserName,
-                                        currentResponderRole = department,
-                                        navController = navController,
-                                        onChatModeChange = { isChat ->
-                                            isCoordinationChatOpen = isChat
-                                        }
-                                    )
-                                }
-
-                                // Reviews & Feedback
-                                composable("reviews_feedback") {
-                                    ReviewsFeedbackScreen()
-                                }
-
-                                // Analytics
-                                composable("analytics") {
-                                    HistoricalRouteAnalyticsScreen()
-                                }
-
-                                composable("responder_list/{myUserId}") { backStackEntry ->
-                                    val myUserId =
-                                        backStackEntry.arguments?.getString("myUserId") ?: ""
-                                    ResponderListScreen(
-                                        myUserId = myUserId,
-                                        onOpenChat = { partnerUserId ->
-                                            navController.navigate(
-                                                "firebase_chat/$myUserId/$partnerUserId"
+                                            CoordinationPortalScreen(
+                                                currentResponderId = myUserId,
+                                                currentResponderName = myUserName,
+                                                currentResponderRole = department,
+                                                navController = navController,
+                                                onChatModeChange = { isChat ->
+                                                    isCoordinationChatOpen = isChat
+                                                }
                                             )
                                         }
-                                    )
-                                }
 
-                                // ── One-to-one Firebase chat screen ───────────
-                                composable("firebase_chat/{myUserId}/{partnerUserId}") { backStackEntry ->
-                                    val myUserId =
-                                        backStackEntry.arguments?.getString("myUserId") ?: ""
-                                    val partnerUserId =
-                                        backStackEntry.arguments?.getString("partnerUserId") ?: ""
-                                    FirebaseChatScreen(
-                                        myUserId = myUserId,
-                                        partnerUserId = partnerUserId,
-                                        onBack = { navController.popBackStack() }
-                                    )
-                                }
+                                        // Reviews & Feedback
+                                        composable("reviews_feedback") {
+                                            ReviewsFeedbackScreen()
+                                        }
 
-                                // ── Live MapLibre navigation screen ───────────
-                                composable(
-                                    "live_map/{lat}/{lng}/{address}?incidentId={incidentId}&assignmentId={assignmentId}&responderId={responderId}&viewOnly={viewOnly}",
-                                    arguments = listOf(
-                                        navArgument("lat") { type = NavType.StringType },
-                                        navArgument("lng") { type = NavType.StringType },
-                                        navArgument("address") { type = NavType.StringType },
-                                        navArgument("incidentId") { type = NavType.StringType; nullable = true; defaultValue = null },
-                                        navArgument("assignmentId") { type = NavType.StringType; nullable = true; defaultValue = null }, // ADD
-                                        navArgument("responderId") { type = NavType.IntType; defaultValue = 0 },
-                                        navArgument("viewOnly") { type = NavType.BoolType; defaultValue = false }
-                                    )
-                                ) { backStackEntry ->
-                                    val lat = backStackEntry.arguments?.getString("lat")?.toDoubleOrNull()
-                                    val lng = backStackEntry.arguments?.getString("lng")?.toDoubleOrNull()
-                                    val address = backStackEntry.arguments?.getString("address")
-                                    val incidentIdArg = backStackEntry.arguments?.getString("incidentId")
-                                    val assignmentIdArg = backStackEntry.arguments?.getString("assignmentId") // ADD
-                                    val responderIdArg = backStackEntry.arguments?.getInt("responderId") ?: 0
-                                    val viewOnlyArg = backStackEntry.arguments?.getBoolean("viewOnly") ?: false
+                                        // Analytics
+                                        composable("analytics") {
+                                            HistoricalRouteAnalyticsScreen()
+                                        }
 
-                                    LiveRouteMapScreen(
-                                        modifier = Modifier.fillMaxSize(),
-                                        destinationLat = lat,
-                                        destinationLng = lng,
-                                        destinationAddress = address,
-                                        incidentId = incidentIdArg,
-                                        assignmentId = assignmentIdArg,  // ADD
-                                        responderId = responderIdArg,
-                                        viewOnly = viewOnlyArg,
-                                        onBack = { navController.popBackStack() }
-                                    )
-                                }
+                                        composable("responder_list/{myUserId}") { backStackEntry ->
+                                            val myUserId =
+                                                backStackEntry.arguments?.getString("myUserId")
+                                                    ?: ""
+                                            ResponderListScreen(
+                                                myUserId = myUserId,
+                                                onOpenChat = { partnerUserId ->
+                                                    navController.navigate(
+                                                        "firebase_chat/$myUserId/$partnerUserId"
+                                                    )
+                                                }
+                                            )
+                                        }
+
+                                        // ── One-to-one Firebase chat screen ───────────
+                                        composable("firebase_chat/{myUserId}/{partnerUserId}") { backStackEntry ->
+                                            val myUserId =
+                                                backStackEntry.arguments?.getString("myUserId")
+                                                    ?: ""
+                                            val partnerUserId =
+                                                backStackEntry.arguments?.getString("partnerUserId")
+                                                    ?: ""
+                                            FirebaseChatScreen(
+                                                myUserId = myUserId,
+                                                partnerUserId = partnerUserId,
+                                                onBack = { navController.popBackStack() }
+                                            )
+                                        }
+
+                                        // ── Live MapLibre navigation screen ───────────
+                                        composable(
+                                            "live_map/{lat}/{lng}/{address}?incidentId={incidentId}&assignmentId={assignmentId}&responderId={responderId}&viewOnly={viewOnly}",
+                                            arguments = listOf(
+                                                navArgument("lat") { type = NavType.StringType },
+                                                navArgument("lng") { type = NavType.StringType },
+                                                navArgument("address") {
+                                                    type = NavType.StringType
+                                                },
+                                                navArgument("incidentId") {
+                                                    type = NavType.StringType; nullable =
+                                                    true; defaultValue = null
+                                                },
+                                                navArgument("assignmentId") {
+                                                    type = NavType.StringType; nullable =
+                                                    true; defaultValue = null
+                                                }, // ADD
+                                                navArgument("responderId") {
+                                                    type = NavType.IntType; defaultValue = 0
+                                                },
+                                                navArgument("viewOnly") {
+                                                    type = NavType.BoolType; defaultValue = false
+                                                }
+                                            )
+                                        ) { backStackEntry ->
+                                            val lat =
+                                                backStackEntry.arguments?.getString("lat")
+                                                    ?.toDoubleOrNull()
+                                            val lng =
+                                                backStackEntry.arguments?.getString("lng")
+                                                    ?.toDoubleOrNull()
+                                            val address =
+                                                backStackEntry.arguments?.getString("address")
+                                            val incidentIdArg =
+                                                backStackEntry.arguments?.getString("incidentId")
+                                            val assignmentIdArg =
+                                                backStackEntry.arguments?.getString("assignmentId") // ADD
+                                            val responderIdArg =
+                                                backStackEntry.arguments?.getInt("responderId") ?: 0
+                                            val viewOnlyArg =
+                                                backStackEntry.arguments?.getBoolean("viewOnly")
+                                                    ?: false
+
+                                            LiveRouteMapScreen(
+                                                modifier = Modifier.fillMaxSize(),
+                                                destinationLat = lat,
+                                                destinationLng = lng,
+                                                destinationAddress = address,
+                                                incidentId = incidentIdArg,
+                                                assignmentId = assignmentIdArg,  // ADD
+                                                responderId = responderIdArg,
+                                                viewOnly = viewOnlyArg,
+                                                onBack = { navController.popBackStack() }
+                                            )
+                                        }
 
                             } // end NavHost
                         }

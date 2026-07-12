@@ -3,71 +3,107 @@ package com.ers.emergencyresponseapp
 
 import android.Manifest
 import android.app.Activity
+import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.net.Uri
 import android.location.Location
+import android.location.LocationManager
+import android.net.Uri
 import android.os.Build
-import android.provider.Settings
+import android.os.VibrationEffect
+import android.os.Vibrator
 import android.provider.MediaStore
+import android.provider.Settings
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Done
+import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.LocalHospital
 import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.MyLocation
-import androidx.compose.material.icons.filled.Done
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -78,82 +114,43 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.Popup
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavHostController
+import com.ers.emergencyresponseapp.analytics.RouteHistoryStore
+import com.ers.emergencyresponseapp.features.assigned.AssignedIncidentsViewModel
+import com.ers.emergencyresponseapp.features.assigned.toDomain
 import com.ers.emergencyresponseapp.home.Incident
 import com.ers.emergencyresponseapp.home.IncidentPriority
 import com.ers.emergencyresponseapp.home.IncidentType
-import com.ers.emergencyresponseapp.analytics.RouteHistoryStore
 import com.ers.emergencyresponseapp.home.composables.BackupRequest
 import com.ers.emergencyresponseapp.home.composables.DepartmentSelectionDialog
+import com.ers.emergencyresponseapp.network.MarkRouteArrivedRequest
+import com.ers.emergencyresponseapp.network.RetrofitProvider
+import com.ers.emergencyresponseapp.network.stringToRequestBody
+import com.ers.emergencyresponseapp.network.uriStringToMultipartPart
+import com.ers.emergencyresponseapp.network.uriToProfileImagePart
+import com.ers.emergencyresponseapp.network.userIdToRequestBody
+import com.ers.emergencyresponseapp.routing.RouteMonitoringService
+import com.ers.emergencyresponseapp.ui.theme.ThemeController
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
-import java.util.Locale
-import androidx.compose.material3.AlertDialog
-import androidx.core.content.ContextCompat
-import androidx.core.net.toUri
-import java.io.File
-import java.io.FileOutputStream
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import androidx.compose.foundation.layout.PaddingValues
-import android.content.Context
-import android.location.LocationManager
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.material3.TextButton
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.draw.shadow
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.rememberModalBottomSheetState
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Switch
-import androidx.compose.foundation.clickable
-import androidx.compose.material.icons.filled.CameraAlt
-import com.ers.emergencyresponseapp.routing.RouteMonitoringService
-import androidx.navigation.NavHostController
-import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.LocalFireDepartment
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.material.icons.filled.Navigation
-import androidx.compose.runtime.derivedStateOf
-import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material.icons.filled.Refresh
-import androidx.lifecycle.viewmodel.compose.viewModel
-import com.ers.emergencyresponseapp.features.assigned.AssignedIncidentsViewModel
-import com.ers.emergencyresponseapp.features.assigned.toDomain
-import androidx.compose.runtime.collectAsState
-import androidx.compose.material3.Surface
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.Popup
-import android.os.VibrationEffect
-import android.os.Vibrator
-import android.app.PendingIntent
-import androidx.compose.animation.AnimatedVisibility
-import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
-import com.ers.emergencyresponseapp.network.RetrofitProvider
-import com.ers.emergencyresponseapp.network.MarkRouteArrivedRequest
-import com.ers.emergencyresponseapp.network.uriToProfileImagePart
-import com.ers.emergencyresponseapp.network.userIdToRequestBody
-import com.ers.emergencyresponseapp.network.uriStringToMultipartPart
-import com.ers.emergencyresponseapp.network.stringToRequestBody
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.ui.window.DialogProperties
-
+import java.io.File
+import java.io.FileOutputStream
+import java.util.Locale
 
 
 
@@ -547,6 +544,11 @@ private fun BackupRequestStatusCard(
                     Text(department, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = AppColors.Text)
                     Text(resources, fontSize = 11.sp, color = AppColors.TextSecondary)
                 }
+                Spacer(Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(department, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = AppColors.Text)
+                    Text(resources, fontSize = 11.sp, color = AppColors.TextSecondary)
+                }
                 if (onRefreshClick != null) {
                     IconButton(onClick = onRefreshClick, modifier = Modifier.size(24.dp)) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh status", tint = AppColors.TextSecondary, modifier = Modifier.size(14.dp))
@@ -627,6 +629,8 @@ private fun BackupRequestStatusCard(
         }
     }
 }
+
+
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -751,12 +755,36 @@ fun HomeScreen(
                 .toMutableSet()
         )
     }
+    var unseenExtraBackupCount by remember {
+        mutableStateOf(prefs.getInt("unseen_extra_backup_count", 0))
+    }
+    var previousBackupTotal by remember {
+        mutableStateOf(prefs.getInt("previous_backup_total", -1))
+    }
 
     LaunchedEffect(responderId) {
         if (responderId <= 0) return@LaunchedEffect
         val repo = com.ers.emergencyresponseapp.data.IncidentRepository()
         while (true) {
-            backupRequestsList = repo.getMyBackupRequests(responderId)
+            val fetched = repo.getMyBackupRequests(responderId)
+            val activeCount = fetched.count { req ->
+                val autoHidden = req.status == "cancelled" && isOlderThan24Hours(req.updated_at)
+                req.id !in dismissedBackupIds && !autoHidden
+            }
+
+            if (previousBackupTotal < 0) {
+                // First load this session: flag anything beyond the single shown card
+                unseenExtraBackupCount = (activeCount - 1).coerceAtLeast(0)
+            } else if (activeCount > previousBackupTotal) {
+                unseenExtraBackupCount += (activeCount - previousBackupTotal)
+            }
+            prefs.edit()
+                .putInt("unseen_extra_backup_count", unseenExtraBackupCount)
+                .putInt("previous_backup_total", activeCount)
+                .apply()
+            previousBackupTotal = activeCount
+
+            backupRequestsList = fetched
             lastBackupUpdateTime = java.util.Date()
             delay(5000)
         }
@@ -1748,7 +1776,6 @@ fun HomeScreen(
                                             .background(Color.White.copy(alpha = 0.15f))
                                             .clickable {
                                                 showNotificationsDialog = true
-
                                                 notificationCount = 0
                                             },
                                         contentAlignment = Alignment.Center
@@ -1758,6 +1785,15 @@ fun HomeScreen(
                                             contentDescription = "Notifications",
                                             tint = Color.White
                                         )
+                                        if (notificationCount > 0) {
+                                            Badge(
+                                                modifier = Modifier.align(Alignment.TopEnd).offset(x = 4.dp, y = (-2).dp),
+                                                containerColor = Color(0xFFD32F2F),
+                                                contentColor = Color.White
+                                            ) {
+                                                Text(if (notificationCount > 9) "9+" else notificationCount.toString())
+                                            }
+                                        }
                                     }
 
                                     Box(
@@ -2070,14 +2106,28 @@ fun HomeScreen(
                                      Text("Request Backup", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
                                  }
                                  OutlinedButton(
-                                     onClick = { showAllBackupRequestsDialog = true },
+                                     onClick = {
+                                         showAllBackupRequestsDialog = true
+                                         unseenExtraBackupCount = 0
+                                         prefs.edit().putInt("unseen_extra_backup_count", 0).apply()
+                                     },
                                      modifier = Modifier.weight(1f).height(38.dp),
                                      shape = RoundedCornerShape(10.dp),
                                      contentPadding = PaddingValues(horizontal = 8.dp),
                                      border = BorderStroke(1.dp, AppColors.Border),
                                      colors = ButtonDefaults.outlinedButtonColors(contentColor = AppColors.Text)
                                  ) {
-                                     Text("View All", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                                     Box {
+                                         Text("View All", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                                         if (unseenExtraBackupCount > 0) {
+                                             Badge(
+                                                 modifier = Modifier.align(Alignment.TopEnd).offset(x = 10.dp, y = (-8).dp),
+                                                 containerColor = Color(0xFFD32F2F)
+                                             ) {
+                                                 Text(if (unseenExtraBackupCount > 9) "9+" else unseenExtraBackupCount.toString())
+                                             }
+                                         }
+                                     }
                                  }
                              }
 
@@ -2764,6 +2814,7 @@ fun HomeScreen(
                     }
                 }
 
+
                 AlertDialog(
                     onDismissRequest = { showNotificationsDialog = false },
                     shape = RoundedCornerShape(24.dp),
@@ -3037,14 +3088,41 @@ fun HomeScreen(
             // ── SETTINGS DIALOG ──
             if (showSettingsDialog) {
                 AccountSettingsDialog(
+                    context = context,
                     fullName = accountFullName, username = accountUsername, email = accountEmail,
                     photoUri = accountPhotoUri, isDarkMode = isDarkMode,
                     onFullNameChange = { accountFullName = it }, onUsernameChange = { accountUsername = it }, onEmailChange = { accountEmail = it },
                     onDarkModeChange = { e -> isDarkMode = e; prefs.edit().putBoolean("dark_mode", e).apply() },
                     onPickPhoto = { pickProfilePhotoLauncher.launch("image/*") },
                     onSave = {
-                        prefs.edit().putString("account_full_name", accountFullName.trim()).putString("account_username", accountUsername.trim()).putString("account_email", accountEmail.trim()).putString("account_photo", accountPhotoUri).apply()
+                        prefs.edit()
+                            .putString("account_full_name", accountFullName.trim())
+                            .putString("account_username", accountUsername.trim())
+                            .putString("account_email", accountEmail.trim())
+                            .putString("account_photo", accountPhotoUri)
+                            .apply()
                         if (accountUsername.isNotBlank()) responderName = accountUsername.trim()
+
+                        if (responderId > 0) {
+                            scope.launch {
+                                try {
+                                    val response = RetrofitProvider.authApi.updateProfile(
+                                        userId = responderId,
+                                        fullName = accountFullName.trim(),
+                                        username = accountUsername.trim(),
+                                        email = accountEmail.trim()
+                                    )
+                                    Toast.makeText(
+                                        context,
+                                        if (response.success) "Profile updated" else (response.message ?: "Update failed"),
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                } catch (e: Exception) {
+                                    Log.e("HomeScreen", "Profile update failed: ${e.message}")
+                                    Toast.makeText(context, "Failed to update profile on server", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
                         showSettingsDialog = false
                     },
                     onBack = { showSettingsDialog = false },
@@ -3062,6 +3140,7 @@ fun HomeScreen(
 
 @Composable
 private fun AccountSettingsDialog(
+    context: Context,
     fullName: String, username: String, email: String, photoUri: String?,
     isDarkMode: Boolean,
     onFullNameChange: (String) -> Unit, onUsernameChange: (String) -> Unit, onEmailChange: (String) -> Unit,
@@ -3111,7 +3190,10 @@ private fun AccountSettingsDialog(
                 Card(shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = Color.White), border = androidx.compose.foundation.BorderStroke(1.dp, AppColors.Border)) {
                     Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                         Column { Text("Night mode", fontWeight = FontWeight.SemiBold, color = AppColors.Text); Text("Reduce glare in low light", fontSize = 12.sp, color = AppColors.TextSecondary) }
-                        Switch(checked = isDarkMode, onCheckedChange = onDarkModeChange)
+                        Switch(
+                            checked = ThemeController.isDarkMode.value,
+                            onCheckedChange = { enabled -> ThemeController.setDarkMode(context, enabled) }
+                        )
                     }
                 }
                 Card(shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = Color.White), border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(0.35f))) {

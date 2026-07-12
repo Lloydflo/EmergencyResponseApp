@@ -74,3 +74,8 @@ data class IncidentsResponse(
     val message: String,
     val incidents: List<IncidentDto> = emptyList()
 )
+
+data class UpdateProfileResponse(
+    val success: Boolean,
+    val message: String? = null
+)
