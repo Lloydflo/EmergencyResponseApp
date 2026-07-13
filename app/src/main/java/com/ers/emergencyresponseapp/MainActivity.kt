@@ -50,6 +50,11 @@ import android.app.NotificationManager
 import android.os.Build
 import com.ers.emergencyresponseapp.routing.RouteMonitoringService
 import com.ers.emergencyresponseapp.ui.theme.ThemeController
+import androidx.activity.enableEdgeToEdge
+import androidx.core.view.WindowCompat
+
+
+
 
 sealed class NavItem(val route: String, val title: String, val icon: ImageVector) {
     object Home              : NavItem("home",                "Home",         Icons.Filled.Home)
@@ -104,6 +109,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         createEmergencyChannel()
 
         currentUserId = getSharedPreferences("user_prefs", MODE_PRIVATE)
@@ -123,9 +129,18 @@ class MainActivity : ComponentActivity() {
             val startDestination = if (DEV_BYPASS_LOGIN) homeRoute
             else if (isLoggedIn) homeRoute else "entry"
 
-            // ADD THIS — one-time init of ThemeController from persisted prefs
             LaunchedEffect(Unit) {
                 ThemeController.init(context)
+            }
+
+// ADD THIS — keep system status/nav bars in sync with in-app theme
+            val darkModeState = ThemeController.isDarkMode.value
+            LaunchedEffect(darkModeState) {
+                val window = (context as? ComponentActivity)?.window ?: return@LaunchedEffect
+                val controller = WindowCompat.getInsetsController(window, window.decorView)
+                // Light icons (white) when dark mode is on; dark icons when light mode is on
+                controller.isAppearanceLightStatusBars = !darkModeState
+                controller.isAppearanceLightNavigationBars = !darkModeState
             }
 
             var isDarkMode by remember { mutableStateOf(prefs.getBoolean("dark_mode", false)) }

@@ -68,17 +68,18 @@ import java.util.Date
 import androidx.compose.ui.graphics.graphicsLayer
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import com.ers.emergencyresponseapp.ui.theme.ThemeController
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
 private object RFColors {
-    val Primary       = Color(0xFF4C8A89)
-    val Secondary     = Color(0xFF3A506B)
-    val Tertiary      = Color(0xFF1C2541)
-    val Text          = Color(0xFF171717)
-    val TextSecondary = Color(0xFF575757)
-    val Border        = Color(0xFFE5E5E5)
-    val Bg            = Color(0xFFFFFFFF)
-    val SurfaceBg     = Color(0xFFF6F8FA)
+    val Primary: Color get() = Color(0xFF4C8A89)
+    val Secondary: Color get() = Color(0xFF3A506B)
+    val Tertiary: Color get() = Color(0xFF1C2541)
+    val Text: Color get() = if (ThemeController.isDarkMode.value) Color(0xFFFAFAFA) else Color(0xFF171717)
+    val TextSecondary: Color get() = if (ThemeController.isDarkMode.value) Color(0xFFA1A1AA) else Color(0xFF575757)
+    val Border: Color get() = if (ThemeController.isDarkMode.value) Color(0xFF27272A) else Color(0xFFE5E5E5)
+    val Bg: Color get() = if (ThemeController.isDarkMode.value) Color(0xFF16181D) else Color(0xFFFFFFFF)
+    val SurfaceBg: Color get() = if (ThemeController.isDarkMode.value) Color(0xFF0A0A0A) else Color(0xFFF6F8FA)
 }
 
 // ─── Review status ────────────────────────────────────────────────────────────
@@ -297,7 +298,7 @@ private fun FilterPill(label: String, icon: ImageVector, selected: Boolean, acce
         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
         colors = ButtonDefaults.outlinedButtonColors(
             containerColor = if (selected) accentColor.copy(alpha = 0.13f) else Color.Transparent,
-            contentColor   = if (selected) accentColor else RFColors.TextSecondary
+            contentColor = if (ThemeController.isDarkMode.value) RFColors.Primary else RFColors.Secondary
         ),
         border = androidx.compose.foundation.BorderStroke(1.dp, if (selected) accentColor.copy(alpha = 0.6f) else RFColors.Border)
     ) {
@@ -1663,7 +1664,9 @@ fun ReviewsFeedbackScreen() {
                                 enabled = parsedRequests.isNotEmpty(),
                                 modifier = Modifier.weight(1f).height(44.dp),
                                 shape = RoundedCornerShape(12.dp),
-                                colors = ButtonDefaults.outlinedButtonColors(contentColor = RFColors.Secondary),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = if (ThemeController.isDarkMode.value) RFColors.Primary else RFColors.Secondary
+                                ),
                                 border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
                             ) {
                                 Text("View All", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
@@ -2618,11 +2621,12 @@ private fun parseSavedReviewRatings(raw: Set<String>): List<SavedReviewRating> {
 }
 
 private fun resourceStatusColors(status: String): Pair<Color, Color> {
+    val dark = ThemeController.isDarkMode.value
     return when (status.lowercase()) {
-        "pending" -> Color(0xFFE65100) to Color(0xFFFFF3E0)
-        "approved" -> Color(0xFF2E7D32) to Color(0xFFE8F5E9)
-        "rejected" -> Color(0xFFD32F2F) to Color(0xFFFFEBEE)
-        "cancelled" -> Color(0xFF616161) to Color(0xFFF5F5F5)
+        "pending" -> Color(0xFFE65100) to (if (dark) Color(0xFF3D2A14) else Color(0xFFFFF3E0))
+        "approved" -> Color(0xFF2E7D32) to (if (dark) Color(0xFF16311A) else Color(0xFFE8F5E9))
+        "rejected" -> Color(0xFFD32F2F) to (if (dark) Color(0xFF3A1616) else Color(0xFFFFEBEE))
+        "cancelled" -> (if (dark) Color(0xFFB0B0B0) else Color(0xFF616161)) to (if (dark) Color(0xFF262626) else Color(0xFFF5F5F5))
         else -> RFColors.TextSecondary to RFColors.SurfaceBg
     }
 }

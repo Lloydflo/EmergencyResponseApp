@@ -57,23 +57,24 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.activity.compose.BackHandler
 import android.content.Intent
 import androidx.compose.foundation.lazy.itemsIndexed
-
+import com.ers.emergencyresponseapp.ui.theme.ThemeController
 
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  COLORS
 // ─────────────────────────────────────────────────────────────────────────────
-private val BrandGreen    = Color(0xFF00C07F)
-private val BgPage        = Color(0xFFF2F4F7)
-private val BgCard        = Color(0xFFFFFFFF)
-private val BgChat        = Color(0xFFF0F2F5)
-private val TextPrimary   = Color(0xFF0D0D0D)
-private val TextSecondary = Color(0xFF65676B)
-private val DividerColor  = Color(0xFFE4E6EA)
-private val OnlineDot     = Color(0xFF31A24C)
-private val UnreadBadge   = Color(0xFFE41E3F)
-private val OwnBubble     = Color(0xFF00C07F)
-private val PeerBubble    = Color(0xFFFFFFFF)
+
+private val BrandGreen    get() = Color(0xFF4C8A89)
+private val BgPage        get() = if (ThemeController.isDarkMode.value) Color(0xFF0A0A0A) else Color(0xFFF2F4F7)
+private val BgCard        get() = if (ThemeController.isDarkMode.value) Color(0xFF16181D) else Color(0xFFFFFFFF)
+private val BgChat        get() = if (ThemeController.isDarkMode.value) Color(0xFF0A0A0A) else Color(0xFFF0F2F5)
+private val TextPrimary   get() = if (ThemeController.isDarkMode.value) Color(0xFFFAFAFA) else Color(0xFF0D0D0D)
+private val TextSecondary get() = if (ThemeController.isDarkMode.value) Color(0xFFA1A1AA) else Color(0xFF65676B)
+private val DividerColor  get() = if (ThemeController.isDarkMode.value) Color(0xFF27272A) else Color(0xFFE4E6EA)
+private val OnlineDot     get() = Color(0xFF31A24C)
+private val UnreadBadge   get() = Color(0xFFE41E3F)
+private val OwnBubble     get() = Color(0xFF4C8A89)
+private val PeerBubble    get() = if (ThemeController.isDarkMode.value) Color(0xFF16181D) else Color(0xFFFFFFFF)
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  FIXES APPLIED:
@@ -429,7 +430,11 @@ private fun InboxScreen(
                             focusedContainerColor = BgPage,
                             unfocusedContainerColor = BgPage,
                             focusedBorderColor = BrandGreen,
-                            unfocusedBorderColor = Color.Transparent
+                            unfocusedBorderColor = Color.Transparent,
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary,
+                            focusedPlaceholderColor = TextSecondary,
+                            unfocusedPlaceholderColor = TextSecondary
                         )
                     )
 
@@ -2263,10 +2268,11 @@ private fun CompactStatusChip(
     tint: Color,
     modifier: Modifier = Modifier
 ) {
+    val dark = ThemeController.isDarkMode.value
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(14.dp),
-        color = tint.copy(alpha = 0.10f)
+        color = tint.copy(alpha = if (dark) 0.22f else 0.10f)
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),

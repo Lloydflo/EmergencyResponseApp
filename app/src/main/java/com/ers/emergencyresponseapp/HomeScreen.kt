@@ -82,6 +82,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -159,42 +160,47 @@ import java.util.Locale
 // ─────────────────────────────────────────────────────────────────────────────
 
 private object AppColors {
-    val Primary       = Color(0xFF4C8A89)
-    val Secondary     = Color(0xFF3A506B)
-    val Tertiary      = Color(0xFF1C2541)
-    val Dark          = Color(0xFF0B132B)
-    val Text          = Color(0xFF171717)
-    val TextSecondary = Color(0xFF575757)
-    val Border        = Color(0xFFE5E5E5)
-    val Bg            = Color(0xFFFFFFFF)
-    val FooterBg      = Color(0xFFFAFAFA)
+    val Primary: Color get() = Color(0xFF4C8A89)
+    val Secondary: Color get() = Color(0xFF3A506B)
+    val Tertiary: Color get() = Color(0xFF1C2541)
+    val Dark: Color get() = Color(0xFF0B132B)
+    val Text: Color get() = if (ThemeController.isDarkMode.value) Color(0xFFFAFAFA) else Color(0xFF171717)
+    val TextSecondary: Color get() = if (ThemeController.isDarkMode.value) Color(0xFFA1A1AA) else Color(0xFF575757)
+    val Border: Color get() = if (ThemeController.isDarkMode.value) Color(0xFF27272A) else Color(0xFFE5E5E5)
+    val Bg: Color get() = if (ThemeController.isDarkMode.value) Color(0xFF0A0A0A) else Color(0xFFFFFFFF)
+    val CardBg: Color get() = if (ThemeController.isDarkMode.value) Color(0xFF16181D) else Color(0xFFFFFFFF)
+    val HeaderBg: Color get() = if (ThemeController.isDarkMode.value) Color(0xFF16181D) else Color(0xFFFFFFFF)
+    val FooterBg: Color get() = if (ThemeController.isDarkMode.value) Color(0xFF16181D) else Color(0xFFFAFAFA)
+
 }
+
 
 // FIX 2: Hoist stable Brush objects to top-level constants so they are never
 // recreated during recomposition. Brushes are immutable value types — making
 // them top-level is safe and eliminates per-frame allocation.
-private val HeaderBrush = Brush.verticalGradient(
+// Replace these `private val` brushes:
+private fun headerBrush() = Brush.verticalGradient(
     listOf(AppColors.Primary, AppColors.Secondary, AppColors.Tertiary)
 )
-private val AssignedCardBrush = Brush.verticalGradient(
-    listOf(Color.White, AppColors.Primary.copy(0.04f))
+private fun assignedCardBrush() = Brush.verticalGradient(
+    listOf(AppColors.CardBg, AppColors.Primary.copy(0.04f))
 )
-private val AssignedBarBrush = Brush.verticalGradient(
+private fun assignedBarBrush() = Brush.verticalGradient(
     listOf(AppColors.Primary, AppColors.Secondary)
 )
 
 // FIX 3: Pre-compute per-type accent brushes as stable top-level objects.
 // Previously these were created inside items{} lambdas on every scroll frame.
-private val FireCardBrush    = Brush.verticalGradient(listOf(Color(0xFFE53935).copy(0.07f), Color.White))
-private val MedicalCardBrush = Brush.verticalGradient(listOf(Color(0xFF1E88E5).copy(0.07f), Color.White))
-private val CrimeCardBrush   = Brush.verticalGradient(listOf(Color(0xFF6D4C41).copy(0.07f), Color.White))
+private fun fireCardBrush()    = Brush.verticalGradient(listOf(Color(0xFFE53935).copy(0.07f), AppColors.CardBg))
+private fun medicalCardBrush() = Brush.verticalGradient(listOf(Color(0xFF1E88E5).copy(0.07f), AppColors.CardBg))
+private fun crimeCardBrush()   = Brush.verticalGradient(listOf(Color(0xFF6D4C41).copy(0.07f), AppColors.CardBg))
 
-private val FireBarBrush     = Brush.horizontalGradient(listOf(Color(0xFFE53935).copy(0.4f), Color(0xFFE53935)))
-private val MedicalBarBrush  = Brush.horizontalGradient(listOf(Color(0xFF1E88E5).copy(0.4f), Color(0xFF1E88E5)))
-private val CrimeBarBrush    = Brush.horizontalGradient(listOf(Color(0xFF6D4C41).copy(0.4f), Color(0xFF6D4C41)))
+private fun fireBarBrush()     = Brush.horizontalGradient(listOf(Color(0xFFE53935).copy(0.4f), Color(0xFFE53935)))
+private fun medicalBarBrush()  = Brush.horizontalGradient(listOf(Color(0xFF1E88E5).copy(0.4f), Color(0xFF1E88E5)))
+private fun crimeBarBrush()    = Brush.horizontalGradient(listOf(Color(0xFF6D4C41).copy(0.4f), Color(0xFF6D4C41)))
 
-private val cardBrushesStable = listOf(FireCardBrush, MedicalCardBrush, CrimeCardBrush)
-private val barBrushesStable  = listOf(FireBarBrush,  MedicalBarBrush,  CrimeBarBrush)
+private fun cardBrushesStable() = listOf(fireCardBrush(), medicalCardBrush(), crimeCardBrush())
+private fun barBrushesStable()  = listOf(fireBarBrush(),  medicalBarBrush(),  crimeBarBrush())
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -528,7 +534,7 @@ private fun BackupRequestStatusCard(
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
+        colors = CardDefaults.cardColors(containerColor = AppColors.Bg),
         border = BorderStroke(1.dp, if (status == "pending") AppColors.Primary.copy(alpha = 0.35f) else AppColors.Border)
     ) {
         Column(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -538,11 +544,6 @@ private fun BackupRequestStatusCard(
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(Icons.Default.LocalHospital, contentDescription = null, tint = AppColors.Primary, modifier = Modifier.size(15.dp))
-                }
-                Spacer(Modifier.width(8.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(department, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = AppColors.Text)
-                    Text(resources, fontSize = 11.sp, color = AppColors.TextSecondary)
                 }
                 Spacer(Modifier.width(8.dp))
                 Column(modifier = Modifier.weight(1f)) {
@@ -755,36 +756,12 @@ fun HomeScreen(
                 .toMutableSet()
         )
     }
-    var unseenExtraBackupCount by remember {
-        mutableStateOf(prefs.getInt("unseen_extra_backup_count", 0))
-    }
-    var previousBackupTotal by remember {
-        mutableStateOf(prefs.getInt("previous_backup_total", -1))
-    }
 
     LaunchedEffect(responderId) {
         if (responderId <= 0) return@LaunchedEffect
         val repo = com.ers.emergencyresponseapp.data.IncidentRepository()
         while (true) {
-            val fetched = repo.getMyBackupRequests(responderId)
-            val activeCount = fetched.count { req ->
-                val autoHidden = req.status == "cancelled" && isOlderThan24Hours(req.updated_at)
-                req.id !in dismissedBackupIds && !autoHidden
-            }
-
-            if (previousBackupTotal < 0) {
-                // First load this session: flag anything beyond the single shown card
-                unseenExtraBackupCount = (activeCount - 1).coerceAtLeast(0)
-            } else if (activeCount > previousBackupTotal) {
-                unseenExtraBackupCount += (activeCount - previousBackupTotal)
-            }
-            prefs.edit()
-                .putInt("unseen_extra_backup_count", unseenExtraBackupCount)
-                .putInt("previous_backup_total", activeCount)
-                .apply()
-            previousBackupTotal = activeCount
-
-            backupRequestsList = fetched
+            backupRequestsList = repo.getMyBackupRequests(responderId)
             lastBackupUpdateTime = java.util.Date()
             delay(5000)
         }
@@ -795,6 +772,13 @@ fun HomeScreen(
             val manuallyDismissed = req.id in dismissedBackupIds
             val autoHiddenAsOldCancelled = req.status == "cancelled" && isOlderThan24Hours(req.updated_at)
             !manuallyDismissed && !autoHiddenAsOldCancelled
+        }
+    }
+
+// Count of extra requests (beyond the one shown on Home) that are still unresolved
+    val pendingExtraBackupCount = remember(visibleBackupRequests) {
+        visibleBackupRequests.drop(1).count { req ->
+            req.status !in setOf("completed", "declined", "cancelled")
         }
     }
 
@@ -1710,7 +1694,7 @@ fun HomeScreen(
                         colors = CardDefaults.cardColors(containerColor = Color.Transparent)
                     ) {
                         // FIX 2: Use top-level HeaderBrush constant instead of inline Brush.verticalGradient
-                        Box(modifier = Modifier.fillMaxSize().background(HeaderBrush)) {
+                        Box(modifier = Modifier.fillMaxSize().background(headerBrush())) {
                             Row(modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 18.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Column(modifier = Modifier.weight(1f)) {
 
@@ -1861,7 +1845,7 @@ fun HomeScreen(
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(24.dp),
-                                colors = CardDefaults.cardColors(containerColor = Color.White),
+                                colors = CardDefaults.cardColors(containerColor = AppColors.Bg),
                                 elevation = CardDefaults.cardElevation(3.dp),
                                 border = BorderStroke(1.dp, AppColors.Primary.copy(alpha = 0.14f))
                             ) {
@@ -1947,18 +1931,18 @@ fun HomeScreen(
                                 val priorityColor = when (inc.priority) { IncidentPriority.HIGH -> Color(0xFFD32F2F); IncidentPriority.MEDIUM -> Color(0xFFFFA000); IncidentPriority.LOW -> Color(0xFFFFEB3B) }
                                 Card(
                                     modifier = Modifier.fillMaxWidth(),
-                                    shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = Color.White),
+                                    shape = RoundedCornerShape(16.dp),colors = CardDefaults.cardColors(containerColor = AppColors.Bg),
                                     elevation = CardDefaults.cardElevation(0.dp),
                                     border = androidx.compose.foundation.BorderStroke(1.dp, AppColors.Border)
                                 ) {
                                     Column(
                                         // FIX 2: Use stable top-level AssignedCardBrush constant
-                                        modifier = Modifier.fillMaxWidth().background(AssignedCardBrush).padding(14.dp),
+                                        modifier = Modifier.fillMaxWidth().background(assignedCardBrush()).padding(14.dp),
                                         verticalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             // FIX 2: Use stable top-level AssignedBarBrush constant
-                                            Box(modifier = Modifier.width(7.dp).height(54.dp).clip(RoundedCornerShape(99.dp)).background(AssignedBarBrush))
+                                            Box(modifier = Modifier.width(7.dp).height(54.dp).clip(RoundedCornerShape(99.dp)).background(assignedBarBrush()))
                                             Spacer(Modifier.width(12.dp))
                                             Column(modifier = Modifier.weight(1f)) {
                                                 Text(inc.type.displayName, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = AppColors.Text)
@@ -2051,7 +2035,7 @@ fun HomeScreen(
                      Card(
                          modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
                          shape = RoundedCornerShape(16.dp),
-                         colors = CardDefaults.cardColors(containerColor = Color.White),
+                         colors = CardDefaults.cardColors(containerColor = AppColors.Bg),
                          border = BorderStroke(1.dp, AppColors.Border),
                          elevation = CardDefaults.cardElevation(1.dp)
                      ) {
@@ -2108,8 +2092,6 @@ fun HomeScreen(
                                  OutlinedButton(
                                      onClick = {
                                          showAllBackupRequestsDialog = true
-                                         unseenExtraBackupCount = 0
-                                         prefs.edit().putInt("unseen_extra_backup_count", 0).apply()
                                      },
                                      modifier = Modifier.weight(1f).height(38.dp),
                                      shape = RoundedCornerShape(10.dp),
@@ -2119,12 +2101,12 @@ fun HomeScreen(
                                  ) {
                                      Box {
                                          Text("View All", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
-                                         if (unseenExtraBackupCount > 0) {
+                                         if (pendingExtraBackupCount > 0) {
                                              Badge(
-                                                 modifier = Modifier.align(Alignment.TopEnd).offset(x = 10.dp, y = (-8).dp),
+                                                 modifier = Modifier.align(Alignment.TopEnd).offset(x = 13.dp, y = (-8).dp),
                                                  containerColor = Color(0xFFD32F2F)
                                              ) {
-                                                 Text(if (unseenExtraBackupCount > 9) "9+" else unseenExtraBackupCount.toString())
+                                                 Text(if (pendingExtraBackupCount > 9) "9+" else pendingExtraBackupCount.toString())
                                              }
                                          }
                                      }
@@ -2139,7 +2121,7 @@ fun HomeScreen(
                                  )
                              } else {
                                  Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                     visibleBackupRequests.take(2).forEach { req ->
+                                     visibleBackupRequests.take(1).forEach { req ->
                                          BackupRequestStatusCard(
                                              department = req.requested_department,
                                              resources = req.resources,
@@ -2251,7 +2233,7 @@ fun HomeScreen(
                                 .padding(horizontal = 12.dp),
                             shape = RoundedCornerShape(22.dp),
                             colors = CardDefaults.cardColors(
-                                containerColor = Color.White
+                                containerColor = AppColors.CardBg
                             ),
                             elevation = CardDefaults.cardElevation(2.dp),
                             border = BorderStroke(
@@ -2318,7 +2300,7 @@ fun HomeScreen(
                         Card(
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).heightIn(max = 320.dp),
                             shape = RoundedCornerShape(18.dp), elevation = CardDefaults.cardElevation(0.dp),
-                            colors = CardDefaults.cardColors(containerColor = Color.White),
+                            colors = CardDefaults.cardColors(containerColor = AppColors.Bg),
                             border = androidx.compose.foundation.BorderStroke(1.dp, AppColors.Border)
                         ) {
                             LazyColumn(
@@ -2337,7 +2319,7 @@ fun HomeScreen(
                                             onClick = { selectedActiveIncident = inc; showActiveDetailsSheet = true },
                                             onLongClick = { selectedActiveIncident = inc; showActiveDetailsSheet = true }
                                         ),
-                                        shape = RoundedCornerShape(18.dp), elevation = CardDefaults.cardElevation(0.dp), colors = CardDefaults.cardColors(containerColor = Color.White), border = androidx.compose.foundation.BorderStroke(1.dp, AppColors.Border)
+                                        shape = RoundedCornerShape(18.dp), elevation = CardDefaults.cardElevation(0.dp),colors = CardDefaults.cardColors(containerColor = AppColors.Bg), border = androidx.compose.foundation.BorderStroke(1.dp, AppColors.Border)
                                     ) {
                                         Column(modifier = Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2448,6 +2430,7 @@ fun HomeScreen(
                     val typeIcons   = remember { listOf(Icons.Default.LocalFireDepartment, Icons.Default.LocalHospital, Icons.Default.Security) }
                     // typeCounts references derivedStateOf vars — no extra remember needed
                     val typeCounts  = listOf(fireCount, medicalCount, crimeCount)
+                    val cardBrushes = cardBrushesStable()
 
                     Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         typeAccents.forEachIndexed { i, accent ->
@@ -2455,13 +2438,13 @@ fun HomeScreen(
                                 modifier = Modifier.weight(1f),
                                 shape = RoundedCornerShape(22.dp),
                                 elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-                                colors = CardDefaults.cardColors(containerColor = Color.White),
+                                colors = CardDefaults.cardColors(containerColor = AppColors.Bg),
                                 border = androidx.compose.foundation.BorderStroke(1.dp, accent.copy(0.13f))
                             ) {
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .background(cardBrushesStable[i])
+                                        .background(cardBrushes[i])
                                         .padding(horizontal = 10.dp, vertical = 10.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.Center
@@ -2523,7 +2506,7 @@ fun HomeScreen(
                                         onClick = { selectedActiveIncident = inc; showActiveDetailsSheet = true; showAllActiveDialog = false },
                                         onLongClick = { selectedActiveIncident = inc; showActiveDetailsSheet = true; showAllActiveDialog = false }
                                     ),
-                                    shape = RoundedCornerShape(14.dp), elevation = CardDefaults.cardElevation(1.dp), colors = CardDefaults.cardColors(containerColor = Color.White)
+                                    shape = RoundedCornerShape(14.dp), elevation = CardDefaults.cardElevation(1.dp),colors = CardDefaults.cardColors(containerColor = AppColors.Bg)
                                 ) {
                                     Column(modifier = Modifier.padding(12.dp)) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -3147,27 +3130,24 @@ private fun AccountSettingsDialog(
     onDarkModeChange: (Boolean) -> Unit, onPickPhoto: () -> Unit,
     onSave: () -> Unit, onBack: () -> Unit, onLogout: () -> Unit
 ) {
-    var showProfilePreview by remember { mutableStateOf(false) }
 
-    if (showProfilePreview) {
-        AlertDialog(
-            onDismissRequest = { showProfilePreview = false },
-            title = { Text("Profile Photo", fontWeight = FontWeight.SemiBold) },
-            text = {
-                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Box(modifier = Modifier.size(240.dp).clip(CircleShape).border(1.dp, AppColors.Border, CircleShape)) {
-                        ResponderAvatar(modifier = Modifier.fillMaxSize(), imageUri = photoUri, status = ResponderOnlineStatus.Offline)
-                    }
-                }
-            },
-            confirmButton = { TextButton(onClick = { showProfilePreview = false }) { Text("Close") } }
-        )
-    }
+    var showProfilePreview by remember { mutableStateOf(false) }
+    val textFieldColors = OutlinedTextFieldDefaults.colors(
+        focusedTextColor = AppColors.Text,
+        unfocusedTextColor = AppColors.Text,
+        focusedBorderColor = AppColors.Primary,
+        unfocusedBorderColor = if (ThemeController.isDarkMode.value) Color(0xFF4A4A4E) else AppColors.Border,
+        focusedLabelColor = AppColors.Primary,
+        unfocusedLabelColor = AppColors.TextSecondary,
+        cursorColor = AppColors.Primary
+    )
 
     AlertDialog(
         onDismissRequest = onBack,
         shape = RoundedCornerShape(20.dp),
-        containerColor = Color(0xFFF7F5F9),
+        containerColor = if (ThemeController.isDarkMode.value) Color(0xFF242426) else Color(0xFFF7F5F9),
+        titleContentColor = AppColors.Text,
+        textContentColor = AppColors.Text,
         title = { Text("Account Settings", fontWeight = FontWeight.Bold, fontSize = 20.sp) },
         text = {
             Column(modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -3184,10 +3164,42 @@ private fun AccountSettingsDialog(
                     }
                 }
                 HorizontalDivider()
-                OutlinedTextField(value = fullName,  onValueChange = onFullNameChange, label = { Text("Full name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = username,  onValueChange = onUsernameChange, label = { Text("Username") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = email,     onValueChange = onEmailChange,    label = { Text("Email") },    singleLine = true, modifier = Modifier.fillMaxWidth())
-                Card(shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = Color.White), border = androidx.compose.foundation.BorderStroke(1.dp, AppColors.Border)) {
+
+                OutlinedTextField(
+                    value = fullName, onValueChange = onFullNameChange,
+                    label = { Text("Full name") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = textFieldColors
+                )
+                OutlinedTextField(
+                    value = username, onValueChange = onUsernameChange,
+                    label = { Text("Username") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = textFieldColors
+                )
+                OutlinedTextField(
+                    value = email, onValueChange = onEmailChange,
+                    label = { Text("Email") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = textFieldColors
+                )
+                    if (showProfilePreview) {
+                AlertDialog(
+                    onDismissRequest = { showProfilePreview = false },
+                    title = { Text("Profile Photo", fontWeight = FontWeight.SemiBold) },
+                    text = {
+                        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            Box(modifier = Modifier.size(240.dp).clip(CircleShape).border(1.dp, AppColors.Border, CircleShape)) {
+                                ResponderAvatar(modifier = Modifier.fillMaxSize(), imageUri = photoUri, status = ResponderOnlineStatus.Offline)
+                            }
+                        }
+                    },
+                    confirmButton = { TextButton(onClick = { showProfilePreview = false }) { Text("Close") } }
+                )
+            }
+
+
+                Card(shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = AppColors.Bg), border = androidx.compose.foundation.BorderStroke(1.dp, AppColors.Border)) {
                     Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                         Column { Text("Night mode", fontWeight = FontWeight.SemiBold, color = AppColors.Text); Text("Reduce glare in low light", fontSize = 12.sp, color = AppColors.TextSecondary) }
                         Switch(
@@ -3196,7 +3208,7 @@ private fun AccountSettingsDialog(
                         )
                     }
                 }
-                Card(shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = Color.White), border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(0.35f))) {
+                Card(shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = AppColors.Bg), border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(0.35f))) {
                     Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                         Column { Text("Logout", fontWeight = FontWeight.SemiBold, color = AppColors.Text); Text("Sign out of this device", fontSize = 12.sp, color = AppColors.TextSecondary) }
                         TextButton(onClick = onLogout) { Text("Logout", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold) }
