@@ -29,22 +29,62 @@ fun uriToProfileImagePart(context: Context, uri: Uri): MultipartBody.Part {
 fun userIdToRequestBody(userId: Int) =
     userId.toString().toRequestBody("text/plain".toMediaTypeOrNull())
 
-fun uriStringToMultipartPart(context: Context, partName: String, fileName: String, uriStr: String): MultipartBody.Part {
+fun uriStringToMultipartPart(
+    context: Context,
+    partName: String,
+    fileName: String,
+    uriStr: String
+): MultipartBody.Part {
+
     val uri = Uri.parse(uriStr)
-    val mimeType = context.contentResolver.getType(uri) ?: "image/jpeg"
-    val extension = when (mimeType) {
-        "image/png" -> "png"
-        "image/webp" -> "webp"
-        else -> "jpg"
+
+    val file: File
+
+    val mimeType: String
+
+    if (uri.scheme == "file") {
+
+        file = File(uri.path!!)
+
+        mimeType = "image/jpeg"
+
+    } else {
+
+        mimeType =
+            context.contentResolver.getType(uri)
+                ?: "image/jpeg"
+
+        val extension = when (mimeType) {
+            "image/png" -> "png"
+            "image/webp" -> "webp"
+            else -> "jpg"
+        }
+
+        file = File.createTempFile(
+            fileName,
+            ".$extension",
+            context.cacheDir
+        )
+
+        context.contentResolver
+            .openInputStream(uri)
+            ?.use { input ->
+                file.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
     }
 
-    val tempFile = File.createTempFile(fileName, ".$extension", context.cacheDir)
-    context.contentResolver.openInputStream(uri)?.use { input ->
-        tempFile.outputStream().use { output -> input.copyTo(output) }
-    }
+    val requestBody =
+        file.asRequestBody(
+            mimeType.toMediaTypeOrNull()
+        )
 
-    val requestBody = tempFile.asRequestBody(mimeType.toMediaTypeOrNull())
-    return MultipartBody.Part.createFormData(partName, tempFile.name, requestBody)
+    return MultipartBody.Part.createFormData(
+        partName,
+        file.name,
+        requestBody
+    )
 }
 
 fun stringToRequestBody(value: String) =

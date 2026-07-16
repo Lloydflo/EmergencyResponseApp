@@ -6,6 +6,7 @@ import com.ers.emergencyresponseapp.network.MyResourceRequestDto
 import com.ers.emergencyresponseapp.network.ResourceRequestStatusDto
 import com.ers.emergencyresponseapp.network.RetrofitProvider
 import com.ers.emergencyresponseapp.network.MyBackupRequestDto
+import android.util.Log
 
 class IncidentRepository {
 
@@ -167,6 +168,99 @@ class IncidentRepository {
             }
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    suspend fun submitIncidentReview(
+        incidentId: Long,
+        responderId: Int,
+        responseRating: Int,
+        communicationRating: Int,
+        professionalismRating: Int,
+        outcome: String,
+        reviewText: String
+    ): Result<Unit> {
+        return try {
+            val response = api.submitIncidentReview(
+                incidentId = incidentId,
+                responderId = responderId,
+                responseRating = responseRating,
+                communicationRating = communicationRating,
+                professionalismRating = professionalismRating,
+                outcome = outcome,
+                reviewText = reviewText
+            )
+
+            if (response.success) {
+                Result.success(Unit)
+            } else {
+                Result.failure(
+                    Exception(
+                        response.message ?: "Failed to submit review"
+                    )
+                )
+            }
+        } catch (e: Exception) {
+            Log.e(
+                "IncidentRepository",
+                "submitIncidentReview failed",
+                e
+            )
+
+            Result.failure(
+                Exception(e.message ?: "Network error")
+            )
+        }
+    }
+
+    suspend fun getPendingReviewIncidents(
+        responderId: Int
+    ): List<com.ers.emergencyresponseapp.network.PendingReviewIncidentDto> {
+        return try {
+            val response = api.getPendingReviewIncidents(responderId)
+
+            if (response.success) {
+                response.incidents ?: emptyList()
+            } else {
+                emptyList()
+            }
+        } catch (e: Exception) {
+            Log.e(
+                "IncidentRepository",
+                "Failed to load review incidents",
+                e
+            )
+
+            emptyList()
+        }
+    }
+
+    suspend fun setUnitPresence(
+        responderId: Int,
+        presence: String
+    ): String? {
+        return try {
+            val response = api.setUnitPresence(
+                responderId = responderId,
+                presence = presence
+            )
+
+            if (response.success) {
+                response.unit_status
+            } else {
+                Log.e(
+                    "IncidentRepository",
+                    "Server rejected presence: ${response.message}"
+                )
+                null
+            }
+        } catch (e: Exception) {
+            Log.e(
+                "IncidentRepository",
+                "Failed to set presence=$presence",
+                e
+            )
+            null
         }
     }
 

@@ -51,8 +51,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
-import com.ers.emergencyresponseapp.home.IncidentStore
-import com.ers.emergencyresponseapp.home.IncidentStatus
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
@@ -69,6 +67,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import com.ers.emergencyresponseapp.ui.theme.ThemeController
+import coil.compose.AsyncImage
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
 private object RFColors {
@@ -182,13 +181,42 @@ private data class SavedReviewRating(
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /** Decode a file:// or content:// URI string to a Bitmap safely */
+private const val SERVER_BASE_URL = "https://emergency-response.alertaraqc.com"
+
+/** Turns a server-relative path like "/uploads/x.jpg" into a fetchable https URL.
+ *  Leaves file://, content://, and already-absolute http(s):// URIs untouched. */
+private fun resolveImageUri(uriStr: String): String {
+    val cleanUri = uriStr.trim()
+
+    return when {
+        cleanUri.startsWith("http://") ||
+                cleanUri.startsWith("https://") -> cleanUri
+
+        cleanUri.startsWith("file://") ||
+                cleanUri.startsWith("content://") -> cleanUri
+
+        cleanUri.startsWith("/") ->
+            "$SERVER_BASE_URL$cleanUri"
+
+        cleanUri.isNotBlank() ->
+            "$SERVER_BASE_URL/${cleanUri.trimStart('/')}"
+
+        else -> ""
+    }
+}
+
 private fun decodeBitmap(ctx: Context, uriStr: String): Bitmap? =
     runCatching {
-        if (uriStr.startsWith("file://"))
-            BitmapFactory.decodeFile(Uri.parse(uriStr).path)
-        else
-            ctx.contentResolver.openInputStream(Uri.parse(uriStr))
-                ?.use { BitmapFactory.decodeStream(it) }
+        val resolved = resolveImageUri(uriStr)
+        when {
+            resolved.startsWith("file://") ->
+                BitmapFactory.decodeFile(Uri.parse(resolved).path)
+            resolved.startsWith("http://") || resolved.startsWith("https://") ->
+                java.net.URL(resolved).openStream().use { BitmapFactory.decodeStream(it) }
+            else ->
+                ctx.contentResolver.openInputStream(Uri.parse(resolved))
+                    ?.use { BitmapFactory.decodeStream(it) }
+        }
     }.getOrNull()
 
 /**
@@ -197,45 +225,110 @@ private fun decodeBitmap(ctx: Context, uriStr: String): Bitmap? =
  * the largest power-of-2 sample that keeps the image >= screen size,
  * preventing both blur-from-upscaling AND oom-from-giant-bitmap.
  */
-private fun decodeBitmapHighQuality(ctx: Context, uriStr: String): Bitmap? = runCatching {
-    val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+private fun decodeBitmapHighQuality(
+    ctx: Context,
+    uriStr: String
+): Bitmap? = runCatching {
 
-    // First pass — measure only
-    if (uriStr.startsWith("file://")) {
-        BitmapFactory.decodeFile(Uri.parse(uriStr).path, options)
+    val resolved = resolveImageUri(uriStr)
+
+    val isRemote =
+        resolved.startsWith("http://") ||
+                resolved.startsWith("https://")
+
+    val bytes: ByteArray? = if (isRemote) {
+        java.net.URL(resolved)
+            .openStream()
+            .use { it.readBytes() }
     } else {
-        ctx.contentResolver.openInputStream(Uri.parse(uriStr))
-            ?.use { BitmapFactory.decodeStream(it, null, options) }
+        null
+    }
+
+    val options = BitmapFactory.Options().apply {
+        inJustDecodeBounds = true
+    }
+
+    when {
+        resolved.startsWith("file://") -> {
+            BitmapFactory.decodeFile(
+                Uri.parse(resolved).path,
+                options
+            )
+        }
+
+        isRemote -> {
+            BitmapFactory.decodeByteArray(
+                bytes,
+                0,
+                bytes!!.size,
+                options
+            )
+        }
+
+        else -> {
+            ctx.contentResolver
+                .openInputStream(Uri.parse(resolved))
+                ?.use { inputStream ->
+                    BitmapFactory.decodeStream(
+                        inputStream,
+                        null,
+                        options
+                    )
+                }
+        }
     }
 
     val srcW = options.outWidth
     val srcH = options.outHeight
 
-    // Screen size (pixels)
-    val dm    = ctx.resources.displayMetrics
-    val reqW  = dm.widthPixels
-    val reqH  = dm.heightPixels
+    val displayMetrics = ctx.resources.displayMetrics
+    val requiredWidth = displayMetrics.widthPixels
+    val requiredHeight = displayMetrics.heightPixels
 
-    // Largest power-of-2 inSampleSize that keeps image ≥ screen dimensions
-    var sample = 1
-    while ((srcW / (sample * 2)) >= reqW && (srcH / (sample * 2)) >= reqH) {
-        sample *= 2
+    var sampleSize = 1
+
+    while (
+        srcW / (sampleSize * 2) >= requiredWidth &&
+        srcH / (sampleSize * 2) >= requiredHeight
+    ) {
+        sampleSize *= 2
     }
 
-    // Second pass — full decode at chosen sample
-    val decodeOpts = BitmapFactory.Options().apply {
-        inSampleSize        = sample
-        inPreferredConfig   = android.graphics.Bitmap.Config.ARGB_8888  // best colour depth
+    val decodeOptions = BitmapFactory.Options().apply {
+        inSampleSize = sampleSize
+        inPreferredConfig = Bitmap.Config.ARGB_8888
     }
 
-    if (uriStr.startsWith("file://")) {
-        BitmapFactory.decodeFile(Uri.parse(uriStr).path, decodeOpts)
-    } else {
-        ctx.contentResolver.openInputStream(Uri.parse(uriStr))
-            ?.use { BitmapFactory.decodeStream(it, null, decodeOpts) }
+    when {
+        resolved.startsWith("file://") -> {
+            BitmapFactory.decodeFile(
+                Uri.parse(resolved).path,
+                decodeOptions
+            )
+        }
+
+        isRemote -> {
+            BitmapFactory.decodeByteArray(
+                bytes,
+                0,
+                bytes!!.size,
+                decodeOptions
+            )
+        }
+
+        else -> {
+            ctx.contentResolver
+                .openInputStream(Uri.parse(resolved))
+                ?.use { inputStream ->
+                    BitmapFactory.decodeStream(
+                        inputStream,
+                        null,
+                        decodeOptions
+                    )
+                }
+        }
     }
 }.getOrNull()
-
 /**
  * Reverse-geocode lat/lng into a formatted string:
  * "Location: Commonwealth Ave, Quezon City\nCoordinates: 14.65723, 121.04310"
@@ -310,53 +403,54 @@ private fun FilterPill(label: String, icon: ImageVector, selected: Boolean, acce
 
 // ─── Full-screen image preview dialog ────────────────────────────────────────
 @Composable
-private fun FullScreenImageDialog(uriStr: String, onDismiss: () -> Unit) {
-    val ctx    = LocalContext.current
-    val bitmap = remember(uriStr) { decodeBitmapHighQuality(ctx, uriStr) }
+private fun FullScreenImageDialog(
+    uriStr: String,
+    onDismiss: () -> Unit
+) {
+    val resolvedImageUrl = remember(uriStr) {
+        resolveImageUri(uriStr)
+    }
 
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(
             usePlatformDefaultWidth = false,
-            dismissOnClickOutside   = true,
-            decorFitsSystemWindows  = false
+            dismissOnClickOutside = true,
+            decorFitsSystemWindows = false
         )
     ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black)
-                .clickable { onDismiss() },
+                .background(Color.Black),
             contentAlignment = Alignment.Center
         ) {
-            if (bitmap != null) {
-                Image(
-                    bitmap             = bitmap.asImageBitmap(),
-                    contentDescription = "Full proof image",
-                    modifier           = Modifier
-                        .fillMaxWidth()
-                        .wrapContentHeight()
-                        .padding(horizontal = 16.dp),
-                    contentScale       = ContentScale.Fit,       // never upscale beyond native size
-                    filterQuality      = androidx.compose.ui.graphics.FilterQuality.High  // bilinear filtering
-                )
-            } else {
-                Text("Image not available", color = Color.White, fontSize = 16.sp)
-            }
+            AsyncImage(
+                model = resolvedImageUrl,
+                contentDescription = "Full completion image",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Fit
+            )
 
-            // Close button top-right
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .statusBarsPadding()
                     .padding(end = 16.dp, top = 8.dp)
-                    .size(40.dp)
+                    .size(48.dp)
                     .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.22f))
-                    .clickable { onDismiss() },
+                    .background(Color.White.copy(alpha = 0.20f))
+                    .clickable {
+                        onDismiss()
+                    },
                 contentAlignment = Alignment.Center
             ) {
-                Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White, modifier = Modifier.size(22.dp))
+                Icon(
+                    Icons.Default.Close,
+                    contentDescription = "Close",
+                    tint = Color.White,
+                    modifier = Modifier.size(28.dp)
+                )
             }
         }
     }
@@ -414,57 +508,120 @@ private fun ReviewCard(
                 HorizontalDivider(color = RFColors.Border, thickness = 0.8.dp)
 
                 // Date + proof
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Icon(Icons.Default.DateRange, contentDescription = null, modifier = Modifier.size(14.dp), tint = RFColors.Primary)
-                            Text(incident.date, fontSize = 13.sp, color = RFColors.TextSecondary)
-                        }
-                        incident.completionNotes?.takeIf { it.isNotBlank() }?.let { notes ->
-                            Spacer(Modifier.height(4.dp))
-                            Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Icon(Icons.AutoMirrored.Filled.Notes, contentDescription = null, modifier = Modifier.size(14.dp).padding(top = 2.dp), tint = RFColors.Primary)
-                                Text(notes, fontSize = 12.sp, color = RFColors.TextSecondary, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.DateRange,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = RFColors.Primary
+                        )
+
+                        Text(
+                            incident.date,
+                            fontSize = 13.sp,
+                            color = RFColors.TextSecondary
+                        )
+                    }
+
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        color = RFColors.SurfaceBg,
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            RFColors.Border
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.Notes,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(15.dp),
+                                    tint = RFColors.Primary
+                                )
+
+                                Text(
+                                    "Completion Notes",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = RFColors.Text
+                                )
                             }
+
+                            Text(
+                                text = incident.completionNotes
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?: "No completion notes were provided.",
+                                fontSize = 12.sp,
+                                color = RFColors.TextSecondary,
+                                maxLines = 3,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
-                    // Proof thumbnail — tap to open full-screen
-                    incident.proofUri?.let { uriStr ->
-                        val ctx    = LocalContext.current
-                        val bitmap = remember(uriStr) { decodeBitmap(ctx, uriStr) }
-                        if (bitmap != null) {
+
+                    incident.proofUri
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { uriStr ->
+
+                            val resolvedImageUrl = resolveImageUri(uriStr)
+
                             Box(
                                 modifier = Modifier
-                                    .size(72.dp)                            // slightly bigger thumb
+                                    .fillMaxWidth()
+                                    .height(220.dp)
                                     .clip(RoundedCornerShape(12.dp))
-                                    .border(1.dp, RFColors.Border, RoundedCornerShape(12.dp))
-                                    .clickable { onViewImage(uriStr) }
+                                    .border(
+                                        1.dp,
+                                        RFColors.Border,
+                                        RoundedCornerShape(12.dp)
+                                    )
+                                    .clickable {
+                                        onViewImage(resolvedImageUrl)
+                                    }
                             ) {
-                                Image(
-                                    bitmap = bitmap.asImageBitmap(),
-                                    contentDescription = "Proof photo",
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentScale = ContentScale.Crop
-                                )
-                                // Zoom hint overlay
-                                Box(
+                                AsyncImage(
+                                    model = resolvedImageUrl,
+                                    contentDescription = "Completion image",
                                     modifier = Modifier
                                         .fillMaxSize()
-                                        .background(Color.Black.copy(alpha = 0.18f))
+                                        .background(Color.Black),
+                                    contentScale = ContentScale.Fit
                                 )
+
                                 Box(
                                     modifier = Modifier
-                                        .align(Alignment.Center)
-                                        .size(28.dp)
-                                        .clip(CircleShape)
-                                        .background(RFColors.Primary.copy(alpha = 0.85f)),
-                                    contentAlignment = Alignment.Center
+                                        .align(Alignment.BottomEnd)
+                                        .padding(8.dp)
+                                        .clip(RoundedCornerShape(999.dp))
+                                        .background(Color.Black.copy(alpha = 0.65f))
+                                        .padding(
+                                            horizontal = 9.dp,
+                                            vertical = 5.dp
+                                        )
                                 ) {
-                                    Icon(Icons.Default.ZoomIn, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.White)
+                                    Text(
+                                        "Tap to view",
+                                        color = Color.White,
+                                        fontSize = 11.sp
+                                    )
                                 }
                             }
                         }
-                    }
                 }
 
                 // CTA
@@ -503,6 +660,7 @@ private fun ReviewCard(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ResourceRequestFullScreenDialog(
+    responderId: Int,
     responderName: String,
     onDismiss: () -> Unit,
     onSubmit: () -> Unit
@@ -523,8 +681,7 @@ private fun ResourceRequestFullScreenDialog(
     var notes by rememberSaveable { mutableStateOf("") }
     var isSending by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    val storedPrefs = context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
-    val responderId = storedPrefs.getString("user_id", "")?.toIntOrNull() ?: 0
+
 
     val maxQty = category.maxQty
     val isFormValid = resourceName.isNotBlank() && quantity > 0 && location.isNotBlank()
@@ -1328,6 +1485,9 @@ fun ReviewsFeedbackScreen() {
 
     val responderName = prefs.getString("account_username", "Responder") ?: "Responder"
 
+    val storedPrefs = context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
+    val responderId = storedPrefs.getString("user_id", "")?.toIntOrNull() ?: 0
+
     val showComposeDialog = remember { mutableStateOf(false) }
     val reviewText        = rememberSaveable { mutableStateOf("") }
     var responseRating by rememberSaveable { mutableIntStateOf(3) }
@@ -1348,62 +1508,117 @@ fun ReviewsFeedbackScreen() {
     var fullScreenImageUri by remember { mutableStateOf<String?>(null) }   // ← replaces AlertDialog
     var showResourceForm   by remember { mutableStateOf(false) }
     var requestRefreshKey by remember { mutableIntStateOf(0) }
+    var reviewRefreshKey by remember { mutableIntStateOf(0) }
     var selectedRequest by remember { mutableStateOf<SavedResourceRequest?>(null) }
     var requestToCancel by remember { mutableStateOf<SavedResourceRequest?>(null) }
     var showAllRequests by remember { mutableStateOf(false) }
+    var showAllReviews by remember { mutableStateOf(false) }
 
+    var isSubmittingReview by remember { mutableStateOf(false) }
 
-    fun submitReview(incident: ReviewableIncident, text: String) {
-        val plainId = incident.id.removePrefix("#")
-        try {
-            IncidentStore.submitReview(plainId, text)
-            Toast.makeText(context, "Review submitted", Toast.LENGTH_SHORT).show()
-        } catch (_: Exception) {
-            Toast.makeText(context, "Failed to submit review", Toast.LENGTH_SHORT).show()
+    suspend fun submitReview(
+        incident: ReviewableIncident,
+        text: String,
+        responseRatingVal: Int,
+        communicationRatingVal: Int,
+        professionalismRatingVal: Int,
+        outcome: String
+    ): Boolean {
+        val incidentIdLong = incident.id.removePrefix("#").toLongOrNull()
+        if (incidentIdLong == null || responderId <= 0) {
+            Toast.makeText(context, "Unable to submit review", Toast.LENGTH_SHORT).show()
+            return false
+        }
+        val repo = com.ers.emergencyresponseapp.data.IncidentRepository()
+        val result = repo.submitIncidentReview(
+            incidentId = incidentIdLong,
+            responderId = responderId,
+            responseRating = responseRatingVal,
+            communicationRating = communicationRatingVal,
+            professionalismRating = professionalismRatingVal,
+            outcome = outcome,
+            reviewText = text
+        )
+        return result.onSuccess {
+            Toast.makeText(context, "Review submitted for admin verification", Toast.LENGTH_SHORT).show()
+        }.onFailure { error ->
+            Toast.makeText(context, "Failed to submit review: ${error.message}", Toast.LENGTH_LONG).show()
+        }.isSuccess
+    }
+
+    var serverReviewIncidents by remember { mutableStateOf<List<com.ers.emergencyresponseapp.network.PendingReviewIncidentDto>>(emptyList()) }
+
+    suspend fun refreshReviewIncidents() {
+        if (responderId <= 0) return
+        val repo = com.ers.emergencyresponseapp.data.IncidentRepository()
+        serverReviewIncidents = repo.getPendingReviewIncidents(responderId)
+    }
+
+    // Immediate refresh on manual triggers (e.g. right after a review submits)
+    LaunchedEffect(reviewRefreshKey, responderId) {
+        refreshReviewIncidents()
+    }
+
+    // Background poll every 5s so admin-side status changes show up automatically
+    LaunchedEffect(responderId) {
+        if (responderId <= 0) return@LaunchedEffect
+        while (true) {
+            delay(5000L)
+            refreshReviewIncidents()
         }
     }
 
-    val candidateNames = listOfNotNull(
-        prefs.getString("account_username", null),
-        prefs.getString("responder_name", null),
-        prefs.getString("account_full_name", null)
-    ).map { it.trim().lowercase() }.toSet()
-
-    val derivedIncidents = IncidentStore.incidents
-        .filter { inc ->
-            val assigned = inc.assignedTo?.trim()?.lowercase()
-            val matchesAssigned = if (candidateNames.isNotEmpty()) assigned != null && candidateNames.contains(assigned) else assigned != null
-            matchesAssigned && (inc.status == IncidentStatus.PENDING_REVIEW || inc.status == IncidentStatus.SUBMITTED_REVIEW || inc.status == IncidentStatus.RESOLVED)
-        }
-        .map { inc ->
-            val proof        = runCatching { IncidentStore.getProofUri(inc.id) }.getOrNull()
-            val notes        = runCatching { IncidentStore.getCompletionNotes(inc.id) }.getOrNull()
-            val completionTs = runCatching { IncidentStore.getCompletionTime(inc.id) }.getOrNull()
-            val status = when (inc.status) {
-                IncidentStatus.PENDING_REVIEW   -> ReviewStatus.Pending
-                IncidentStatus.SUBMITTED_REVIEW -> ReviewStatus.Submitted
-                IncidentStatus.RESOLVED         -> if (completionTs != null) ReviewStatus.Completed else ReviewStatus.Submitted
-                else -> ReviewStatus.Pending
+    val allIncidents = remember(serverReviewIncidents) {
+        serverReviewIncidents.map { dto ->
+            val status = when (dto.review_status) {
+                "pending_review"   -> ReviewStatus.Pending
+                "submitted_review" -> ReviewStatus.Submitted
+                "resolved"         -> ReviewStatus.Completed
+                else               -> ReviewStatus.Pending
             }
-            val dateStr = completionTs?.let { java.text.SimpleDateFormat("yyyy-MM-dd · HH:mm", java.util.Locale.getDefault()).format(java.util.Date(it)) }
-                ?: java.text.SimpleDateFormat("yyyy-MM-dd · HH:mm", java.util.Locale.getDefault()).format(inc.timeReported)
-            ReviewableIncident("#${inc.id}", inc.type.displayName, dateStr, status, proof, notes)
-        }
+            val dateStr = dto.completed_at?.let { raw ->
+                runCatching {
+                    val parsed = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).parse(raw)
+                    java.text.SimpleDateFormat("yyyy-MM-dd · HH:mm", Locale.getDefault()).format(parsed!!)
+                }.getOrDefault(raw)
+            } ?: "—"
 
-    val allIncidents = derivedIncidents
+            ReviewableIncident(
+                id = "#${dto.id}",
+                type = dto.type.replaceFirstChar { it.uppercase() },
+                date = dateStr,
+                status = status,
+                proofUri = dto.completion_image_path,
+                completionNotes = dto.completion_notes
+            )
+        }
+    }
 
     val pendingCount   = allIncidents.count { it.status == ReviewStatus.Pending }
     val submittedCount = allIncidents.count { it.status == ReviewStatus.Submitted }
     val completedCount = allIncidents.count { it.status == ReviewStatus.Completed }
-    val filtered       = allIncidents.filter { it.status == selected }
+
+    val filtered = allIncidents
+        .filter { it.status == selected }
+
+    val reviewsShownOnMainScreen = when (selected) {
+        ReviewStatus.Pending -> filtered
+        ReviewStatus.Submitted,
+        ReviewStatus.Completed -> filtered.take(2)
+    }
+
+    val hasMoreReviews = when (selected) {
+        ReviewStatus.Pending -> false
+        ReviewStatus.Submitted,
+        ReviewStatus.Completed -> filtered.size > 2
+    }
 
     val resourcePrefs = context.getSharedPreferences("resource_requests", Context.MODE_PRIVATE)
 
     val reviewPrefs = context.getSharedPreferences("review_ratings", Context.MODE_PRIVATE)
     var ratingRefreshKey by remember { mutableIntStateOf(0) }
 
-    val storedPrefs = context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
-    val responderId = storedPrefs.getString("user_id", "")?.toIntOrNull() ?: 0
+
 
     var parsedRequests by remember { mutableStateOf<List<SavedResourceRequest>>(emptyList()) }
 
@@ -1423,6 +1638,24 @@ fun ReviewsFeedbackScreen() {
             )
         }
     }
+    // Requests actually shown in the UI: cancelled requests disappear 24hrs after
+    // their last status change so the list doesn't fill up with dead clutter.
+    val visibleResourceRequests = remember(parsedRequests) {
+        val now = System.currentTimeMillis()
+        parsedRequests.filter { req ->
+            if (req.status.equals("Cancelled", ignoreCase = true)) {
+                val hoursSinceUpdate = (now - req.timestamp) / (1000 * 60 * 60)
+                hoursSinceUpdate < 24
+            } else {
+                true
+            }
+        }
+    }
+
+    // Latest request — highlighted in the list, no separate duplicate card needed anymore
+    val latestResourceRequest = visibleResourceRequests.firstOrNull()
+
+    val resourceRequests = visibleResourceRequests.size
 
 // Immediate refresh on manual triggers (submit, cancel, pull-to-refresh button)
     LaunchedEffect(requestRefreshKey, responderId) {
@@ -1438,12 +1671,6 @@ fun ReviewsFeedbackScreen() {
         }
     }
 
-    // Latest request — highlighted in the list, no separate duplicate card needed anymore
-    val latestResourceRequest = parsedRequests.firstOrNull()
-
-
-
-    val resourceRequests = parsedRequests.size
 
     val savedRatings = remember(ratingRefreshKey) {
         parseSavedReviewRatings(
@@ -1478,16 +1705,10 @@ fun ReviewsFeedbackScreen() {
         }
     }
 
-    val recentRequests = parsedRequests.take(3)
-    val filteredRequests = parsedRequests.filter {
-        it.resourceName.contains(
-            requestSearch,
-            ignoreCase = true
-        ) ||
-                it.id.contains(
-                    requestSearch,
-                    ignoreCase = true
-                )
+    val recentRequests = visibleResourceRequests.take(1)
+    val filteredRequests = visibleResourceRequests.filter {
+        it.resourceName.contains(requestSearch, ignoreCase = true) ||
+                it.id.contains(requestSearch, ignoreCase = true)
     }
 
     Scaffold(containerColor = RFColors.SurfaceBg) { paddingValues ->
@@ -1617,8 +1838,8 @@ fun ReviewsFeedbackScreen() {
                                         color = RFColors.Text
                                     )
                                     Text(
-                                        if (parsedRequests.isEmpty()) "No requests yet"
-                                        else "${parsedRequests.size} total • updated ${SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date())}",
+                                        if (visibleResourceRequests.isEmpty()) "No requests yet"
+                                        else "${visibleResourceRequests.size} total • updated ${SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date())}",
                                         fontSize = 11.sp,
                                         color = RFColors.TextSecondary
                                     )
@@ -1661,7 +1882,7 @@ fun ReviewsFeedbackScreen() {
 
                             OutlinedButton(
                                 onClick = { showAllRequests = true },
-                                enabled = parsedRequests.isNotEmpty(),
+                                enabled = visibleResourceRequests.size > 1,
                                 modifier = Modifier.weight(1f).height(44.dp),
                                 shape = RoundedCornerShape(12.dp),
                                 colors = ButtonDefaults.outlinedButtonColors(
@@ -1725,9 +1946,71 @@ fun ReviewsFeedbackScreen() {
 
             // ── SECTION HEADER ────────────────────────────────────────────
             item {
-                Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("${selected.label} (${filtered.size})", fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = RFColors.Text)
-                    Text("Sorted by date", fontSize = 12.sp, color = RFColors.TextSecondary)
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = RFColors.Bg
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        RFColors.Border
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column {
+                            Text(
+                                selected.label,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp,
+                                color = RFColors.Text
+                            )
+
+                            Text(
+                                "${filtered.size} review${if (filtered.size == 1) "" else "s"}",
+                                fontSize = 12.sp,
+                                color = RFColors.TextSecondary
+                            )
+                        }
+
+                        if (hasMoreReviews) {
+                            TextButton(
+                                onClick = {
+                                    showAllReviews = true
+                                }
+                            ) {
+                                Text(
+                                    "View All",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = RFColors.Primary
+                                )
+
+                                Spacer(Modifier.width(4.dp))
+
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowForward,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                    tint = RFColors.Primary
+                                )
+                            }
+                        } else {
+                            Text(
+                                "Latest first",
+                                fontSize = 12.sp,
+                                color = RFColors.TextSecondary
+                            )
+                        }
+                    }
                 }
             }
 
@@ -1752,7 +2035,7 @@ fun ReviewsFeedbackScreen() {
             }
 
             // ── REVIEW CARDS ──────────────────────────────────────────────
-            itemsIndexed(filtered) { index, incident ->
+            itemsIndexed(reviewsShownOnMainScreen) { index, incident ->
                 Box(modifier = Modifier.padding(horizontal = 12.dp)) {
                     ReviewCard(
                         incident      = incident,
@@ -1767,15 +2050,116 @@ fun ReviewsFeedbackScreen() {
                             showComposeDialog.value = true
                         },
                         onViewDetails = { inc ->
-                            val plainId = inc.id.removePrefix("#")
-                            detailsText.value = runCatching { IncidentStore.getSubmittedReview(plainId) }.getOrNull()
-                                ?: runCatching { IncidentStore.getCompletionNotes(plainId) }.getOrNull()
-                                        ?: "No review details available."
+                            detailsText.value = inc.completionNotes?.takeIf { it.isNotBlank() }
+                                ?: "No review details available."
                             detailsTarget.value = inc
                             showFullReviewDetails = true
                         },
                         onViewImage = { uri -> fullScreenImageUri = uri }   // ← use full-screen dialog
                     )
+                }
+            }
+        }
+
+        if (showAllReviews) {
+            Dialog(
+                onDismissRequest = {
+                    showAllReviews = false
+                },
+                properties = DialogProperties(
+                    usePlatformDefaultWidth = false,
+                    decorFitsSystemWindows = false
+                )
+            ) {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = RFColors.SurfaceBg
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .statusBarsPadding()
+                            .navigationBarsPadding()
+                    ) {
+                        Surface(
+                            color = RFColors.Bg,
+                            shadowElevation = 3.dp
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(
+                                        "All ${selected.label}",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 20.sp,
+                                        color = RFColors.Text
+                                    )
+
+                                    Text(
+                                        "${filtered.size} total reviews",
+                                        fontSize = 12.sp,
+                                        color = RFColors.TextSecondary
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = {
+                                        showAllReviews = false
+                                    }
+                                ) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Close",
+                                        tint = RFColors.TextSecondary
+                                    )
+                                }
+                            }
+                        }
+
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(
+                                horizontal = 12.dp,
+                                vertical = 14.dp
+                            ),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            itemsIndexed(filtered) { index, incident ->
+                                ReviewCard(
+                                    incident = incident,
+                                    index = index,
+                                    onWriteReview = { inc ->
+                                        showAllReviews = false
+                                        composeTarget.value = inc
+                                        reviewText.value = ""
+                                        responseRating = 3
+                                        communicationRating = 3
+                                        professionalismRating = 3
+                                        selectedOutcome = "Resolved"
+                                        showComposeDialog.value = true
+                                    },
+                                    onViewDetails = { inc ->
+                                        detailsText.value =
+                                            inc.completionNotes
+                                                ?.takeIf { it.isNotBlank() }
+                                                ?: "No review details available."
+
+                                        detailsTarget.value = inc
+                                        showFullReviewDetails = true
+                                    },
+                                    onViewImage = { uri ->
+                                        fullScreenImageUri = uri
+                                    }
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1807,6 +2191,7 @@ fun ReviewsFeedbackScreen() {
                 confirmButton = {
                     Button(
                         onClick = {
+                            if (isSubmittingReview) return@Button
                             val fullReview = """
                         Outcome: $selectedOutcome
 
@@ -1818,36 +2203,45 @@ fun ReviewsFeedbackScreen() {
                         ${reviewText.value}
                     """.trimIndent()
 
-                            submitReview(target, fullReview)
+                            isSubmittingReview = true
+                            scope.launch {
+                                val success = submitReview(
+                                    target, fullReview, responseRating,
+                                    communicationRating, professionalismRating, selectedOutcome
+                                )
+                                isSubmittingReview = false
+                                if (success) {
+                                    val ratingJson = """
+                                {
+                                  "incidentId": "${target.id.removePrefix("#")}",
+                                  "responseRating": $responseRating,
+                                  "communicationRating": $communicationRating,
+                                  "professionalismRating": $professionalismRating,
+                                  "outcome": "$selectedOutcome",
+                                  "timestamp": ${System.currentTimeMillis()}
+                                }
+                            """.trimIndent()
+                                    val oldRatings = reviewPrefs.getStringSet("ratings", emptySet()) ?: emptySet()
+                                    reviewPrefs.edit().putStringSet("ratings", oldRatings + ratingJson).apply()
+                                    ratingRefreshKey++
+                                    reviewRefreshKey++
 
-                            val ratingJson = """
-                        {
-                          "incidentId": "${target.id.removePrefix("#")}",
-                          "responseRating": $responseRating,
-                          "communicationRating": $communicationRating,
-                          "professionalismRating": $professionalismRating,
-                          "outcome": "$selectedOutcome",
-                          "timestamp": ${System.currentTimeMillis()}
-                        }
-                    """.trimIndent()
-
-                            val oldRatings = reviewPrefs.getStringSet("ratings", emptySet()) ?: emptySet()
-
-                            reviewPrefs.edit()
-                                .putStringSet("ratings", oldRatings + ratingJson)
-                                .apply()
-
-                            ratingRefreshKey++
-
-                            showSubmitReviewConfirm = false
-                            showComposeDialog.value = false
-                            composeTarget.value = null
-                            reviewText.value = ""
+                                    showSubmitReviewConfirm = false
+                                    showComposeDialog.value = false
+                                    composeTarget.value = null
+                                    reviewText.value = ""
+                                }
+                            }
                         },
+                        enabled = !isSubmittingReview,
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = RFColors.Primary)
                     ) {
-                        Text("Yes, Submit")
+                        if (isSubmittingReview) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
+                        } else {
+                            Text("Yes, Submit")
+                        }
                     }
                 },
                 dismissButton = {
@@ -2200,7 +2594,7 @@ fun ReviewsFeedbackScreen() {
                                     color = RFColors.Text
                                 )
                                 Text(
-                                    "${parsedRequests.size} total requests",
+                                    "${visibleResourceRequests.size} total requests",
                                     fontSize = 13.sp,
                                     color = RFColors.TextSecondary
                                 )
@@ -2351,8 +2745,11 @@ fun ReviewsFeedbackScreen() {
         // ── RESOURCE REQUEST FORM SHEET ───────────────────────────────────
         if (showResourceForm) {
             ResourceRequestFullScreenDialog(
+                responderId = responderId,
                 responderName = responderName,
-                onDismiss     = { showResourceForm = false },
+                onDismiss = {
+                    showResourceForm = false
+                },
                 onSubmit = {
                     showResourceForm = false
                     requestRefreshKey++

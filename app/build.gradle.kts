@@ -16,8 +16,8 @@ android {
         applicationId = "com.ers.emergencyresponseapp"
         minSdk = 23
         targetSdk = 34
-        versionCode = 14
-        versionName = "8.0"
+        versionCode = 15
+        versionName = "9.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -100,6 +100,8 @@ dependencies {
     implementation("org.maplibre.gl:android-sdk:11.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:X.X.X")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:X.X.X")
+
+    implementation("io.coil-kt:coil-compose:2.7.0")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

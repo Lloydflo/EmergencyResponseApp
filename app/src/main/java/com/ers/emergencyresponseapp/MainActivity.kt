@@ -52,6 +52,9 @@ import com.ers.emergencyresponseapp.routing.RouteMonitoringService
 import com.ers.emergencyresponseapp.ui.theme.ThemeController
 import androidx.activity.enableEdgeToEdge
 import androidx.core.view.WindowCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 
 
 
@@ -68,6 +71,8 @@ class MainActivity : ComponentActivity() {
 
     private val firebaseChatRepo = FirebaseChatRepository()
     private var currentUserId: String = ""
+    private val presenceScope =
+        CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private fun createEmergencyChannel() {
 
@@ -184,6 +189,29 @@ class MainActivity : ComponentActivity() {
                                 System.currentTimeMillis() - lastTouchTime >= 60 * 60 * 1000L
                             ) {
 
+                                val responderId = context.getSharedPreferences(
+                                    "user_prefs",
+                                    Context.MODE_PRIVATE
+                                )
+                                    .getString("user_id", "")
+                                    ?.toIntOrNull()
+                                    ?: 0
+
+                                if (responderId > 0) {
+                                    val repo =
+                                        com.ers.emergencyresponseapp.data.IncidentRepository()
+
+                                    repo.setUnitPresence(
+                                        responderId = responderId,
+                                        presence = "offline"
+                                    )
+
+                                    firebaseChatRepo.setOnlineStatus(
+                                        responderId.toString(),
+                                        false
+                                    )
+                                }
+
                                 context.getSharedPreferences("auth", Context.MODE_PRIVATE)
                                     .edit().clear().commit()
 
@@ -269,15 +297,44 @@ class MainActivity : ComponentActivity() {
                                                 navController = navController,
                                                 responderRole = null,
                                                 onLogout = {
-                                                    authPrefs.edit().clear().commit()
-                                                    context.getSharedPreferences(
+                                                    val responderId = context.getSharedPreferences(
                                                         "user_prefs",
                                                         MODE_PRIVATE
                                                     )
-                                                        .edit().clear().commit()
-                                                    navController.navigate("entry") {
-                                                        popUpTo(0) { inclusive = true }
-                                                        launchSingleTop = true
+                                                        .getString("user_id", "")
+                                                        ?.toIntOrNull()
+                                                        ?: 0
+
+                                                    lifecycleScope.launch {
+                                                        if (responderId > 0) {
+                                                            val repo =
+                                                                com.ers.emergencyresponseapp.data.IncidentRepository()
+
+                                                            repo.setUnitPresence(
+                                                                responderId = responderId,
+                                                                presence = "offline"
+                                                            )
+
+                                                            firebaseChatRepo.setOnlineStatus(
+                                                                responderId.toString(),
+                                                                false
+                                                            )
+                                                        }
+
+                                                        authPrefs.edit().clear().commit()
+
+                                                        context.getSharedPreferences(
+                                                            "user_prefs",
+                                                            MODE_PRIVATE
+                                                        )
+                                                            .edit()
+                                                            .clear()
+                                                            .commit()
+
+                                                        navController.navigate("entry") {
+                                                            popUpTo(0) { inclusive = true }
+                                                            launchSingleTop = true
+                                                        }
                                                     }
                                                 }
                                             )
@@ -298,19 +355,50 @@ class MainActivity : ComponentActivity() {
                                                 navController = navController,
                                                 responderRole = roleArg?.takeIf { it.isNotBlank() },
                                                 onLogout = {
-                                                    innerContext.getSharedPreferences(
-                                                        "auth",
-                                                        MODE_PRIVATE
-                                                    )
-                                                        .edit().clear().commit()
-                                                    innerContext.getSharedPreferences(
+                                                    val responderId = innerContext.getSharedPreferences(
                                                         "user_prefs",
                                                         MODE_PRIVATE
                                                     )
-                                                        .edit().clear().commit()
-                                                    navController.navigate("login") {
-                                                        popUpTo(0) { inclusive = true }
-                                                        launchSingleTop = true
+                                                        .getString("user_id", "")
+                                                        ?.toIntOrNull()
+                                                        ?: 0
+
+                                                    lifecycleScope.launch {
+                                                        if (responderId > 0) {
+                                                            val repo =
+                                                                com.ers.emergencyresponseapp.data.IncidentRepository()
+
+                                                            repo.setUnitPresence(
+                                                                responderId = responderId,
+                                                                presence = "offline"
+                                                            )
+
+                                                            firebaseChatRepo.setOnlineStatus(
+                                                                responderId.toString(),
+                                                                false
+                                                            )
+                                                        }
+
+                                                        innerContext.getSharedPreferences(
+                                                            "auth",
+                                                            MODE_PRIVATE
+                                                        )
+                                                            .edit()
+                                                            .clear()
+                                                            .commit()
+
+                                                        innerContext.getSharedPreferences(
+                                                            "user_prefs",
+                                                            MODE_PRIVATE
+                                                        )
+                                                            .edit()
+                                                            .clear()
+                                                            .commit()
+
+                                                        navController.navigate("login") {
+                                                            popUpTo(0) { inclusive = true }
+                                                            launchSingleTop = true
+                                                        }
                                                     }
                                                 }
                                             )
@@ -469,46 +557,103 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+
         AppState.isForeground = true
 
-        if (currentUserId.isNotEmpty()) {
+        val userPrefs = getSharedPreferences(
+            "user_prefs",
+            MODE_PRIVATE
+        )
+
+        val responderId = userPrefs
+            .getString("user_id", "")
+            ?.toIntOrNull()
+            ?: 0
+
+        if (responderId > 0) {
             lifecycleScope.launch {
-                firebaseChatRepo.setOnlineStatus(currentUserId, true)
+                try {
+                    firebaseChatRepo.setOnlineStatus(
+                        responderId.toString(),
+                        true
+                    )
+
+                    val repo =
+                        com.ers.emergencyresponseapp.data.IncidentRepository()
+
+                    val latestStatus = repo.setUnitPresence(
+                        responderId = responderId,
+                        presence = "online"
+                    )
+
+                    if (!latestStatus.isNullOrBlank()) {
+                        userPrefs.edit()
+                            .putString(
+                                "unit_status",
+                                latestStatus
+                            )
+                            .apply()
+                    }
+
+                    Log.d(
+                        "UNIT_PRESENCE",
+                        "Responder online, status=$latestStatus"
+                    )
+
+                } catch (e: Exception) {
+                    Log.e(
+                        "UNIT_PRESENCE",
+                        "Failed to mark responder online",
+                        e
+                    )
+                }
             }
         }
     }
 
 
     override fun onStop() {
-        super.onStop()
         AppState.isForeground = false
 
-        val navPrefs =
-            getSharedPreferences(
-                "nav_prefs",
-                MODE_PRIVATE
-            )
-
-        val hasActiveRoute =
-            navPrefs.getBoolean(
-                "pending_en_route_check",
-                false
-            )
-        Log.d(
-            "ONLINE_DEBUG",
-            "onStop hasActiveRoute=$hasActiveRoute"
+        val responderId = getSharedPreferences(
+            "user_prefs",
+            MODE_PRIVATE
         )
+            .getString("user_id", "")
+            ?.toIntOrNull()
+            ?: 0
 
-        if (!hasActiveRoute &&
-            currentUserId.isNotEmpty()
-        ) {
-            lifecycleScope.launch {
-                firebaseChatRepo.setOnlineStatus(
-                    currentUserId,
-                    isOnline = false
-                )
+        if (responderId > 0) {
+            presenceScope.launch {
+                try {
+                    val repo =
+                        com.ers.emergencyresponseapp.data.IncidentRepository()
+
+                    val status = repo.setUnitPresence(
+                        responderId = responderId,
+                        presence = "offline"
+                    )
+
+                    firebaseChatRepo.setOnlineStatus(
+                        responderId.toString(),
+                        false
+                    )
+
+                    Log.d(
+                        "UNIT_PRESENCE",
+                        "onStop responder=$responderId result=$status"
+                    )
+                } catch (e: Exception) {
+                    Log.e(
+                        "UNIT_PRESENCE",
+                        "Offline update failed",
+                        e
+                    )
+                }
             }
         }
+
+        super.onStop()
     }
 }
 

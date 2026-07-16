@@ -152,6 +152,7 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
 import java.util.Locale
+import androidx.core.content.FileProvider
 
 
 
@@ -665,6 +666,28 @@ fun HomeScreen(
         mutableStateOf(storedPrefs.getString("unit_status", "available") ?: "available")
     }
 
+    LaunchedEffect(responderId) {
+        if (responderId <= 0) {
+            return@LaunchedEffect
+        }
+
+        val repo =
+            com.ers.emergencyresponseapp.data.IncidentRepository()
+
+        val latestUnitStatus = repo.setUnitPresence(
+            responderId = responderId,
+            presence = "online"
+        )
+
+        if (!latestUnitStatus.isNullOrBlank()) {
+            unitStatus = latestUnitStatus
+
+            storedPrefs.edit()
+                .putString("unit_status", latestUnitStatus)
+                .apply()
+        }
+    }
+
 
     val assignedUi by assignedVm.ui.collectAsState()
     LaunchedEffect(assignedUi.incidents) {
@@ -788,22 +811,90 @@ fun HomeScreen(
     var proofNotes             by remember { mutableStateOf("") }
     var selectedProofUri       by remember { mutableStateOf<String?>(null) }
 
+    var pendingCameraUri by remember {
+        mutableStateOf<Uri?>(null)
+    }
+
+    var pendingCameraFile by remember {
+        mutableStateOf<File?>(null)
+    }
+
     var notificationCount by remember { mutableStateOf(0) }
 
 
-    fun saveBitmapToCache(bitmap: Bitmap, ctx: Context): String? {
-        return try {
-            val file = File(ctx.cacheDir, "proof_${System.currentTimeMillis()}.jpg")
-            FileOutputStream(file).use { out -> bitmap.compress(Bitmap.CompressFormat.JPEG, 80, out) }
-            Uri.fromFile(file).toString()
-        } catch (e: Exception) { Log.e("HomeScreen", "Failed to save bitmap: ${e.message}"); null }
-    }
+    val takePictureLauncher =
+        rememberLauncherForActivityResult(
+            ActivityResultContracts.TakePicture()
+        ) { success ->
 
-    val takePictureLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            @Suppress("DEPRECATION")
-            val bmp = result.data?.extras?.get("data") as? Bitmap
-            if (bmp != null) { val uri = saveBitmapToCache(bmp, context); if (uri != null) selectedProofUri = uri }
+            if (success) {
+                val file = pendingCameraFile
+
+                if (file != null && file.exists() && file.length() > 0L) {
+                    selectedProofUri = Uri.fromFile(file).toString()
+
+                    Log.d(
+                        "CompletionPhoto",
+                        "Full-resolution photo saved: " +
+                                "path=${file.absolutePath}, " +
+                                "size=${file.length()} bytes"
+                    )
+                } else {
+                    selectedProofUri = null
+
+                    Toast.makeText(
+                        context,
+                        "Photo was not saved correctly.",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            } else {
+                pendingCameraFile?.delete()
+                pendingCameraFile = null
+                pendingCameraUri = null
+            }
+        }
+
+    fun openCompletionCamera() {
+        try {
+            val imageDirectory = File(
+                context.cacheDir,
+                "completion_photos"
+            ).apply {
+                if (!exists()) {
+                    mkdirs()
+                }
+            }
+
+            val imageFile = File.createTempFile(
+                "completion_${System.currentTimeMillis()}_",
+                ".jpg",
+                imageDirectory
+            )
+
+            val cameraUri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                imageFile
+            )
+
+            pendingCameraFile = imageFile
+            pendingCameraUri = cameraUri
+
+            takePictureLauncher.launch(cameraUri)
+
+        } catch (e: Exception) {
+            Log.e(
+                "CompletionPhoto",
+                "Unable to open camera",
+                e
+            )
+
+            Toast.makeText(
+                context,
+                "Unable to open camera: ${e.message}",
+                Toast.LENGTH_LONG
+            ).show()
         }
     }
 
@@ -1020,6 +1111,8 @@ fun HomeScreen(
             lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
+
+
 
     // ── Location Helper Functions ──
     @Suppress("DEPRECATION")
@@ -2668,7 +2761,7 @@ fun HomeScreen(
 
                             Button(
                                 onClick = {
-                                    takePictureLauncher.launch(Intent(MediaStore.ACTION_IMAGE_CAPTURE))
+                                    openCompletionCamera()
                                 },
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(14.dp),

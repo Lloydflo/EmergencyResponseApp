@@ -1,6 +1,8 @@
 package com.ers.emergencyresponseapp.home
 
 import androidx.compose.runtime.mutableStateListOf
+import com.ers.emergencyresponseapp.network.PendingReviewIncidentDto
+import com.ers.emergencyresponseapp.network.RetrofitProvider
 
 /**
  * Simple in-memory incident store for UI demo purposes. Shared across screens so updates in one screen
@@ -87,6 +89,36 @@ object IncidentStore {
         if (idx >= 0) {
             val current = incidents[idx]
             incidents[idx] = current.copy(assignedTo = responderName)
+        }
+    }
+
+    suspend fun getPendingReviewIncidents(responderId: Int): List<PendingReviewIncidentDto> {
+        return try {
+            val response = RetrofitProvider.incidentApi.getPendingReviewIncidents(responderId)
+            if (response.success) response.incidents ?: emptyList() else emptyList()
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    suspend fun submitIncidentReview(
+        incidentId: Long,
+        responderId: Int,
+        responseRating: Int,
+        communicationRating: Int,
+        professionalismRating: Int,
+        outcome: String,
+        reviewText: String
+    ): Result<Unit> {
+        return try {
+            val response = RetrofitProvider.incidentApi.submitIncidentReview(
+                incidentId, responderId, responseRating, communicationRating,
+                professionalismRating, outcome, reviewText
+            )
+            if (response.success) Result.success(Unit)
+            else Result.failure(Exception(response.message ?: "Failed to submit review"))
+        } catch (e: Exception) {
+            Result.failure(e)
         }
     }
 }

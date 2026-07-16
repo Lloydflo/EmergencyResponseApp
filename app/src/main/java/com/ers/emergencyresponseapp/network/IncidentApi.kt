@@ -5,6 +5,11 @@ import retrofit2.Response
 import retrofit2.http.*
 import okhttp3.MultipartBody
 import okhttp3.RequestBody
+import retrofit2.http.Field
+import retrofit2.http.FormUrlEncoded
+import retrofit2.http.GET
+import retrofit2.http.POST
+import retrofit2.http.Query
 
 data class SaveRoutePointRequest(
     val incident_id: Int,
@@ -127,14 +132,41 @@ data class MyBackupRequestsResponse(
     val requests: List<MyBackupRequestDto>? = null
 )
 
-data class CancelBackupRequestBody(
-    val request_id: Int,
-    val responder_id: Int
-)
-
 data class CancelBackupRequestResponse(
     val success: Boolean,
     val message: String?
+)
+
+data class PendingReviewIncidentDto(
+    val id: Long,
+    val reference_no: String?,
+    val type: String,
+    val priority: String,
+    val title: String?,
+    val description: String?,
+    val location_address: String?,
+    val completion_notes: String?,
+    val completion_image_path: String?,
+    val review_status: String,
+    val completed_at: String?
+)
+
+data class GetPendingReviewIncidentsResponse(
+    val success: Boolean,
+    val message: String? = null,
+    val incidents: List<PendingReviewIncidentDto>? = null
+)
+
+data class SubmitIncidentReviewResponse(
+    val success: Boolean,
+    val message: String? = null
+)
+
+data class SetUnitPresenceResponse(
+    val success: Boolean,
+    val message: String? = null,
+    val presence: String? = null,
+    val unit_status: String? = null
 )
 
 interface IncidentApi {
@@ -249,5 +281,29 @@ interface IncidentApi {
         @Field("request_id") requestId: Int,
         @Field("responder_id") responderId: Int
     ): CancelBackupRequestResponse
+
+    @GET("api/api_app/get-pending-review-incidents.php")
+    suspend fun getPendingReviewIncidents(
+        @Query("responder_id") responderId: Int
+    ): GetPendingReviewIncidentsResponse
+
+    @FormUrlEncoded
+    @POST("api/api_app/submit-incident-review.php")
+    suspend fun submitIncidentReview(
+        @Field("incident_id") incidentId: Long,
+        @Field("responder_id") responderId: Int,
+        @Field("response_rating") responseRating: Int,
+        @Field("communication_rating") communicationRating: Int,
+        @Field("professionalism_rating") professionalismRating: Int,
+        @Field("outcome") outcome: String,
+        @Field("review_text") reviewText: String
+    ): SubmitIncidentReviewResponse
+
+    @FormUrlEncoded
+    @POST("api/api_app/set-unit-presence.php")
+    suspend fun setUnitPresence(
+        @Field("responder_id") responderId: Int,
+        @Field("presence") presence: String
+    ): SetUnitPresenceResponse
 
 }
