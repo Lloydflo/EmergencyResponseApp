@@ -504,6 +504,46 @@ private fun AssignedActionButtons(
 // ─────────────────────────────────────────────────────────────────────────────
 
 @Composable
+private fun NotificationCountBadge(
+    count: Int,
+    modifier: Modifier = Modifier
+) {
+    if (count <= 0) return
+
+    val badgeShape = RoundedCornerShape(999.dp)
+    val badgeText = if (count > 9) "9+" else count.toString()
+    val badgeWidth = if (count > 9) 26.dp else 20.dp
+
+    Box(
+        modifier = modifier
+            .width(badgeWidth)
+            .height(20.dp)
+            .shadow(
+                elevation = 3.dp,
+                shape = badgeShape,
+                clip = false
+            )
+            .clip(badgeShape)
+            .background(Color(0xFFE53935))
+            .border(
+                width = 2.dp,
+                color = AppColors.Bg,
+                shape = badgeShape
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = badgeText,
+            color = Color.White,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.ExtraBold,
+            maxLines = 1
+        )
+    }
+}
+
+
+@Composable
 private fun BackupRequestStatusCard(
     department: String,
     resources: String,
@@ -1508,67 +1548,67 @@ fun HomeScreen(
                         modifier = Modifier.fillMaxWidth(),
                         contentAlignment = Alignment.TopCenter
                     ) {
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = Color(0xFFFFEBEE)
-                        ),
-                        border = BorderStroke(
-                            2.dp,
-                            Color(0xFFD32F2F)
-                        ),
-                        elevation = CardDefaults.cardElevation(4.dp)
-                    ) {
-                        Row(
+                        Card(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = Color(0xFFFFEBEE)
+                            ),
+                            border = BorderStroke(
+                                2.dp,
+                                Color(0xFFD32F2F)
+                            ),
+                            elevation = CardDefaults.cardElevation(4.dp)
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Warning,
-                                contentDescription = "Critical warning",
-                                tint = Color(0xFFD32F2F),
-                                modifier = Modifier.size(24.dp)
-                            )
-
-                            Column(
-                                modifier = Modifier.weight(1f)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                Text(
-                                    "⚠️ GPS Location Disabled",
-                                    fontWeight = FontWeight.ExtraBold,
-                                    fontSize = 13.sp,
-                                    color = Color(0xFFD32F2F)
+                                Icon(
+                                    imageVector = Icons.Default.Warning,
+                                    contentDescription = "Critical warning",
+                                    tint = Color(0xFFD32F2F),
+                                    modifier = Modifier.size(24.dp)
                                 )
 
-                                Text(
-                                    "Turn ON location in device settings. GPS is required for emergency response.",
-                                    fontSize = 11.sp,
-                                    color = Color(0xFFC62828),
-                                    lineHeight = 14.sp
-                                )
-                            }
+                                Column(
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(
+                                        "⚠️ GPS Location Disabled",
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 13.sp,
+                                        color = Color(0xFFD32F2F)
+                                    )
 
-                            Button(
-                                onClick = {
-                                    // Reuse launcher so we reliably return with updated GPS state.
-                                    locationSettingsLauncher.launch(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
-                                },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = Color(0xFFD32F2F)
-                                ),
-                                shape = RoundedCornerShape(8.dp),
-                                modifier = Modifier.height(40.dp)
-                            ) {
-                                Text("Enable", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        "Turn ON location in device settings. GPS is required for emergency response.",
+                                        fontSize = 11.sp,
+                                        color = Color(0xFFC62828),
+                                        lineHeight = 14.sp
+                                    )
+                                }
+
+                                Button(
+                                    onClick = {
+                                        // Reuse launcher so we reliably return with updated GPS state.
+                                        locationSettingsLauncher.launch(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                                    },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFFD32F2F)
+                                    ),
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.height(40.dp)
+                                ) {
+                                    Text("Enable", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
                             }
                         }
-                    }
                     }
                 }
             }
@@ -1580,24 +1620,24 @@ fun HomeScreen(
                         hasPromptedLocationOnce = true
                         prefs.edit().putBoolean("location_permission_prompted", true).apply()
                     },
-                        shape = RoundedCornerShape(20.dp),
-                        icon = {
-                            Icon(Icons.Default.LocationOn, contentDescription = null, tint = AppColors.Primary)
-                        },
-                        title = { Text("GPS Location Required", fontWeight = FontWeight.Bold, color = Color(0xFFD32F2F)) },
-                        text = {
-                            Text(
-                                "🚨 CRITICAL FOR RESPONDERS\n\n" +
-                                "This app requires GPS location access to:\n" +
-                                "• Enable live tracking during dispatch\n" +
-                                "• Navigate to incident locations\n" +
-                                "• Verify on-scene arrival\n" +
-                                "• Ensure responder safety\n\n" +
-                                "Location services must be enabled in your device settings (Settings > Location).",
-                                color = AppColors.TextSecondary,
-                                lineHeight = 18.sp
-                            )
-                        },
+                    shape = RoundedCornerShape(20.dp),
+                    icon = {
+                        Icon(Icons.Default.LocationOn, contentDescription = null, tint = AppColors.Primary)
+                    },
+                    title = { Text("GPS Location Required", fontWeight = FontWeight.Bold, color = Color(0xFFD32F2F)) },
+                    text = {
+                        Text(
+                            "🚨 CRITICAL FOR RESPONDERS\n\n" +
+                                    "This app requires GPS location access to:\n" +
+                                    "• Enable live tracking during dispatch\n" +
+                                    "• Navigate to incident locations\n" +
+                                    "• Verify on-scene arrival\n" +
+                                    "• Ensure responder safety\n\n" +
+                                    "Location services must be enabled in your device settings (Settings > Location).",
+                            color = AppColors.TextSecondary,
+                            lineHeight = 18.sp
+                        )
+                    },
                     confirmButton = {
                         Button(
                             onClick = {
@@ -1606,21 +1646,21 @@ fun HomeScreen(
                                 prefs.edit().putBoolean("location_permission_prompted", true).apply()
                                 locationPermLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
                             },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F))
-                            ) { Text("Enable GPS Now", color = Color.White) }
-                        },
-                        dismissButton = {
-                            TextButton(
-                                onClick = {
-                                    showLocationRationale = false
-                                    hasPromptedLocationOnce = true
-                                    prefs.edit().putBoolean("location_permission_prompted", true).apply()
-                                    Toast.makeText(context, "⚠️ GPS is required for emergency response operations", Toast.LENGTH_LONG).show()
-                                }
-                            ) { Text("Cancel") }
-                        }
-                    )
-                }
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F))
+                        ) { Text("Enable GPS Now", color = Color.White) }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = {
+                                showLocationRationale = false
+                                hasPromptedLocationOnce = true
+                                prefs.edit().putBoolean("location_permission_prompted", true).apply()
+                                Toast.makeText(context, "⚠️ GPS is required for emergency response operations", Toast.LENGTH_LONG).show()
+                            }
+                        ) { Text("Cancel") }
+                    }
+                )
+            }
 
 
             // FIX 7: Recompute counts whenever activeIncidents changes.
@@ -1760,7 +1800,7 @@ fun HomeScreen(
             }
 
 
-             LazyColumn(
+            LazyColumn(
                 state = listState,
                 modifier = Modifier
                     .fillMaxSize()
@@ -2124,113 +2164,123 @@ fun HomeScreen(
                     }
                 }
 
-                 item {
-                     Card(
-                         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-                         shape = RoundedCornerShape(16.dp),
-                         colors = CardDefaults.cardColors(containerColor = AppColors.Bg),
-                         border = BorderStroke(1.dp, AppColors.Border),
-                         elevation = CardDefaults.cardElevation(1.dp)
-                     ) {
-                         Column(
-                             modifier = Modifier.fillMaxWidth().padding(14.dp),
-                             verticalArrangement = Arrangement.spacedBy(10.dp)
-                         ) {
-                             // Header row
-                             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                                 Box(
-                                     modifier = Modifier
-                                         .size(34.dp)
-                                         .clip(RoundedCornerShape(10.dp))
-                                         .background(AppColors.Primary.copy(alpha = 0.10f)),
-                                     contentAlignment = Alignment.Center
-                                 ) {
-                                     Icon(Icons.Default.LocalHospital, contentDescription = null, tint = AppColors.Primary, modifier = Modifier.size(16.dp))
-                                 }
-                                 Spacer(Modifier.width(10.dp))
-                                 Column(modifier = Modifier.weight(1f)) {
-                                     Text("Backup Requests", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = AppColors.Text)
-                                     Text(
-                                         "${visibleBackupRequests.size} total • ${java.text.SimpleDateFormat("h:mm a", Locale.getDefault()).format(lastBackupUpdateTime)}",
-                                         fontSize = 11.sp,
-                                         color = AppColors.TextSecondary
-                                     )
-                                 }
-                                 IconButton(
-                                     onClick = {
-                                         scope.launch {
-                                             backupRequestsList = com.ers.emergencyresponseapp.data.IncidentRepository().getMyBackupRequests(responderId)
-                                             lastBackupUpdateTime = java.util.Date()
-                                         }
-                                     },
-                                     modifier = Modifier.size(32.dp)
-                                 ) {
-                                     Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = AppColors.TextSecondary, modifier = Modifier.size(18.dp))
-                                 }
-                             }
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = AppColors.Bg),
+                        border = BorderStroke(1.dp, AppColors.Border),
+                        elevation = CardDefaults.cardElevation(1.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            // Header row
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(34.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(AppColors.Primary.copy(alpha = 0.10f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(Icons.Default.LocalHospital, contentDescription = null, tint = AppColors.Primary, modifier = Modifier.size(16.dp))
+                                }
+                                Spacer(Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Backup Requests", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = AppColors.Text)
+                                    Text(
+                                        "${visibleBackupRequests.size} total • ${java.text.SimpleDateFormat("h:mm a", Locale.getDefault()).format(lastBackupUpdateTime)}",
+                                        fontSize = 11.sp,
+                                        color = AppColors.TextSecondary
+                                    )
+                                }
+                                IconButton(
+                                    onClick = {
+                                        scope.launch {
+                                            backupRequestsList = com.ers.emergencyresponseapp.data.IncidentRepository().getMyBackupRequests(responderId)
+                                            lastBackupUpdateTime = java.util.Date()
+                                        }
+                                    },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = AppColors.TextSecondary, modifier = Modifier.size(18.dp))
+                                }
+                            }
 
-                             // Action buttons row
-                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                 Button(
-                                     onClick = { showDepartmentSelection = true },
-                                     modifier = Modifier.weight(1f).height(38.dp),
-                                     shape = RoundedCornerShape(10.dp),
-                                     contentPadding = PaddingValues(horizontal = 8.dp),
-                                     colors = ButtonDefaults.buttonColors(containerColor = AppColors.Primary, contentColor = Color.White)
-                                 ) {
-                                     Icon(Icons.Default.LocalHospital, contentDescription = null, modifier = Modifier.size(14.dp))
-                                     Spacer(Modifier.width(6.dp))
-                                     Text("Request Backup", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
-                                 }
-                                 OutlinedButton(
-                                     onClick = {
-                                         showAllBackupRequestsDialog = true
-                                     },
-                                     modifier = Modifier.weight(1f).height(38.dp),
-                                     shape = RoundedCornerShape(10.dp),
-                                     contentPadding = PaddingValues(horizontal = 8.dp),
-                                     border = BorderStroke(1.dp, AppColors.Border),
-                                     colors = ButtonDefaults.outlinedButtonColors(contentColor = AppColors.Text)
-                                 ) {
-                                     Box {
-                                         Text("View All", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
-                                         if (pendingExtraBackupCount > 0) {
-                                             Badge(
-                                                 modifier = Modifier.align(Alignment.TopEnd).offset(x = 13.dp, y = (-8).dp),
-                                                 containerColor = Color(0xFFD32F2F)
-                                             ) {
-                                                 Text(if (pendingExtraBackupCount > 9) "9+" else pendingExtraBackupCount.toString())
-                                             }
-                                         }
-                                     }
-                                 }
-                             }
+                            // Action buttons row
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = { showDepartmentSelection = true },
+                                    modifier = Modifier.weight(1f).height(38.dp),
+                                    shape = RoundedCornerShape(10.dp),
+                                    contentPadding = PaddingValues(horizontal = 8.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = AppColors.Primary, contentColor = Color.White)
+                                ) {
+                                    Icon(Icons.Default.LocalHospital, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Request Backup", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                                }
+                                OutlinedButton(
+                                    onClick = {
+                                        showAllBackupRequestsDialog = true
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(38.dp),
+                                    shape = RoundedCornerShape(10.dp),
+                                    contentPadding = PaddingValues(0.dp),
+                                    border = BorderStroke(1.dp, AppColors.Border),
+                                    colors = ButtonDefaults.outlinedButtonColors(
+                                        contentColor = AppColors.Text
+                                    )
+                                ) {
+                                    Box(
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = "View All",
+                                            fontWeight = FontWeight.SemiBold,
+                                            fontSize = 12.sp
+                                        )
 
-                             if (visibleBackupRequests.isEmpty()) {
-                                 Text(
-                                     "No backup requests yet.",
-                                     color = AppColors.TextSecondary,
-                                     fontSize = 12.sp
-                                 )
-                             } else {
-                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                     visibleBackupRequests.take(1).forEach { req ->
-                                         BackupRequestStatusCard(
-                                             department = req.requested_department,
-                                             resources = req.resources,
-                                             status = req.status,
-                                             onCancelClick = {
-                                                 pendingCancelBackupId = req.id
-                                                 showCancelBackupConfirm = true
-                                             },
-                                             onRefreshClick = { refreshSingleBackupRequest(req.id) }
-                                         )
-                                     }
-                                 }
-                             }
-                         }
-                     }
-                 }
+                                        NotificationCountBadge(
+                                            count = pendingExtraBackupCount,
+                                            modifier = Modifier
+                                                .align(Alignment.TopEnd)
+                                                .offset(x = (-5).dp, y = 3.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            if (visibleBackupRequests.isEmpty()) {
+                                Text(
+                                    "No backup requests yet.",
+                                    color = AppColors.TextSecondary,
+                                    fontSize = 12.sp
+                                )
+                            } else {
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    visibleBackupRequests.take(1).forEach { req ->
+                                        BackupRequestStatusCard(
+                                            department = req.requested_department,
+                                            resources = req.resources,
+                                            status = req.status,
+                                            onCancelClick = {
+                                                pendingCancelBackupId = req.id
+                                                showCancelBackupConfirm = true
+                                            },
+                                            onRefreshClick = { refreshSingleBackupRequest(req.id) }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 item { Spacer(Modifier.height(12.dp)) }
 
@@ -3276,20 +3326,20 @@ private fun AccountSettingsDialog(
                     modifier = Modifier.fillMaxWidth(),
                     colors = textFieldColors
                 )
-                    if (showProfilePreview) {
-                AlertDialog(
-                    onDismissRequest = { showProfilePreview = false },
-                    title = { Text("Profile Photo", fontWeight = FontWeight.SemiBold) },
-                    text = {
-                        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                            Box(modifier = Modifier.size(240.dp).clip(CircleShape).border(1.dp, AppColors.Border, CircleShape)) {
-                                ResponderAvatar(modifier = Modifier.fillMaxSize(), imageUri = photoUri, status = ResponderOnlineStatus.Offline)
+                if (showProfilePreview) {
+                    AlertDialog(
+                        onDismissRequest = { showProfilePreview = false },
+                        title = { Text("Profile Photo", fontWeight = FontWeight.SemiBold) },
+                        text = {
+                            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                Box(modifier = Modifier.size(240.dp).clip(CircleShape).border(1.dp, AppColors.Border, CircleShape)) {
+                                    ResponderAvatar(modifier = Modifier.fillMaxSize(), imageUri = photoUri, status = ResponderOnlineStatus.Offline)
+                                }
                             }
-                        }
-                    },
-                    confirmButton = { TextButton(onClick = { showProfilePreview = false }) { Text("Close") } }
-                )
-            }
+                        },
+                        confirmButton = { TextButton(onClick = { showProfilePreview = false }) { Text("Close") } }
+                    )
+                }
 
 
                 Card(shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = AppColors.Bg), border = androidx.compose.foundation.BorderStroke(1.dp, AppColors.Border)) {

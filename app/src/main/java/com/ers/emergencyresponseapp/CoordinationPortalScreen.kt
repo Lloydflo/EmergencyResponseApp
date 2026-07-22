@@ -105,7 +105,7 @@ data class InteragencyGroupDto(
     val lastReadId: Int = 0
 )
 
-    class FirebaseResponderRepository {
+class FirebaseResponderRepository {
     private val db = FirebaseDatabase.getInstance().getReference("users")
 
     fun observeAllResponders(): Flow<List<FirebaseResponder>> = callbackFlow {
@@ -298,6 +298,7 @@ fun CoordinationPortalScreen(
     }
 
     AnimatedContent(
+        modifier       = Modifier.fillMaxSize(),
         targetState    = navState,
         transitionSpec = {
             if (targetState == NavState.CHAT)
@@ -359,11 +360,13 @@ private fun InboxScreen(
     Box(modifier = Modifier.fillMaxSize()) {
 
         Scaffold(
+            modifier = Modifier.fillMaxSize(),
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
             topBar = {
                 Column(modifier = Modifier.background(BgCard)) {
                     Row(
                         modifier = Modifier.fillMaxWidth().statusBarsPadding()
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -507,6 +510,23 @@ private fun InboxScreen(
                     }
                 }
             },
+            floatingActionButton = {
+                if (navController != null) {
+                    FloatingActionButton(
+                        onClick = {
+                            navController.navigate("responder_list/$currentResponderId")
+                        },
+                        containerColor = BrandGreen,
+                        contentColor = Color.White
+                    ) {
+                        Icon(
+                            Icons.Default.Edit,
+                            contentDescription = "New message"
+                        )
+                    }
+                }
+            },
+            floatingActionButtonPosition = FabPosition.End,
             containerColor = BgPage
         ) { padding ->
             when (tabIndex) {
@@ -531,7 +551,7 @@ private fun InboxScreen(
                     if (filtered.isEmpty()) EmptySearch(modifier = Modifier.padding(padding))
                     else LazyColumn(
                         modifier = Modifier.padding(padding),
-                        contentPadding = PaddingValues(vertical = 8.dp)
+                        contentPadding = PaddingValues(top = 8.dp, bottom = 88.dp)
                     ) {
                         items(
                             items = filtered,
@@ -550,7 +570,7 @@ private fun InboxScreen(
                     if (filtered.isEmpty()) EmptySearch(modifier = Modifier.padding(padding))
                     else LazyColumn(
                         modifier = Modifier.padding(padding),
-                        contentPadding = PaddingValues(vertical = 8.dp)
+                        contentPadding = PaddingValues(top = 8.dp, bottom = 88.dp)
                     ) {
                         items(
                             items = filtered,
@@ -584,25 +604,6 @@ private fun InboxScreen(
             vm    = vm,
             onTap = { responder, dept -> onOpenChat(responder, dept) }
         )
-
-        FloatingActionButton(
-            onClick = {
-                navController?.navigate("responder_list/$currentResponderId")
-            },
-            containerColor = BrandGreen,
-            contentColor = Color.White,
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(
-                    end = 20.dp,
-                    bottom = 40.dp
-                )
-        ) {
-            Icon(
-                Icons.Default.Edit,
-                contentDescription = "New message"
-            )
-        }
     }
 }
 
@@ -648,7 +649,10 @@ private fun AllRespondersTab(
         filtered.isEmpty() -> EmptySearch(modifier = modifier)
         else -> {
             val onlineCount = filtered.count { it.isOnline }
-            LazyColumn(modifier = modifier, contentPadding = PaddingValues(vertical = 8.dp)) {
+            LazyColumn(
+                modifier = modifier,
+                contentPadding = PaddingValues(top = 8.dp, bottom = 88.dp)
+            ) {
                 item {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
@@ -1076,105 +1080,284 @@ private fun ChatScreen(vm: CoordinationViewModel, currentResponderId: String, on
     }
 
     Scaffold(
+        modifier = Modifier.fillMaxSize(),
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
-            Surface(color = BgCard, shadowElevation = 2.dp) {
-                Row(modifier = Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically)
-                {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary) }
-                    Box(modifier = Modifier.size(40.dp)) {
-                        if (selectedResponder != null) {
-                            AvatarCircle(name = selectedResponder.fullName, role = selectedResponder.role, size = 40.dp)
-                            if (isOnline) Box(modifier = Modifier.size(12.dp).align(Alignment.BottomEnd).clip(CircleShape).background(BgCard).padding(2.dp).clip(CircleShape).background(OnlineDot))
-                        } else if (selectedDepartment != null) {
-                            Box(modifier = Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(roleColor(selectedDepartment.name).copy(alpha = 0.12f)), contentAlignment = Alignment.Center) {
-                                Text(selectedDepartment.emoji, fontSize = 18.sp)
-                            }
-                        }
-                    }
-                    Spacer(Modifier.width(10.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(chatName, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        when {
-                            isPeerTyping               -> TypingSubtitle()
-                            selectedResponder != null  -> Text(if (isOnline) "Active now" else "Offline", fontSize = 12.sp, color = if (isOnline) BrandGreen else TextSecondary)
-                            selectedDepartment != null -> Text("Group channel", fontSize = 12.sp, color = TextSecondary)
-                        }
-                    }
-                    IconButton(onClick = { showInfoDialog.value = true }) { Icon(Icons.Default.Info, contentDescription = "Info", tint = TextSecondary) }
-                }
-                if (showChatSearch) {
-                    OutlinedTextField(
-                        value = chatSearchQuery,
-                        onValueChange = { chatSearchQuery = it },
-                        placeholder = {
-                            Text("Search messages...")
-                        },
-                        leadingIcon = {
-                            Icon(Icons.Default.Search, null)
-                        },
-                        trailingIcon = {
-                            IconButton(
-                                onClick = {
-                                    chatSearchQuery = ""
-                                    showChatSearch = false
-                                }
-                            ) {
-                                Icon(Icons.Default.Close, null)
-                            }
-                        },
+            Surface(
+                color = BgCard,
+                shadowElevation = 2.dp
+            ) {
+                Column {
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        singleLine = true,
-                        shape = RoundedCornerShape(20.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = Color.White,
-                            unfocusedContainerColor = Color.White,
-                            focusedBorderColor = BrandGreen,
-                            unfocusedBorderColor = Color(0xFFE0E0E0)
+                            .statusBarsPadding()
+                            .heightIn(min = 64.dp)
+                            .padding(horizontal = 4.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = onBack) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back",
+                                tint = TextPrimary
+                            )
+                        }
+
+                        Box(modifier = Modifier.size(40.dp)) {
+                            if (selectedResponder != null) {
+                                AvatarCircle(
+                                    name = selectedResponder.fullName,
+                                    role = selectedResponder.role,
+                                    size = 40.dp
+                                )
+
+                                if (isOnline) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(12.dp)
+                                            .align(Alignment.BottomEnd)
+                                            .clip(CircleShape)
+                                            .background(BgCard)
+                                            .padding(2.dp)
+                                            .clip(CircleShape)
+                                            .background(OnlineDot)
+                                    )
+                                }
+                            } else if (selectedDepartment != null) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(
+                                            roleColor(selectedDepartment.name)
+                                                .copy(alpha = 0.12f)
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        selectedDepartment.emoji,
+                                        fontSize = 18.sp
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(Modifier.width(10.dp))
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                chatName,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp,
+                                color = TextPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+
+                            when {
+                                isPeerTyping -> TypingSubtitle()
+
+                                selectedResponder != null -> Text(
+                                    if (isOnline) "Active now"
+                                    else formatLastSeenTime(liveLastSeen)
+                                        .takeIf { it != "Unknown" }
+                                        ?.let { "Last seen $it" }
+                                        ?: "Offline",
+                                    fontSize = 12.sp,
+                                    color = if (isOnline) BrandGreen else TextSecondary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+
+                                selectedDepartment != null -> Text(
+                                    "Group channel",
+                                    fontSize = 12.sp,
+                                    color = TextSecondary
+                                )
+                            }
+                        }
+
+                        IconButton(
+                            onClick = { showInfoDialog.value = true }
+                        ) {
+                            Icon(
+                                Icons.Default.Info,
+                                contentDescription = "Chat info",
+                                tint = TextSecondary
+                            )
+                        }
+                    }
+
+                    AnimatedVisibility(visible = showChatSearch) {
+                        OutlinedTextField(
+                            value = chatSearchQuery,
+                            onValueChange = { chatSearchQuery = it },
+                            placeholder = {
+                                Text(
+                                    "Search messages...",
+                                    color = TextSecondary
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.Search,
+                                    contentDescription = null,
+                                    tint = TextSecondary
+                                )
+                            },
+                            trailingIcon = {
+                                IconButton(
+                                    onClick = {
+                                        chatSearchQuery = ""
+                                        showChatSearch = false
+                                    }
+                                ) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Close search",
+                                        tint = TextSecondary
+                                    )
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            singleLine = true,
+                            shape = RoundedCornerShape(20.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedContainerColor = BgPage,
+                                unfocusedContainerColor = BgPage,
+                                focusedBorderColor = BrandGreen,
+                                unfocusedBorderColor = Color.Transparent,
+                                focusedTextColor = TextPrimary,
+                                unfocusedTextColor = TextPrimary,
+                                cursorColor = BrandGreen
+                            )
                         )
-                    )
+                    }
                 }
             }
         },
-        containerColor = BgChat
-    ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-            ChatMessagesPanel(messages = visibleMessages, timeFmt = timeFmt, listState = listState, currentResponderId = currentResponderId, onReact = { id, emoji -> vm.addReaction(id, emoji, currentResponderId) }, modifier = Modifier.fillMaxSize().padding(bottom = 72.dp))
-            if (unseenCount.intValue > 0) {
-                Button(onClick = { scope.launch { if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1); unseenCount.intValue = 0 } },
-                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 80.dp), shape = RoundedCornerShape(20.dp),
-                    colors   = ButtonDefaults.buttonColors(containerColor = Color(0xFF323232))) {
-                    Text("↓ ${unseenCount.intValue} new", color = Color.White, fontSize = 13.sp)
-                }
-            }
-            Column(modifier = Modifier.align(Alignment.BottomCenter)) {
+        bottomBar = {
+            // Keep the composer directly above whichever bottom inset is larger:
+            // the keyboard when it is open, or the system navigation bar when it is closed.
+            // The inset padding is applied OUTSIDE ChatComposer so the white composer
+            // surface does not expand into a large blank panel.
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .windowInsetsPadding(
+                        WindowInsets.ime
+                            .union(WindowInsets.navigationBars)
+                            .only(WindowInsetsSides.Bottom)
+                    )
+            ) {
                 AnimatedVisibility(visible = showQuickReplies) {
                     QuickReplyBar(
                         onSelect = { reply ->
                             when {
-                                selectedResponder  != null -> vm.sendMockPrivateMessage(currentResponderId, selectedResponder, reply)
-                                selectedDepartment != null -> vm.sendMockDepartmentMessage(currentResponderId, selectedDepartment.name, reply)
-                                else -> Toast.makeText(ctx, "Select a chat first", Toast.LENGTH_SHORT).show()
+                                selectedResponder != null ->
+                                    vm.sendMockPrivateMessage(
+                                        currentResponderId,
+                                        selectedResponder,
+                                        reply
+                                    )
+
+                                selectedDepartment != null ->
+                                    vm.sendMockDepartmentMessage(
+                                        currentResponderId,
+                                        selectedDepartment.name,
+                                        reply
+                                    )
+
+                                else -> Toast.makeText(
+                                    ctx,
+                                    "Select a chat first",
+                                    Toast.LENGTH_SHORT
+                                ).show()
                             }
                         }
                     )
                 }
+
                 ChatComposer(
-                    modifier            = Modifier,
-                    text                = messageInput.value,
-                    onTextChange        = { messageInput.value = it },
-                    onSend              = { doSend() },
-                    onAttachClick       = { showAttach.value = true },
-                    onQuickReplyToggle  = { showQuickReplies = !showQuickReplies },
-                    onLike              = {
+                    text = messageInput.value,
+                    onTextChange = { messageInput.value = it },
+                    onSend = { doSend() },
+                    onAttachClick = { showAttach.value = true },
+                    onQuickReplyToggle = {
+                        showQuickReplies = !showQuickReplies
+                    },
+                    onLike = {
                         when {
-                            selectedResponder  != null -> vm.sendMockPrivateMessage(currentResponderId, selectedResponder, "👍")
-                            selectedDepartment != null -> vm.sendMockDepartmentMessage(currentResponderId, selectedDepartment.name, "👍")
-                            else -> Toast.makeText(ctx, "Select a chat first", Toast.LENGTH_SHORT).show()
+                            selectedResponder != null ->
+                                vm.sendMockPrivateMessage(
+                                    currentResponderId,
+                                    selectedResponder,
+                                    "👍"
+                                )
+
+                            selectedDepartment != null ->
+                                vm.sendMockDepartmentMessage(
+                                    currentResponderId,
+                                    selectedDepartment.name,
+                                    "👍"
+                                )
+
+                            else -> Toast.makeText(
+                                ctx,
+                                "Select a chat first",
+                                Toast.LENGTH_SHORT
+                            ).show()
                         }
                     }
                 )
+            }
+        },
+        containerColor = BgChat
+    ) { padding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .consumeWindowInsets(padding)
+        ) {
+            ChatMessagesPanel(
+                messages = visibleMessages,
+                timeFmt = timeFmt,
+                listState = listState,
+                currentResponderId = currentResponderId,
+                onReact = { id, emoji ->
+                    vm.addReaction(id, emoji, currentResponderId)
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+
+            if (unseenCount.intValue > 0) {
+                Button(
+                    onClick = {
+                        scope.launch {
+                            if (messages.isNotEmpty()) {
+                                listState.animateScrollToItem(messages.size - 1)
+                            }
+                            unseenCount.intValue = 0
+                        }
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 8.dp),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF323232)
+                    )
+                ) {
+                    Text(
+                        "↓ ${unseenCount.intValue} new",
+                        color = Color.White,
+                        fontSize = 13.sp
+                    )
+                }
             }
         }
     }
@@ -1257,7 +1440,7 @@ private fun ChatScreen(vm: CoordinationViewModel, currentResponderId: String, on
 @Composable
 private fun ChatMessagesPanel(messages: List<ChatMessage>, timeFmt: SimpleDateFormat, listState: LazyListState, currentResponderId: String, onReact: (String, String) -> Unit, modifier: Modifier = Modifier) {
     if (messages.isEmpty()) {
-        Box(modifier = modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Icon(Icons.Default.ChatBubbleOutline, contentDescription = null, tint = Color(0xFFCCCCCC), modifier = Modifier.size(56.dp))
                 Spacer(Modifier.height(12.dp))
@@ -1564,7 +1747,12 @@ private fun QuickReplyBar(onSelect: (String) -> Unit) {
 @Composable
 private fun ChatComposer(modifier: Modifier = Modifier, text: String, onTextChange: (String) -> Unit, onSend: () -> Unit, onAttachClick: () -> Unit, onLike: () -> Unit, onQuickReplyToggle: () -> Unit) {
     Surface(modifier = modifier.fillMaxWidth(), color = BgCard, shadowElevation = 8.dp) {
-        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp).navigationBarsPadding().imePadding(), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             IconButton(onClick = onAttachClick) { Icon(Icons.Default.AddCircleOutline, contentDescription = "Attach", tint = BrandGreen, modifier = Modifier.size(26.dp)) }
             IconButton(onClick = onQuickReplyToggle) { Icon(Icons.Default.Bolt, contentDescription = "Quick replies", tint = BrandGreen, modifier = Modifier.size(24.dp)) }
             OutlinedTextField(value = text, onValueChange = onTextChange, placeholder = { Text("Aa", fontSize = 15.sp, color = TextSecondary) }, modifier = Modifier.weight(1f), singleLine = false, maxLines = 4, shape = RoundedCornerShape(24.dp),
@@ -2256,7 +2444,7 @@ private fun DepartmentStatusCard(
     ) {
         CompactStatusChip(Icons.Default.Groups, "$onlineCount Online", OnlineDot, Modifier.weight(1f))
         CompactStatusChip(Icons.Default.LocalFireDepartment, "$fireCount Fire", Color(0xFFE53935), Modifier.weight(1f))
-        CompactStatusChip(Icons.Default.LocalHospital, "$medicalCount Medical", Color(0xFF1E88E5), Modifier.weight(1f))
+        CompactStatusChip(Icons.Default.LocalHospital, "$medicalCount EMS", Color(0xFF1E88E5), Modifier.weight(1f))
         CompactStatusChip(Icons.Default.Security, "$policeCount Police", Color(0xFF6D4C41), Modifier.weight(1f))
     }
 }
