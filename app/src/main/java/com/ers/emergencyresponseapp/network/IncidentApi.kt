@@ -10,6 +10,8 @@ import retrofit2.http.FormUrlEncoded
 import retrofit2.http.GET
 import retrofit2.http.POST
 import retrofit2.http.Query
+import retrofit2.http.Body
+
 
 data class SaveRoutePointRequest(
     val incident_id: Int,
@@ -305,5 +307,19 @@ interface IncidentApi {
         @Field("responder_id") responderId: Int,
         @Field("presence") presence: String
     ): SetUnitPresenceResponse
+
+    @POST("api/api_app/request-alternative-route.php")
+    suspend fun requestAlternativeRoute(
+        @Body body: AlternativeRouteRequestBody
+    ): AlternativeRouteRequestResponse
+
+    @GET("api/api_app/get-alternative-route-status.php")
+    suspend fun getAlternativeRouteStatus(
+        @Query("request_id")
+        requestId: Long,
+
+        @Query("responder_id")
+        responderId: Int
+    ): AlternativeRouteStatusResponse
 
 }
