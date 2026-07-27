@@ -1,0 +1,10 @@
+1. AppPullToRefresh now uses androidx.compose.material3.pulltorefresh.
+2. The Material 2 core dependency was removed; material-icons-extended remains.
+3. Search the local project for duplicate declarations of:
+   - fun DepartmentSelectionDialog
+   - fun BackupResourceSheet
+   - val BACKUP_RESOURCES
+   Keep only home/composables/BackupRequestSheet.kt.
+4. Delete legacy home/composables/DepartmentSelection.kt or any old
+   Backuprequestsheet.kt that declares the same symbols.
+5. Run Build > Clean Project, then Rebuild Project.
