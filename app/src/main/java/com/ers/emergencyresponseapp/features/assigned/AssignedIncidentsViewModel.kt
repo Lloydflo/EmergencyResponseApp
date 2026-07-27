@@ -31,20 +31,23 @@ class AssignedIncidentsViewModel(
                 val list = repo.getAssignedIncidents(responderId)
                 repo.syncUnitStatus(responderId)
 
-                list.forEach { incident ->
-                    repo.markAssignmentReceived(
-                        incidentId = incident.id,
-                        responderId = responderId
-                    )
-                }
+                list
+                    .filter { it.status.equals("pending", true) || it.status.equals("assigned", true) }
+                    .forEach { incident ->
+                        repo.markAssignmentReceived(
+                            assignmentId = incident.assignment_id ?: incident.id,
+                            responderId = responderId
+                        )
+                    }
 
-                _ui.value = AssignedIncidentsUiState(
+                _ui.value = _ui.value.copy(
                     loading = false,
-                    incidents = list
+                    incidents = list,
+                    error = null
                 )
 
             } catch (e: Exception) {
-                _ui.value = AssignedIncidentsUiState(
+                _ui.value = _ui.value.copy(
                     loading = false,
                     error = e.message ?: "Failed to load assigned incidents"
                 )
@@ -83,8 +86,13 @@ class AssignedIncidentsViewModel(
 
                 if (success) {
                     load(responderId)
+                } else {
+                    _ui.value = _ui.value.copy(error = "The assignment status update was rejected.")
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                _ui.value = _ui.value.copy(
+                    error = e.message ?: "Failed to update the assignment status"
+                )
             }
         }
     }

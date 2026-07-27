@@ -1,20 +1,22 @@
 package com.ers.emergencyresponseapp.home
 
+import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 import java.util.Date
-import androidx.compose.runtime.Immutable
 
 enum class IncidentType(val displayName: String) {
     FIRE("Fire"),
     MEDICAL("Medical"),
     CRIME("Crime"),
-    DISASTER("Disaster")
+    DISASTER("Disaster"),
+    GENERAL("General")
 }
 
 enum class IncidentPriority(val displayName: String, val color: Color) {
     HIGH("High", Color(0xFFD32F2F)),
     MEDIUM("Medium", Color(0xFFFFA000)),
-    LOW("Low", Color(0xFF388E3C))
+    LOW("Low", Color(0xFF388E3C)),
+    UNKNOWN("Not set", Color(0xFF757575))
 }
 
 enum class IncidentStatus(val displayName: String) {
@@ -24,7 +26,8 @@ enum class IncidentStatus(val displayName: String) {
     ON_SCENE("On Scene"),
     PENDING_REVIEW("Pending Review"),
     SUBMITTED_REVIEW("Submitted Review"),
-    RESOLVED("Resolved")
+    RESOLVED("Resolved"),
+    UNKNOWN("Status unavailable")
 }
 
 enum class ResponderStatus(val displayName: String, val color: Color) {
@@ -47,38 +50,3 @@ data class Incident(
     val latitude: Double? = null,
     val longitude: Double? = null
 )
-// network/IncidentDto.kt  (what the API returns)
-// network/IncidentDto.kt
-data class IncidentDto(
-    val id: String,
-    val type: String,
-    val priority: String? = null,
-    val location: String,
-    val status: String,
-    val description: String? = null,
-    val assignedTo: String? = null,
-    val timeReported: String? = null,
-    val latitude: Double? = null,
-    val longitude: Double? = null
-)
-
-fun IncidentDto.toDomain(): Incident {
-    return Incident(
-        id          = this.id,
-        type        = IncidentType.entries.firstOrNull {
-            it.name.equals(this.type.trim(), ignoreCase = true)
-        } ?: IncidentType.MEDICAL,
-        priority    = IncidentPriority.entries.firstOrNull {
-            it.name.equals(this.priority?.trim(), ignoreCase = true)
-        } ?: IncidentPriority.MEDIUM,
-        location    = this.location,
-        timeReported = java.util.Date(),
-        status      = IncidentStatus.entries.firstOrNull {
-            it.name.equals(this.status.trim(), ignoreCase = true)
-        } ?: IncidentStatus.REPORTED,
-        description = this.description ?: "",
-        assignedTo  = this.assignedTo,
-        latitude    = this.latitude,
-        longitude   = this.longitude
-    )
-}

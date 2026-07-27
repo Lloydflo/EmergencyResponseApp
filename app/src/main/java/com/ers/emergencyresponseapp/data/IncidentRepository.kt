@@ -33,20 +33,29 @@ class IncidentRepository {
             status = status
         )
 
-        return response.isSuccessful
+        if (!response.success) {
+            throw Exception(response.message ?: "The assignment status update was rejected.")
+        }
+        return true
     }
 
     suspend fun markAssignmentReceived(
-        incidentId: String,
+        assignmentId: String,
         responderId: Int
     ): Boolean {
-        val response = api.markAssignmentReceived(incidentId, responderId)
-        return response.isSuccessful
+        val response = api.markAssignmentReceived(assignmentId, responderId)
+        if (!response.success) {
+            throw Exception(response.message ?: "The assignment acknowledgement was rejected.")
+        }
+        return true
     }
 
     suspend fun syncUnitStatus(responderId: Int): Boolean {
         val response = api.syncUnitStatus(responderId)
-        return response.isSuccessful
+        if (!response.success) {
+            throw Exception(response.message ?: "The unit status could not be synchronized.")
+        }
+        return true
     }
 
     suspend fun sendBackupRequest(
@@ -118,9 +127,12 @@ class IncidentRepository {
         }
     }
 
-    suspend fun getResourceRequestStatus(requestId: Int): ResourceRequestStatusDto? {
+    suspend fun getResourceRequestStatus(
+        requestId: Int,
+        responderId: Int
+    ): ResourceRequestStatusDto? {
         return try {
-            val response = api.getResourceRequestStatus(requestId)
+            val response = api.getResourceRequestStatus(requestId, responderId)
             if (response.success) response.request else null
         } catch (e: Exception) {
             null

@@ -1,26 +1,28 @@
 plugins {
-    id("com.google.gms.google-services")   // ADD THIS LINE
+    id("com.google.gms.google-services")
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
 }
-
-
 
 android {
     namespace = "com.ers.emergencyresponseapp"
     compileSdk = 36
 
     defaultConfig {
-        buildConfigField("String", "BASE_URL", "\"https://emergency-response.alertaraqc.com/\"")
         applicationId = "com.ers.emergencyresponseapp"
         minSdk = 23
         targetSdk = 34
-        versionCode = 17
-        versionName = "11.0"
+        versionCode = 18
+        versionName = "11.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
+        buildConfigField(
+            "String",
+            "BASE_URL",
+            "\"${project.findProperty("BASE_URL") ?: "https://emergency-response.alertaraqc.com/"}\""
+        )
         buildConfigField(
             "String",
             "MAPTILER_API_KEY",
@@ -29,7 +31,8 @@ android {
         buildConfigField(
             "String",
             "ORS_API_KEY",
-            "\"${project.findProperty("ORS_API_KEY") ?: ""}\"")
+            "\"${project.findProperty("ORS_API_KEY") ?: ""}\""
+        )
     }
 
     buildTypes {
@@ -41,13 +44,16 @@ android {
             )
         }
     }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+
     kotlinOptions {
         jvmTarget = "11"
     }
+
     buildFeatures {
         compose = true
         buildConfig = true
@@ -58,48 +64,34 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
+
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
-    implementation("androidx.navigation:navigation-compose:2.7.7")
     implementation("androidx.compose.material:material-icons-extended")
-    implementation("com.google.maps.android:maps-compose:2.11.4")
-    implementation("com.google.android.gms:play-services-location:21.0.1")
-    implementation ("com.squareup.retrofit2:retrofit:2.11.0")
-    implementation ("com.squareup.retrofit2:converter-gson:2.11.0")
-    implementation("com.google.android.gms:play-services-location:21.3.0")
-    implementation ("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation ("com.squareup.okhttp3:logging-interceptor:4.12.0")
-    implementation("com.google.android.gms:play-services-maps:18.2.0")
-    implementation("com.google.android.gms:play-services-location:21.3.0")
-    // Retrofit + OkHttp for networking
-    // Firebase BOM — manages all Firebase versions automatically
-    implementation(platform("com.google.firebase:firebase-bom:33.1.0"))
-    // Para sa Kotlin Coroutines at Flow
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3")
 
-// Para sa Firebase Realtime Database
-    implementation("com.google.firebase:firebase-database-ktx:21.0.0")
-
-    // Realtime Database
-    implementation("com.google.firebase:firebase-database-ktx")
-
-    // Coroutines for Kotlin (you likely already have this)
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")
-
-    // ViewModel + Compose (you likely already have these)
+    implementation("androidx.navigation:navigation-compose:2.7.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.3")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.3")
 
+    implementation("com.squareup.retrofit2:retrofit:2.11.0")
+    implementation("com.squareup.retrofit2:converter-gson:2.11.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
 
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")
+
+    implementation(platform("com.google.firebase:firebase-bom:33.1.0"))
+    implementation("com.google.firebase:firebase-database-ktx")
+    implementation("com.google.firebase:firebase-messaging")
+
+    implementation("com.google.android.gms:play-services-location:21.3.0")
+    implementation("com.google.android.gms:play-services-maps:18.2.0")
+    implementation("com.google.maps.android:maps-compose:2.11.4")
     implementation("org.maplibre.gl:android-sdk:11.11.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:X.X.X")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:X.X.X")
 
     implementation("io.coil-kt:coil-compose:2.7.0")
 

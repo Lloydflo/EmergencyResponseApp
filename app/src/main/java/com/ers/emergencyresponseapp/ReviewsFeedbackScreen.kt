@@ -22,7 +22,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -45,6 +47,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -54,7 +57,6 @@ import androidx.core.content.ContextCompat
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
-import java.util.UUID
 import java.util.Locale
 import android.graphics.Paint
 import android.graphics.pdf.PdfDocument
@@ -66,7 +68,12 @@ import java.util.Date
 import androidx.compose.ui.graphics.graphicsLayer
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import com.ers.emergencyresponseapp.ui.components.AppPullToRefresh
 import com.ers.emergencyresponseapp.ui.theme.ThemeController
+import com.ers.emergencyresponseapp.data.AfterActionReportRecord
+import com.ers.emergencyresponseapp.data.IncidentReviewSummary
+import com.ers.emergencyresponseapp.data.OperationalRepository
+import com.ers.emergencyresponseapp.data.SaveAfterActionReportRequest
 import coil.compose.AsyncImage
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
@@ -74,18 +81,34 @@ private object RFColors {
     val Primary: Color get() = Color(0xFF4C8A89)
     val Secondary: Color get() = Color(0xFF3A506B)
     val Tertiary: Color get() = Color(0xFF1C2541)
+
     val Text: Color get() = if (ThemeController.isDarkMode.value) Color(0xFFFAFAFA) else Color(0xFF171717)
-    val TextSecondary: Color get() = if (ThemeController.isDarkMode.value) Color(0xFFA1A1AA) else Color(0xFF575757)
-    val Border: Color get() = if (ThemeController.isDarkMode.value) Color(0xFF27272A) else Color(0xFFE5E5E5)
-    val Bg: Color get() = if (ThemeController.isDarkMode.value) Color(0xFF16181D) else Color(0xFFFFFFFF)
-    val SurfaceBg: Color get() = if (ThemeController.isDarkMode.value) Color(0xFF0A0A0A) else Color(0xFFF6F8FA)
+    val TextSecondary: Color get() = if (ThemeController.isDarkMode.value) Color(0xFFB6BAC3) else Color(0xFF5F6368)
+    val TextMuted: Color get() = if (ThemeController.isDarkMode.value) Color(0xFF858A94) else Color(0xFF7A7F87)
+
+    val Border: Color get() = if (ThemeController.isDarkMode.value) Color(0xFF30343B) else Color(0xFFE1E5EA)
+    val Bg: Color get() = if (ThemeController.isDarkMode.value) Color(0xFF17191E) else Color(0xFFFFFFFF)
+    val ElevatedBg: Color get() = if (ThemeController.isDarkMode.value) Color(0xFF202329) else Color(0xFFFFFFFF)
+    val SurfaceBg: Color get() = if (ThemeController.isDarkMode.value) Color(0xFF0D0F12) else Color(0xFFF4F6F8)
+    val MutedBg: Color get() = if (ThemeController.isDarkMode.value) Color(0xFF22262D) else Color(0xFFF7F8FA)
+    val InputBg: Color get() = if (ThemeController.isDarkMode.value) Color(0xFF12151A) else Color(0xFFF8FAFB)
+
+    val Success: Color get() = if (ThemeController.isDarkMode.value) Color(0xFF76D39A) else Color(0xFF247A47)
+    val Warning: Color get() = if (ThemeController.isDarkMode.value) Color(0xFFFFC36A) else Color(0xFFA45B00)
+    val Danger: Color get() = if (ThemeController.isDarkMode.value) Color(0xFFFF8A89) else Color(0xFFB3261E)
+    val Info: Color get() = if (ThemeController.isDarkMode.value) Color(0xFF74C8D0) else Color(0xFF2E777B)
+}
+
+private fun tonalSurface(accent: Color, lightAlpha: Float = 0.10f, darkAlpha: Float = 0.20f): Color {
+    return accent.copy(alpha = if (ThemeController.isDarkMode.value) darkAlpha else lightAlpha)
 }
 
 // ─── Review status ────────────────────────────────────────────────────────────
-private enum class ReviewStatus(val label: String, val color: Color, val bgColor: Color) {
-    Pending("Pending Review", Color(0xFFE65100), Color(0xFFFFF3E0)),
-    Submitted("Submitted",    Color(0xFF0277BD), Color(0xFFE1F5FE)),
-    Completed("Completed",    Color(0xFF2E7D32), Color(0xFFE8F5E9))
+private enum class ReviewStatus(val label: String, val color: Color) {
+    Pending("Needs Service Review", Color(0xFFE67E22)),
+    Submitted("Awaiting Verification", Color(0xFF2E86C1)),
+    Completed("Verified", Color(0xFF2E8B57)),
+    Unknown("Status Unavailable", Color(0xFF6B7280))
 }
 
 private data class ReviewableIncident(
@@ -94,7 +117,8 @@ private data class ReviewableIncident(
     val date: String,
     val status: ReviewStatus,
     val proofUri: String? = null,
-    val completionNotes: String? = null
+    val completionNotes: String? = null,
+    val completedAtMillis: Long = 0L
 )
 
 // ─── Resource request models ──────────────────────────────────────────────────
@@ -147,18 +171,6 @@ private enum class ResUrgency(val displayName: String, val color: Color, val bgC
     CRITICAL("Critical", Color(0xFF6A1B9A), Color(0xFFF3E5F5))
 }
 
-private data class ResRequest(
-    val id: String           = UUID.randomUUID().toString().take(8).uppercase(),
-    val resourceName: String,
-    val category: ResCategory,
-    val quantity: Int,
-    val urgency: ResUrgency,
-    val incidentId: String,
-    val location: String,
-    val notes: String,
-    val requestedBy: String,
-    val timestamp: Long      = System.currentTimeMillis()
-)
 private data class SavedResourceRequest(
     val id: String,
     val resourceName: String,
@@ -166,22 +178,184 @@ private data class SavedResourceRequest(
     val quantity: String,
     val urgency: String,
     val status: String,
-    val timestamp: Long
+    val incidentId: String,
+    val location: String,
+    val notes: String,
+    val createdAt: Long,
+    val updatedAt: Long
 )
 
-private data class SavedReviewRating(
+
+
+private enum class ReviewHubTab(val label: String, val icon: ImageVector) {
+    INCIDENTS("Post-Incident", Icons.Default.Description),
+    RESOURCES("Resources", Icons.Default.Inventory2)
+}
+
+private enum class OperationalReportStatus(val label: String, val color: Color) {
+    DRAFT("Draft", Color(0xFFB86B12)),
+    SUBMITTED("Submitted", Color(0xFF2E777B)),
+    VERIFIED("Verified", Color(0xFF2E8B57)),
+    RETURNED("Needs Revision", Color(0xFFB3261E))
+}
+
+/**
+ * Unit-level responder documentation persisted through the PHP/MySQL API.
+ * Incident command/admin may verify or return the submitted report.
+ */
+private data class AfterActionReport(
     val incidentId: String,
-    val responseRating: Int,
-    val communicationRating: Int,
-    val professionalismRating: Int,
-    val outcome: String,
-    val timestamp: Long
+    val incidentType: String,
+    val responderName: String,
+    val operationalOutcome: String,
+    val incidentSummary: String,
+    val actionsTaken: String,
+    val personsAssisted: Int,
+    val injuries: Int,
+    val fatalities: Int,
+    val resourcesUsed: String,
+    val agenciesInvolved: String,
+    val handoffDetails: String,
+    val safetyIssues: String,
+    val followUpRequired: Boolean,
+    val followUpDetails: String,
+    val lessonsLearned: String,
+    val reviewerNotes: String,
+    val status: OperationalReportStatus,
+    val updatedAt: Long
 )
+
+private fun normalizedIncidentId(raw: String): String = raw.removePrefix("#").trim()
+
+private fun parseServerTimestamp(raw: String?): Long {
+    val value = raw?.trim().orEmpty()
+    if (value.isBlank()) return 0L
+
+    val patterns = listOf(
+        "yyyy-MM-dd HH:mm:ss",
+        "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
+        "yyyy-MM-dd'T'HH:mm:ssXXX",
+        "yyyy-MM-dd'T'HH:mm:ss"
+    )
+    for (pattern in patterns) {
+        runCatching {
+            SimpleDateFormat(pattern, Locale.US).apply {
+                isLenient = false
+            }.parse(value)?.time
+        }.getOrNull()?.let { return it }
+    }
+    return value.toLongOrNull() ?: 0L
+}
+
+private fun formatRequestTimestamp(timestamp: Long): String {
+    if (timestamp <= 0L) return "Time unavailable"
+    return SimpleDateFormat("MMM dd, yyyy • hh:mm a", Locale.getDefault())
+        .format(Date(timestamp))
+}
+
+private fun AfterActionReportRecord.toUiReport(): AfterActionReport = AfterActionReport(
+    incidentId = incidentId.toString(),
+    incidentType = incidentType,
+    responderName = responderName,
+    operationalOutcome = operationalOutcome,
+    incidentSummary = incidentSummary,
+    actionsTaken = actionsTaken,
+    personsAssisted = personsAssisted,
+    injuries = injuries,
+    fatalities = fatalities,
+    resourcesUsed = resourcesUsed,
+    agenciesInvolved = agenciesInvolved,
+    handoffDetails = handoffDetails,
+    safetyIssues = safetyIssues,
+    followUpRequired = followUpRequired,
+    followUpDetails = followUpDetails,
+    lessonsLearned = lessonsLearned,
+    reviewerNotes = reviewerNotes,
+    status = when (status.lowercase(Locale.US)) {
+        "submitted" -> OperationalReportStatus.SUBMITTED
+        "verified" -> OperationalReportStatus.VERIFIED
+        "returned" -> OperationalReportStatus.RETURNED
+        else -> OperationalReportStatus.DRAFT
+    },
+    updatedAt = updatedAtMillis.takeIf { it > 0L } ?: createdAtMillis
+)
+
+private fun AfterActionReport.toApiRequest(
+    responderId: Int
+): SaveAfterActionReportRequest = SaveAfterActionReportRequest(
+    incidentId = normalizedIncidentId(incidentId).toLongOrNull() ?: 0L,
+    responderId = responderId,
+    incidentType = incidentType,
+    responderName = responderName,
+    operationalOutcome = operationalOutcome,
+    incidentSummary = incidentSummary,
+    actionsTaken = actionsTaken,
+    personsAssisted = personsAssisted,
+    injuries = injuries,
+    fatalities = fatalities,
+    resourcesUsed = resourcesUsed,
+    agenciesInvolved = agenciesInvolved,
+    handoffDetails = handoffDetails,
+    safetyIssues = safetyIssues,
+    followUpRequired = followUpRequired,
+    followUpDetails = followUpDetails,
+    lessonsLearned = lessonsLearned,
+    status = when (status) {
+        OperationalReportStatus.DRAFT,
+        OperationalReportStatus.RETURNED -> "draft"
+        OperationalReportStatus.SUBMITTED,
+        OperationalReportStatus.VERIFIED -> "submitted"
+    }
+)
+
+private fun AfterActionReport.toPrintableText(): String = buildString {
+    appendLine("RESPONDER AFTER-ACTION REPORT")
+    appendLine()
+    appendLine("Incident ID: #${normalizedIncidentId(incidentId)}")
+    appendLine("Incident Type: $incidentType")
+    appendLine("Prepared By: $responderName")
+    appendLine("Operational Outcome: $operationalOutcome")
+    appendLine("Report Status: ${status.label}")
+    appendLine("Updated: ${SimpleDateFormat("MMM dd, yyyy hh:mm a", Locale.getDefault()).format(Date(updatedAt))}")
+    appendLine()
+    appendLine("INCIDENT SUMMARY")
+    appendLine(incidentSummary.ifBlank { "Not provided" })
+    appendLine()
+    appendLine("ACTIONS TAKEN")
+    appendLine(actionsTaken.ifBlank { "Not provided" })
+    appendLine()
+    appendLine("PERSONS ASSISTED: $personsAssisted")
+    appendLine("INJURIES: $injuries")
+    appendLine("FATALITIES: $fatalities")
+    appendLine()
+    appendLine("RESOURCES USED")
+    appendLine(resourcesUsed.ifBlank { "None recorded" })
+    appendLine()
+    appendLine("AGENCIES / UNITS INVOLVED")
+    appendLine(agenciesInvolved.ifBlank { "None recorded" })
+    appendLine()
+    appendLine("HANDOFF / RECEIVING FACILITY")
+    appendLine(handoffDetails.ifBlank { "No handoff recorded" })
+    appendLine()
+    appendLine("SAFETY ISSUES / NEAR MISSES")
+    appendLine(safetyIssues.ifBlank { "None reported" })
+    appendLine()
+    appendLine("FOLLOW-UP REQUIRED: ${if (followUpRequired) "Yes" else "No"}")
+    if (followUpRequired) appendLine(followUpDetails.ifBlank { "Details not provided" })
+    appendLine()
+    appendLine("LESSONS / RECOMMENDATIONS")
+    appendLine(lessonsLearned.ifBlank { "None recorded" })
+    if (reviewerNotes.isNotBlank()) {
+        appendLine()
+        appendLine("REVIEWER NOTES")
+        appendLine(reviewerNotes)
+    }
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /** Decode a file:// or content:// URI string to a Bitmap safely */
-private const val SERVER_BASE_URL = "https://emergency-response.alertaraqc.com"
+private val SERVER_BASE_URL: String get() = BuildConfig.BASE_URL.trimEnd('/')
 
 /** Turns a server-relative path like "/uploads/x.jpg" into a fetchable https URL.
  *  Leaves file://, content://, and already-absolute http(s):// URIs untouched. */
@@ -364,40 +538,63 @@ private fun buildLocationString(ctx: Context, lat: Double, lng: Double): String 
 @Composable
 private fun ReviewStatCard(value: Int, label: String, accent: Color, modifier: Modifier = Modifier) {
     Card(
-        modifier = modifier.shadow(8.dp, RoundedCornerShape(20.dp)),
-        shape    = RoundedCornerShape(20.dp),
-        colors   = CardDefaults.cardColors(containerColor = RFColors.Bg),
-        border   = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = RFColors.Bg),
+        border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 16.dp),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 13.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(value.toString(), fontWeight = FontWeight.Bold, fontSize = 22.sp, color = RFColors.Text)
-            Spacer(Modifier.height(4.dp))
-            Text(label, fontSize = 11.sp, color = RFColors.TextSecondary, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
-            Spacer(Modifier.height(8.dp))
-            Box(Modifier.height(3.dp).fillMaxWidth(0.6f).clip(RoundedCornerShape(999.dp)).background(accent.copy(alpha = 0.7f)))
+            Text(value.toString(), fontWeight = FontWeight.Bold, fontSize = 21.sp, color = RFColors.Text)
+            Spacer(Modifier.height(3.dp))
+            Text(
+                label,
+                fontSize = 10.sp,
+                color = RFColors.TextSecondary,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                minLines = 2,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(7.dp))
+            Box(
+                Modifier
+                    .height(3.dp)
+                    .fillMaxWidth(0.55f)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(accent.copy(alpha = 0.78f))
+            )
         }
     }
 }
 
 // ─── Filter pill ──────────────────────────────────────────────────────────────
 @Composable
-private fun FilterPill(label: String, icon: ImageVector, selected: Boolean, accentColor: Color, onClick: () -> Unit) {
+private fun FilterPill(
+    label: String,
+    icon: ImageVector,
+    selected: Boolean,
+    accentColor: Color,
+    onClick: () -> Unit
+) {
     OutlinedButton(
         onClick = onClick,
         shape = RoundedCornerShape(999.dp),
-        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+        contentPadding = PaddingValues(horizontal = 13.dp, vertical = 7.dp),
         colors = ButtonDefaults.outlinedButtonColors(
-            containerColor = if (selected) accentColor.copy(alpha = 0.13f) else Color.Transparent,
-            contentColor = if (ThemeController.isDarkMode.value) RFColors.Primary else RFColors.Secondary
+            containerColor = if (selected) tonalSurface(accentColor) else Color.Transparent,
+            contentColor = if (selected) accentColor else RFColors.TextSecondary
         ),
-        border = androidx.compose.foundation.BorderStroke(1.dp, if (selected) accentColor.copy(alpha = 0.6f) else RFColors.Border)
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (selected) accentColor.copy(alpha = 0.65f) else RFColors.Border
+        )
     ) {
         Icon(icon, contentDescription = null, modifier = Modifier.size(15.dp))
         Spacer(Modifier.width(5.dp))
-        Text(label, fontSize = 13.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
+        Text(label, fontSize = 12.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
     }
 }
 
@@ -456,199 +653,259 @@ private fun FullScreenImageDialog(
     }
 }
 
-// ─── Review card ──────────────────────────────────────────────────────────────
+// ─── Incident closure card ────────────────────────────────────────────────────
 @Composable
 private fun ReviewCard(
     incident: ReviewableIncident,
     index: Int,
+    report: AfterActionReport?,
+    onOpenReport: (ReviewableIncident) -> Unit,
     onWriteReview: (ReviewableIncident) -> Unit,
     onViewDetails: (ReviewableIncident) -> Unit,
     onViewImage: (String) -> Unit
 ) {
-    var visible by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        kotlinx.coroutines.delay(index * 60L)
+    var visible by remember(incident.id) { mutableStateOf(false) }
+    LaunchedEffect(incident.id) {
+        delay((index.coerceAtMost(8)) * 45L)
         visible = true
     }
 
-    AnimatedVisibility(visible = visible, enter = fadeIn(tween(300)) + slideInVertically(tween(300)) { it / 3 }) {
+    val reportAccent = report?.status?.color ?: RFColors.Warning
+    val reportLabel = when (report?.status) {
+        OperationalReportStatus.DRAFT -> "Unit report: Draft"
+        OperationalReportStatus.SUBMITTED -> "Unit report: Submitted"
+        OperationalReportStatus.VERIFIED -> "Unit report: Verified"
+        OperationalReportStatus.RETURNED -> "Unit report: Needs revision"
+        null -> "Unit report: Not started"
+    }
+    val reportAction = when (report?.status) {
+        OperationalReportStatus.DRAFT,
+        OperationalReportStatus.RETURNED -> "Continue Report"
+        OperationalReportStatus.SUBMITTED,
+        OperationalReportStatus.VERIFIED -> "Open Report"
+        null -> "Create Report"
+    }
+
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(tween(260)) + slideInVertically(tween(260)) { it / 4 }
+    ) {
         Card(
-            modifier = Modifier.fillMaxWidth().shadow(8.dp, RoundedCornerShape(20.dp)),
-            shape    = RoundedCornerShape(20.dp),
-            colors   = CardDefaults.cardColors(containerColor = RFColors.Bg),
-            border   = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = RFColors.Bg),
+            border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Brush.verticalGradient(listOf(Color.White, RFColors.Primary.copy(alpha = 0.03f))))
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(RFColors.Bg, RFColors.Primary.copy(alpha = if (ThemeController.isDarkMode.value) 0.08f else 0.035f))
+                        )
+                    )
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(11.dp)
             ) {
-                // Top row
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(modifier = Modifier.width(6.dp).height(52.dp).clip(RoundedCornerShape(999.dp))
-                        .background(Brush.verticalGradient(listOf(RFColors.Primary, RFColors.Secondary))))
-                    Spacer(Modifier.width(12.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(incident.type, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = RFColors.Text)
-                        Spacer(Modifier.height(3.dp))
-                        Text("ID: ${incident.id}", fontSize = 12.sp, color = RFColors.TextSecondary)
-                    }
                     Box(
-                        modifier = Modifier.clip(RoundedCornerShape(999.dp))
-                            .background(incident.status.bgColor)
-                            .border(1.dp, incident.status.color.copy(alpha = 0.45f), RoundedCornerShape(999.dp))
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                        modifier = Modifier
+                            .width(5.dp)
+                            .height(54.dp)
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(Brush.verticalGradient(listOf(RFColors.Primary, RFColors.Secondary)))
+                    )
+                    Spacer(Modifier.width(11.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            incident.type,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp,
+                            color = RFColors.Text,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(Modifier.height(3.dp))
+                        Text(
+                            "${incident.id} • ${incident.date}",
+                            fontSize = 11.sp,
+                            color = RFColors.TextSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Surface(
+                        color = tonalSurface(incident.status.color),
+                        shape = RoundedCornerShape(999.dp),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            incident.status.color.copy(alpha = 0.45f)
+                        )
                     ) {
-                        Text(incident.status.label, color = incident.status.color, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            incident.status.label,
+                            color = incident.status.color,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                            maxLines = 1
+                        )
                     }
                 }
 
-                HorizontalDivider(color = RFColors.Border, thickness = 0.8.dp)
-
-                // Date + proof
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                Surface(
+                    color = tonalSurface(reportAccent, lightAlpha = 0.08f, darkAlpha = 0.17f),
+                    shape = RoundedCornerShape(12.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, reportAccent.copy(alpha = 0.28f))
                 ) {
                     Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            Icons.Default.DateRange,
+                            if (report == null) Icons.Default.Description else Icons.Default.Description,
                             contentDescription = null,
-                            modifier = Modifier.size(14.dp),
-                            tint = RFColors.Primary
+                            tint = reportAccent,
+                            modifier = Modifier.size(17.dp)
                         )
-
+                        Spacer(Modifier.width(7.dp))
                         Text(
-                            incident.date,
-                            fontSize = 13.sp,
-                            color = RFColors.TextSecondary
+                            reportLabel,
+                            color = reportAccent,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.weight(1f)
                         )
+                        if ((report?.updatedAt ?: 0L) > 0L) {
+                            Text(
+                                SimpleDateFormat("MMM d, h:mm a", Locale.getDefault()).format(Date(report!!.updatedAt)),
+                                color = RFColors.TextMuted,
+                                fontSize = 9.sp
+                            )
+                        }
                     }
+                }
 
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(9.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
                     Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
-                        color = RFColors.SurfaceBg,
-                        border = androidx.compose.foundation.BorderStroke(
-                            1.dp,
-                            RFColors.Border
-                        )
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 92.dp),
+                        color = RFColors.MutedBg,
+                        shape = RoundedCornerShape(13.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
                     ) {
                         Column(
-                            modifier = Modifier.padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                            modifier = Modifier.padding(11.dp),
+                            verticalArrangement = Arrangement.spacedBy(5.dp)
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
                                     Icons.AutoMirrored.Filled.Notes,
                                     contentDescription = null,
                                     modifier = Modifier.size(15.dp),
                                     tint = RFColors.Primary
                                 )
-
+                                Spacer(Modifier.width(6.dp))
                                 Text(
-                                    "Completion Notes",
-                                    fontSize = 12.sp,
+                                    "Completion notes",
+                                    fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = RFColors.Text
                                 )
                             }
-
                             Text(
-                                text = incident.completionNotes
-                                    ?.takeIf { it.isNotBlank() }
+                                text = incident.completionNotes?.takeIf { it.isNotBlank() }
                                     ?: "No completion notes were provided.",
-                                fontSize = 12.sp,
+                                fontSize = 11.sp,
+                                lineHeight = 16.sp,
                                 color = RFColors.TextSecondary,
-                                maxLines = 3,
+                                maxLines = 4,
                                 overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
 
-                    incident.proofUri
-                        ?.takeIf { it.isNotBlank() }
-                        ?.let { uriStr ->
-
-                            val resolvedImageUrl = resolveImageUri(uriStr)
-
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(220.dp)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .border(
-                                        1.dp,
-                                        RFColors.Border,
-                                        RoundedCornerShape(12.dp)
-                                    )
-                                    .clickable {
-                                        onViewImage(resolvedImageUrl)
-                                    }
+                    incident.proofUri?.takeIf { it.isNotBlank() }?.let { uriStr ->
+                        val resolvedImageUrl = resolveImageUri(uriStr)
+                        Box(
+                            modifier = Modifier
+                                .width(96.dp)
+                                .height(92.dp)
+                                .clip(RoundedCornerShape(13.dp))
+                                .border(1.dp, RFColors.Border, RoundedCornerShape(13.dp))
+                                .clickable { onViewImage(resolvedImageUrl) }
+                        ) {
+                            AsyncImage(
+                                model = resolvedImageUrl,
+                                contentDescription = "Completion evidence",
+                                modifier = Modifier.fillMaxSize().background(Color.Black),
+                                contentScale = ContentScale.Crop
+                            )
+                            Surface(
+                                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
+                                color = Color.Black.copy(alpha = 0.64f)
                             ) {
-                                AsyncImage(
-                                    model = resolvedImageUrl,
-                                    contentDescription = "Completion image",
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .background(Color.Black),
-                                    contentScale = ContentScale.Fit
+                                Text(
+                                    "View proof",
+                                    color = Color.White,
+                                    fontSize = 9.sp,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.padding(vertical = 4.dp)
                                 )
-
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.BottomEnd)
-                                        .padding(8.dp)
-                                        .clip(RoundedCornerShape(999.dp))
-                                        .background(Color.Black.copy(alpha = 0.65f))
-                                        .padding(
-                                            horizontal = 9.dp,
-                                            vertical = 5.dp
-                                        )
-                                ) {
-                                    Text(
-                                        "Tap to view",
-                                        color = Color.White,
-                                        fontSize = 11.sp
-                                    )
-                                }
                             }
                         }
+                    }
                 }
 
-                // CTA
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    if (incident.status == ReviewStatus.Pending) {
-                        Button(
-                            onClick = { onWriteReview(incident) },
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = RFColors.Primary, contentColor = Color.White),
-                            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp)
-                        ) {
-                            Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(15.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Write Review", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                        }
-                    } else {
-                        OutlinedButton(
-                            onClick = { onViewDetails(incident) },
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = RFColors.Secondary),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Secondary.copy(alpha = 0.5f)),
-                            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp)
-                        ) {
-                            Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(15.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("View Details", fontSize = 13.sp)
-                        }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = { onOpenReport(incident) },
+                        modifier = Modifier.weight(1.12f).height(44.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = RFColors.Primary,
+                            contentColor = Color.White
+                        ),
+                        contentPadding = PaddingValues(horizontal = 10.dp)
+                    ) {
+                        Icon(Icons.Default.Assignment, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(reportAction, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            if (incident.status == ReviewStatus.Pending) onWriteReview(incident)
+                            else onViewDetails(incident)
+                        },
+                        modifier = Modifier.weight(1f).height(44.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = if (ThemeController.isDarkMode.value) RFColors.Primary else RFColors.Secondary
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border),
+                        contentPadding = PaddingValues(horizontal = 9.dp)
+                    ) {
+                        Icon(
+                            if (incident.status == ReviewStatus.Pending) Icons.Default.Star else Icons.Default.Visibility,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(5.dp))
+                        Text(
+                            if (incident.status == ReviewStatus.Pending) "Service Review" else "Incident Record",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1
+                        )
                     }
                 }
             }
@@ -1136,7 +1393,7 @@ private fun ResourceRequestFullScreenDialog(
                                                                 modifier = Modifier
                                                                     .weight(1f)
                                                                     .clip(RoundedCornerShape(10.dp))
-                                                                    .background(if (isSel) u.bgColor else RFColors.SurfaceBg)
+                                                                    .background(if (isSel) tonalSurface(u.color, lightAlpha = 0.12f, darkAlpha = 0.22f) else RFColors.MutedBg)
                                                                     .border(
                                                                         1.dp,
                                                                         if (isSel) u.color.copy(alpha = 0.6f) else RFColors.Border,
@@ -1286,14 +1543,15 @@ private fun ResourceRequestFullScreenDialog(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clip(RoundedCornerShape(12.dp))
-                                        .background(Color(0xFFFFF3E0))
+                                        .background(tonalSurface(RFColors.Warning, lightAlpha = 0.10f, darkAlpha = 0.20f))
+                                        .border(1.dp, RFColors.Warning.copy(alpha = 0.28f), RoundedCornerShape(12.dp))
                                         .padding(12.dp)
                                 ) {
-                                    Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFFF57C00), modifier = Modifier.size(16.dp))
+                                    Icon(Icons.Default.Info, contentDescription = null, tint = RFColors.Warning, modifier = Modifier.size(16.dp))
                                     Text(
                                         "Resource name, quantity, and location are required.",
                                         fontSize = 12.sp,
-                                        color = Color(0xFFF57C00)
+                                        color = RFColors.Warning
                                     )
                                 }
                             }
@@ -1475,78 +1733,1049 @@ private fun SectionCard(
 }
 
 
+// ─── Post-incident hub helpers ─────────────────────────────────────────────────
+@Composable
+private fun PostIncidentHeader() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(144.dp)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .clip(RoundedCornerShape(26.dp))
+            .background(
+                Brush.verticalGradient(
+                    listOf(RFColors.Primary, RFColors.Secondary, RFColors.Tertiary)
+                )
+            )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.radialGradient(
+                        listOf(Color.White.copy(alpha = 0.16f), Color.Transparent),
+                        radius = 560f
+                    )
+                )
+        )
+        Row(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Surface(
+                    color = Color.White.copy(alpha = 0.14f),
+                    shape = RoundedCornerShape(999.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.24f))
+                ) {
+                    Text(
+                        "RESPONDER OPERATIONS",
+                        color = Color.White,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = 0.8.sp,
+                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Post-Incident Hub",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 23.sp
+                )
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    "Unit reports, service review, evidence, and operational support",
+                    color = Color.White.copy(alpha = 0.78f),
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .size(54.dp)
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(Color.White.copy(alpha = 0.14f))
+                    .border(1.dp, Color.White.copy(alpha = 0.34f), RoundedCornerShape(18.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.RateReview,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(28.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun OperationalWorkflowCard(
+    draftCount: Int,
+    submittedCount: Int
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = RFColors.Bg),
+        border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(11.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(tonalSurface(RFColors.Info)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.Group,
+                        contentDescription = null,
+                        tint = RFColors.Info,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                Spacer(Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "Who completes the incident report?",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = RFColors.Text
+                    )
+                    Text(
+                        "Recommended responder workflow",
+                        fontSize = 10.sp,
+                        color = RFColors.TextSecondary
+                    )
+                }
+                Surface(
+                    color = tonalSurface(RFColors.Primary),
+                    shape = RoundedCornerShape(999.dp)
+                ) {
+                    Text(
+                        "${draftCount + submittedCount} records",
+                        color = RFColors.Primary,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+                    )
+                }
+            }
+
+            OperationalGuideStep(
+                number = "1",
+                title = "Responding unit documents",
+                detail = "Record actions taken, outcome, handoff, resources used, and safety issues."
+            )
+            OperationalGuideStep(
+                number = "2",
+                title = "Team lead or incident command consolidates",
+                detail = "Multiple unit entries can be combined into one command-level incident narrative."
+            )
+            OperationalGuideStep(
+                number = "3",
+                title = "Authorized admin finalizes",
+                detail = "Verification, official numbering, and command-level consolidation remain with the designated authority."
+            )
+
+            Surface(
+                color = tonalSurface(RFColors.Warning, lightAlpha = 0.08f, darkAlpha = 0.16f),
+                shape = RoundedCornerShape(12.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Warning.copy(alpha = 0.24f))
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Icon(
+                        Icons.Default.Info,
+                        contentDescription = null,
+                        tint = RFColors.Warning,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(7.dp))
+                    Text(
+                        "Service ratings are feedback. The After-Action Report is the operational record. They are intentionally separate.",
+                        color = RFColors.TextSecondary,
+                        fontSize = 10.sp,
+                        lineHeight = 15.sp
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OperationalGuideStep(number: String, title: String, detail: String) {
+    Row(verticalAlignment = Alignment.Top) {
+        Box(
+            modifier = Modifier
+                .size(24.dp)
+                .clip(CircleShape)
+                .background(RFColors.Primary),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(number, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        }
+        Spacer(Modifier.width(9.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, color = RFColors.Text, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Text(detail, color = RFColors.TextSecondary, fontSize = 10.sp, lineHeight = 14.sp)
+        }
+    }
+}
+
+@Composable
+private fun HubTabSwitcher(
+    selected: ReviewHubTab,
+    pendingIncidents: Int,
+    resourceCount: Int,
+    onSelect: (ReviewHubTab) -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+        shape = RoundedCornerShape(16.dp),
+        color = RFColors.Bg,
+        border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
+    ) {
+        TabRow(
+            selectedTabIndex = selected.ordinal,
+            containerColor = Color.Transparent,
+            contentColor = RFColors.Primary,
+            divider = { HorizontalDivider(color = RFColors.Border) }
+        ) {
+            ReviewHubTab.entries.forEach { tab ->
+                val count = if (tab == ReviewHubTab.INCIDENTS) pendingIncidents else resourceCount
+                Tab(
+                    selected = selected == tab,
+                    onClick = { onSelect(tab) },
+                    selectedContentColor = RFColors.Primary,
+                    unselectedContentColor = RFColors.TextSecondary,
+                    text = {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(tab.icon, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Text(tab.label, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            if (count > 0) {
+                                Surface(
+                                    color = if (selected == tab) tonalSurface(RFColors.Primary) else RFColors.MutedBg,
+                                    shape = RoundedCornerShape(999.dp)
+                                ) {
+                                    Text(
+                                        if (count > 99) "99+" else count.toString(),
+                                        color = if (selected == tab) RFColors.Primary else RFColors.TextSecondary,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ResourceRequestsPanel(
+    requests: List<SavedResourceRequest>,
+    latestRequest: SavedResourceRequest?,
+    onNewRequest: () -> Unit,
+    onViewAll: () -> Unit,
+    onRefresh: () -> Unit,
+    onSelect: (SavedResourceRequest) -> Unit,
+    onCancel: (SavedResourceRequest) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = RFColors.Bg),
+        border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(15.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(RoundedCornerShape(11.dp))
+                        .background(tonalSurface(RFColors.Primary)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Default.Inventory2, contentDescription = null, tint = RFColors.Primary, modifier = Modifier.size(19.dp))
+                }
+                Spacer(Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Operational Resources", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = RFColors.Text)
+                    Text(
+                        if (requests.isEmpty()) "No requests submitted" else "${requests.size} request${if (requests.size == 1) "" else "s"} • latest first",
+                        fontSize = 10.sp,
+                        color = RFColors.TextSecondary
+                    )
+                }
+                IconButton(onClick = onRefresh, modifier = Modifier.size(34.dp)) {
+                    Icon(Icons.Default.Refresh, contentDescription = "Refresh requests", tint = RFColors.TextSecondary, modifier = Modifier.size(18.dp))
+                }
+            }
+
+            Surface(
+                color = RFColors.MutedBg,
+                shape = RoundedCornerShape(12.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Icon(Icons.Default.LocalHospital, contentDescription = null, tint = RFColors.Primary, modifier = Modifier.size(17.dp))
+                    Spacer(Modifier.width(7.dp))
+                    Text(
+                        "Use this for supplies, vehicles, equipment, or personnel needed for ongoing response, replenishment, or follow-up operations.",
+                        color = RFColors.TextSecondary,
+                        fontSize = 10.sp,
+                        lineHeight = 15.sp
+                    )
+                }
+            }
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                Button(
+                    onClick = onNewRequest,
+                    modifier = Modifier.weight(1f).height(44.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = RFColors.Primary, contentColor = Color.White)
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("New Request", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
+                OutlinedButton(
+                    onClick = onViewAll,
+                    enabled = requests.isNotEmpty(),
+                    modifier = Modifier.weight(1f).height(44.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = RFColors.Text)
+                ) {
+                    Text("View All", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+
+            if (latestRequest == null) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(Icons.Default.Inbox, contentDescription = null, tint = RFColors.TextMuted, modifier = Modifier.size(28.dp))
+                    Spacer(Modifier.height(6.dp))
+                    Text("Submitted requests will appear here.", color = RFColors.TextSecondary, fontSize = 11.sp)
+                }
+            } else {
+                Text("Latest request", color = RFColors.TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                ResourceRequestHistoryCard(
+                    request = latestRequest,
+                    onClick = { onSelect(latestRequest) },
+                    onCancel = { onCancel(latestRequest) },
+                    isLatest = true
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReportStepIndicator(currentStep: Int) {
+    val labels = listOf("Outcome", "Operations", "Safety")
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        labels.forEachIndexed { index, label ->
+            val step = index + 1
+            val active = step <= currentStep
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(if (active) RFColors.Primary else RFColors.MutedBg)
+                        .border(1.dp, if (active) RFColors.Primary else RFColors.Border, CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (step < currentStep) {
+                        Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(15.dp))
+                    } else {
+                        Text(
+                            step.toString(),
+                            color = if (active) Color.White else RFColors.TextSecondary,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    label,
+                    color = if (step == currentStep) RFColors.Primary else RFColors.TextSecondary,
+                    fontSize = 9.sp,
+                    fontWeight = if (step == currentStep) FontWeight.Bold else FontWeight.Medium
+                )
+            }
+            if (index < labels.lastIndex) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 7.dp)
+                        .height(2.dp)
+                        .background(if (step < currentStep) RFColors.Primary else RFColors.Border)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompactCountField(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = { raw ->
+            val digits = raw.filter(Char::isDigit).take(4)
+            onValueChange(digits)
+        },
+        label = { Text(label, fontSize = 10.sp) },
+        modifier = modifier,
+        enabled = enabled,
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        shape = RoundedCornerShape(12.dp),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedContainerColor = RFColors.InputBg,
+            unfocusedContainerColor = RFColors.InputBg,
+            focusedTextColor = RFColors.Text,
+            unfocusedTextColor = RFColors.Text,
+            focusedBorderColor = RFColors.Primary,
+            unfocusedBorderColor = RFColors.Border,
+            cursorColor = RFColors.Primary
+        )
+    )
+}
+
+@Composable
+private fun OperationalOutcomeSelector(
+    selected: String,
+    enabled: Boolean = true,
+    onSelect: (String) -> Unit
+) {
+    val outcomes = listOf("Resolved", "Stabilized / Handoff", "Escalated", "False Alarm")
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+        items(outcomes) { outcome ->
+            FilterChip(
+                selected = selected == outcome,
+                onClick = { onSelect(outcome) },
+                enabled = enabled,
+                label = { Text(outcome, fontSize = 11.sp) },
+                leadingIcon = if (selected == outcome) {
+                    { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(14.dp)) }
+                } else null
+            )
+        }
+    }
+}
+
+@Composable
+private fun AfterActionReportDialog(
+    incident: ReviewableIncident,
+    responderName: String,
+    initialReport: AfterActionReport?,
+    isSaving: Boolean,
+    onDismiss: () -> Unit,
+    onSave: (AfterActionReport) -> Unit,
+    onExport: (AfterActionReport) -> Unit
+) {
+    val stateKey = "${incident.id}_${initialReport?.updatedAt ?: 0L}"
+    var step by rememberSaveable(stateKey) { mutableIntStateOf(1) }
+    var operationalOutcome by rememberSaveable(stateKey) { mutableStateOf(initialReport?.operationalOutcome ?: "Resolved") }
+    var incidentSummary by rememberSaveable(stateKey) {
+        mutableStateOf(initialReport?.incidentSummary ?: incident.completionNotes.orEmpty())
+    }
+    var actionsTaken by rememberSaveable(stateKey) { mutableStateOf(initialReport?.actionsTaken.orEmpty()) }
+    var personsAssisted by rememberSaveable(stateKey) { mutableStateOf((initialReport?.personsAssisted ?: 0).toString()) }
+    var injuries by rememberSaveable(stateKey) { mutableStateOf((initialReport?.injuries ?: 0).toString()) }
+    var fatalities by rememberSaveable(stateKey) { mutableStateOf((initialReport?.fatalities ?: 0).toString()) }
+    var resourcesUsed by rememberSaveable(stateKey) { mutableStateOf(initialReport?.resourcesUsed.orEmpty()) }
+    var agenciesInvolved by rememberSaveable(stateKey) { mutableStateOf(initialReport?.agenciesInvolved.orEmpty()) }
+    var handoffDetails by rememberSaveable(stateKey) { mutableStateOf(initialReport?.handoffDetails.orEmpty()) }
+    var safetyIssues by rememberSaveable(stateKey) { mutableStateOf(initialReport?.safetyIssues.orEmpty()) }
+    var followUpRequired by rememberSaveable(stateKey) { mutableStateOf(initialReport?.followUpRequired ?: false) }
+    var followUpDetails by rememberSaveable(stateKey) { mutableStateOf(initialReport?.followUpDetails.orEmpty()) }
+    var lessonsLearned by rememberSaveable(stateKey) { mutableStateOf(initialReport?.lessonsLearned.orEmpty()) }
+    var certified by rememberSaveable(stateKey) { mutableStateOf(false) }
+    var attemptedNext by rememberSaveable(stateKey) { mutableStateOf(false) }
+    val isReadOnly = initialReport?.status == OperationalReportStatus.SUBMITTED ||
+            initialReport?.status == OperationalReportStatus.VERIFIED
+    val formEnabled = !isReadOnly && !isSaving
+
+    val fieldColors = OutlinedTextFieldDefaults.colors(
+        focusedContainerColor = RFColors.InputBg,
+        unfocusedContainerColor = RFColors.InputBg,
+        focusedTextColor = RFColors.Text,
+        unfocusedTextColor = RFColors.Text,
+        focusedBorderColor = RFColors.Primary,
+        unfocusedBorderColor = RFColors.Border,
+        focusedLabelColor = RFColors.Primary,
+        unfocusedLabelColor = RFColors.TextSecondary,
+        cursorColor = RFColors.Primary,
+        errorBorderColor = RFColors.Danger,
+        errorLabelColor = RFColors.Danger,
+        errorSupportingTextColor = RFColors.Danger
+    )
+
+    fun buildReport(status: OperationalReportStatus): AfterActionReport = AfterActionReport(
+        incidentId = normalizedIncidentId(incident.id),
+        incidentType = incident.type,
+        responderName = responderName.ifBlank { "Responder" },
+        operationalOutcome = operationalOutcome,
+        incidentSummary = incidentSummary.trim(),
+        actionsTaken = actionsTaken.trim(),
+        personsAssisted = personsAssisted.toIntOrNull() ?: 0,
+        injuries = injuries.toIntOrNull() ?: 0,
+        fatalities = fatalities.toIntOrNull() ?: 0,
+        resourcesUsed = resourcesUsed.trim(),
+        agenciesInvolved = agenciesInvolved.trim(),
+        handoffDetails = handoffDetails.trim(),
+        safetyIssues = safetyIssues.trim(),
+        followUpRequired = followUpRequired,
+        followUpDetails = followUpDetails.trim(),
+        lessonsLearned = lessonsLearned.trim(),
+        reviewerNotes = initialReport?.reviewerNotes.orEmpty(),
+        status = status,
+        updatedAt = System.currentTimeMillis()
+    )
+
+    val stepValid = when (step) {
+        1 -> incidentSummary.isNotBlank()
+        2 -> actionsTaken.isNotBlank()
+        else -> !followUpRequired || followUpDetails.isNotBlank()
+    }
+    val readyValid = incidentSummary.isNotBlank() &&
+            actionsTaken.isNotBlank() &&
+            (!followUpRequired || followUpDetails.isNotBlank()) &&
+            certified
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+            dismissOnClickOutside = false
+        )
+    ) {
+        Surface(modifier = Modifier.fillMaxSize(), color = RFColors.SurfaceBg) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    .windowInsetsPadding(
+                        WindowInsets.ime.union(WindowInsets.navigationBars).only(WindowInsetsSides.Bottom)
+                    )
+            ) {
+                Surface(color = RFColors.Bg, shadowElevation = 2.dp) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(RoundedCornerShape(13.dp))
+                                    .background(tonalSurface(RFColors.Primary)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.Default.Assignment, contentDescription = null, tint = RFColors.Primary, modifier = Modifier.size(21.dp))
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Responder After-Action Report", color = RFColors.Text, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                                Text(
+                                    "${incident.type} • ${incident.id} • Step $step of 3",
+                                    color = RFColors.TextSecondary,
+                                    fontSize = 11.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            initialReport?.let { report ->
+                                Surface(
+                                    color = tonalSurface(report.status.color),
+                                    shape = RoundedCornerShape(999.dp)
+                                ) {
+                                    Text(
+                                        report.status.label,
+                                        color = report.status.color,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+                                    )
+                                }
+                            }
+                            IconButton(onClick = onDismiss) {
+                                Icon(Icons.Default.Close, contentDescription = "Close report", tint = RFColors.TextSecondary)
+                            }
+                        }
+                        ReportStepIndicator(currentStep = step)
+                    }
+                }
+
+                LazyColumn(
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    item {
+                        Surface(
+                            color = tonalSurface(RFColors.Info, lightAlpha = 0.08f, darkAlpha = 0.17f),
+                            shape = RoundedCornerShape(13.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Info.copy(alpha = 0.24f))
+                        ) {
+                            Row(modifier = Modifier.padding(11.dp), verticalAlignment = Alignment.Top) {
+                                Icon(Icons.Default.Security, contentDescription = null, tint = RFColors.Info, modifier = Modifier.size(17.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    "This unit-level operational entry is stored in the server database. Submitted reports remain read-only while command/admin verifies or returns them for revision.",
+                                    color = RFColors.TextSecondary,
+                                    fontSize = 10.sp,
+                                    lineHeight = 15.sp
+                                )
+                            }
+                        }
+                    }
+
+                    if (initialReport?.status == OperationalReportStatus.RETURNED &&
+                        initialReport.reviewerNotes.isNotBlank()
+                    ) {
+                        item {
+                            Surface(
+                                color = tonalSurface(RFColors.Danger, lightAlpha = 0.07f, darkAlpha = 0.16f),
+                                shape = RoundedCornerShape(13.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Danger.copy(alpha = 0.30f))
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(11.dp),
+                                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            Icons.Default.RateReview,
+                                            contentDescription = null,
+                                            tint = RFColors.Danger,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(Modifier.width(7.dp))
+                                        Text(
+                                            "Returned by reviewer",
+                                            color = RFColors.Danger,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                    Text(
+                                        initialReport.reviewerNotes,
+                                        color = RFColors.TextSecondary,
+                                        fontSize = 10.sp,
+                                        lineHeight = 15.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    when (step) {
+                        1 -> {
+                            item {
+                                SectionCard(title = "Incident outcome", icon = Icons.Default.Flag) {
+                                    OperationalOutcomeSelector(
+                                        selected = operationalOutcome,
+                                        enabled = formEnabled,
+                                        onSelect = { operationalOutcome = it }
+                                    )
+                                    OutlinedTextField(
+                                        enabled = formEnabled,
+                                        value = incidentSummary,
+                                        onValueChange = { incidentSummary = it },
+                                        label = { Text("Operational summary *") },
+                                        placeholder = { Text("What happened and what was the final situation?") },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        minLines = 4,
+                                        maxLines = 7,
+                                        isError = attemptedNext && incidentSummary.isBlank(),
+                                        supportingText = if (attemptedNext && incidentSummary.isBlank()) {
+                                            { Text("An operational summary is required") }
+                                        } else null,
+                                        colors = fieldColors,
+                                        shape = RoundedCornerShape(13.dp)
+                                    )
+                                }
+                            }
+                            item {
+                                SectionCard(title = "People affected", icon = Icons.Default.Groups) {
+                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                                        CompactCountField("Assisted", personsAssisted, { personsAssisted = it }, Modifier.weight(1f), enabled = formEnabled)
+                                        CompactCountField("Injured", injuries, { injuries = it }, Modifier.weight(1f), enabled = formEnabled)
+                                        CompactCountField("Fatalities", fatalities, { fatalities = it }, Modifier.weight(1f), enabled = formEnabled)
+                                    }
+                                    Text(
+                                        "Use counts only. Do not enter patient names or personal identifiers in this form.",
+                                        color = RFColors.TextMuted,
+                                        fontSize = 10.sp,
+                                        lineHeight = 14.sp
+                                    )
+                                }
+                            }
+                        }
+
+                        2 -> {
+                            item {
+                                SectionCard(title = "Actions taken", icon = Icons.Default.Construction) {
+                                    OutlinedTextField(
+                                        enabled = formEnabled,
+                                        value = actionsTaken,
+                                        onValueChange = { actionsTaken = it },
+                                        label = { Text("Response actions *") },
+                                        placeholder = { Text("Assessment, treatment, suppression, rescue, evacuation, scene control, etc.") },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        minLines = 5,
+                                        maxLines = 8,
+                                        isError = attemptedNext && actionsTaken.isBlank(),
+                                        supportingText = if (attemptedNext && actionsTaken.isBlank()) {
+                                            { Text("Actions taken are required") }
+                                        } else null,
+                                        colors = fieldColors,
+                                        shape = RoundedCornerShape(13.dp)
+                                    )
+                                }
+                            }
+                            item {
+                                SectionCard(title = "Operational coordination", icon = Icons.Default.Group) {
+                                    OutlinedTextField(
+                                        enabled = formEnabled,
+                                        value = resourcesUsed,
+                                        onValueChange = { resourcesUsed = it },
+                                        label = { Text("Resources used") },
+                                        placeholder = { Text("Vehicles, equipment, supplies, personnel") },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        minLines = 2,
+                                        maxLines = 4,
+                                        colors = fieldColors,
+                                        shape = RoundedCornerShape(13.dp)
+                                    )
+                                    OutlinedTextField(
+                                        enabled = formEnabled,
+                                        value = agenciesInvolved,
+                                        onValueChange = { agenciesInvolved = it },
+                                        label = { Text("Agencies / units involved") },
+                                        placeholder = { Text("Fire, EMS, police, barangay, hospital, utility, etc.") },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        minLines = 2,
+                                        maxLines = 4,
+                                        colors = fieldColors,
+                                        shape = RoundedCornerShape(13.dp)
+                                    )
+                                    OutlinedTextField(
+                                        enabled = formEnabled,
+                                        value = handoffDetails,
+                                        onValueChange = { handoffDetails = it },
+                                        label = { Text("Handoff / receiving facility") },
+                                        placeholder = { Text("Receiving unit or facility and handoff condition; no patient names") },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        minLines = 2,
+                                        maxLines = 4,
+                                        colors = fieldColors,
+                                        shape = RoundedCornerShape(13.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        else -> {
+                            item {
+                                SectionCard(title = "Safety and near misses", icon = Icons.Default.Security) {
+                                    OutlinedTextField(
+                                        enabled = formEnabled,
+                                        value = safetyIssues,
+                                        onValueChange = { safetyIssues = it },
+                                        label = { Text("Hazards, injuries, equipment issues, or near misses") },
+                                        placeholder = { Text("Write 'None' when there were no safety concerns") },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        minLines = 3,
+                                        maxLines = 6,
+                                        colors = fieldColors,
+                                        shape = RoundedCornerShape(13.dp)
+                                    )
+                                }
+                            }
+                            item {
+                                SectionCard(title = "Follow-up", icon = Icons.Default.Refresh) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text("Follow-up action required", color = RFColors.Text, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                            Text("Examples: replenishment, investigation, welfare check, maintenance, debrief", color = RFColors.TextSecondary, fontSize = 10.sp)
+                                        }
+                                        Switch(
+                                            checked = followUpRequired,
+                                            onCheckedChange = { followUpRequired = it },
+                                            enabled = formEnabled
+                                        )
+                                    }
+                                    if (followUpRequired) {
+                                        OutlinedTextField(
+                                            enabled = formEnabled,
+                                            value = followUpDetails,
+                                            onValueChange = { followUpDetails = it },
+                                            label = { Text("Follow-up details *") },
+                                            placeholder = { Text("Who needs to do what and by when?") },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            minLines = 3,
+                                            maxLines = 5,
+                                            isError = attemptedNext && followUpDetails.isBlank(),
+                                            supportingText = if (attemptedNext && followUpDetails.isBlank()) {
+                                                { Text("Follow-up details are required") }
+                                            } else null,
+                                            colors = fieldColors,
+                                            shape = RoundedCornerShape(13.dp)
+                                        )
+                                    }
+                                    OutlinedTextField(
+                                        enabled = formEnabled,
+                                        value = lessonsLearned,
+                                        onValueChange = { lessonsLearned = it },
+                                        label = { Text("Lessons learned / recommendations") },
+                                        placeholder = { Text("What should be maintained, improved, or changed next time?") },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        minLines = 3,
+                                        maxLines = 6,
+                                        colors = fieldColors,
+                                        shape = RoundedCornerShape(13.dp)
+                                    )
+                                }
+                            }
+                            item {
+                                Surface(
+                                    color = RFColors.Bg,
+                                    shape = RoundedCornerShape(14.dp),
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        1.dp,
+                                        if (!certified && attemptedNext) RFColors.Danger else RFColors.Border
+                                    )
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable(enabled = formEnabled) { certified = !certified }
+                                            .padding(11.dp),
+                                        verticalAlignment = Alignment.Top
+                                    ) {
+                                        Checkbox(
+                                            checked = certified,
+                                            onCheckedChange = { certified = it },
+                                            enabled = formEnabled
+                                        )
+                                        Spacer(Modifier.width(5.dp))
+                                        Column {
+                                            Text("Certification", color = RFColors.Text, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                            Text(
+                                                "I confirm that this unit-level report is accurate to the best of my knowledge and does not include unnecessary personal identifiers.",
+                                                color = RFColors.TextSecondary,
+                                                fontSize = 10.sp,
+                                                lineHeight = 15.sp
+                                            )
+                                            if (!certified && attemptedNext) {
+                                                Text("Certification is required before submitting the report.", color = RFColors.Danger, fontSize = 10.sp)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Surface(color = RFColors.Bg, shadowElevation = 5.dp) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(7.dp)
+                    ) {
+                        if (step < 3) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                                if (step > 1) {
+                                    OutlinedButton(
+                                        onClick = { attemptedNext = false; step-- },
+                                        modifier = Modifier.weight(1f).height(46.dp),
+                                        shape = RoundedCornerShape(12.dp),
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
+                                    ) {
+                                        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, modifier = Modifier.size(16.dp).graphicsLayer(rotationZ = 180f))
+                                        Spacer(Modifier.width(5.dp))
+                                        Text("Back")
+                                    }
+                                }
+                                Button(
+                                    onClick = {
+                                        attemptedNext = true
+                                        if (stepValid) {
+                                            attemptedNext = false
+                                            step++
+                                        }
+                                    },
+                                    modifier = Modifier.weight(1.2f).height(46.dp),
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = RFColors.Primary)
+                                ) {
+                                    Text("Next", fontWeight = FontWeight.SemiBold)
+                                    Spacer(Modifier.width(5.dp))
+                                    Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, modifier = Modifier.size(16.dp))
+                                }
+                            }
+                            TextButton(
+                                onClick = { onSave(buildReport(OperationalReportStatus.DRAFT)) },
+                                enabled = formEnabled,
+                                modifier = Modifier.align(Alignment.CenterHorizontally)
+                            ) {
+                                Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(15.dp))
+                                Spacer(Modifier.width(5.dp))
+                                Text("Save draft and close", color = RFColors.TextSecondary, fontSize = 11.sp)
+                            }
+                        } else {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton(
+                                    onClick = { onSave(buildReport(OperationalReportStatus.DRAFT)) },
+                                    enabled = formEnabled,
+                                    modifier = Modifier.weight(1f).height(46.dp),
+                                    shape = RoundedCornerShape(12.dp),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
+                                ) {
+                                    Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(15.dp))
+                                    Spacer(Modifier.width(5.dp))
+                                    Text("Save Draft", fontSize = 11.sp)
+                                }
+                                Button(
+                                    onClick = {
+                                        attemptedNext = true
+                                        if (readyValid) onSave(buildReport(OperationalReportStatus.SUBMITTED))
+                                    },
+                                    enabled = formEnabled,
+                                    modifier = Modifier.weight(1.25f).height(46.dp),
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = RFColors.Primary)
+                                ) {
+                                    Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(5.dp))
+                                    Text("Submit Report", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                TextButton(onClick = { attemptedNext = false; step = 2 }) {
+                                    Text("Back", color = RFColors.TextSecondary, fontSize = 11.sp)
+                                }
+                                TextButton(
+                                    onClick = {
+                                        onExport(buildReport(initialReport?.status ?: OperationalReportStatus.DRAFT))
+                                    },
+                                    enabled = !isSaving && (incidentSummary.isNotBlank() || actionsTaken.isNotBlank())
+                                ) {
+                                    Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(15.dp))
+                                    Spacer(Modifier.width(5.dp))
+                                    Text("Export Preview", color = RFColors.Primary, fontSize = 11.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ─── Main screen ──────────────────────────────────────────────────────────────
 @Composable
 fun ReviewsFeedbackScreen() {
+    val context = LocalContext.current
+    val accountPrefs = context.getSharedPreferences("ers_prefs", Context.MODE_PRIVATE)
+    val userPrefs = context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
+    val operationalRepository = remember { OperationalRepository() }
+
+    val responderName = accountPrefs.getString("account_username", "Responder") ?: "Responder"
+    val responderId = userPrefs.getString("user_id", "")?.toIntOrNull() ?: 0
+    val scope = rememberCoroutineScope()
+
+    var hubTab by rememberSaveable { mutableStateOf(ReviewHubTab.INCIDENTS) }
+    var selectedStatus by rememberSaveable { mutableStateOf(ReviewStatus.Pending) }
     var requestSearch by rememberSaveable { mutableStateOf("") }
-    val context  = LocalContext.current
-    val prefs    = context.getSharedPreferences("ers_prefs", Context.MODE_PRIVATE)
-    var selected by remember { mutableStateOf(ReviewStatus.Pending) }
 
-    val responderName = prefs.getString("account_username", "Responder") ?: "Responder"
+    var reviewRefreshKey by remember { mutableIntStateOf(0) }
+    var requestRefreshKey by remember { mutableIntStateOf(0) }
+    var reportRefreshKey by remember { mutableIntStateOf(0) }
 
-    val storedPrefs = context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
-    val responderId = storedPrefs.getString("user_id", "")?.toIntOrNull() ?: 0
+    var serverReviewIncidents by remember {
+        mutableStateOf<List<com.ers.emergencyresponseapp.network.PendingReviewIncidentDto>>(emptyList())
+    }
+    var parsedRequests by remember { mutableStateOf<List<SavedResourceRequest>>(emptyList()) }
+    var afterActionReports by remember { mutableStateOf<List<AfterActionReport>>(emptyList()) }
+    var incidentReviewSummary by remember { mutableStateOf<IncidentReviewSummary?>(null) }
+    var isSavingAfterActionReport by remember { mutableStateOf(false) }
+    var isPullRefreshing by remember { mutableStateOf(false) }
 
+    var showAllReviews by remember { mutableStateOf(false) }
+    var showAllRequests by remember { mutableStateOf(false) }
+    var showResourceForm by remember { mutableStateOf(false) }
+    var selectedRequest by remember { mutableStateOf<SavedResourceRequest?>(null) }
+    var requestToCancel by remember { mutableStateOf<SavedResourceRequest?>(null) }
+
+    var reportTarget by remember { mutableStateOf<ReviewableIncident?>(null) }
+
+    val composeTarget = remember { mutableStateOf<ReviewableIncident?>(null) }
     val showComposeDialog = remember { mutableStateOf(false) }
-    val reviewText        = rememberSaveable { mutableStateOf("") }
+    val reviewText = rememberSaveable { mutableStateOf("") }
     var responseRating by rememberSaveable { mutableIntStateOf(3) }
     var communicationRating by rememberSaveable { mutableIntStateOf(3) }
     var professionalismRating by rememberSaveable { mutableIntStateOf(3) }
     var selectedOutcome by rememberSaveable { mutableStateOf("Resolved") }
-    val composeTarget     = remember { mutableStateOf<ReviewableIncident?>(null) }
     var showSubmitReviewConfirm by remember { mutableStateOf(false) }
-
-    val showDetailsDialog = remember { mutableStateOf(false) }
-    val detailsText       = rememberSaveable { mutableStateOf("") }
-    val detailsTarget     = remember { mutableStateOf<ReviewableIncident?>(null) }
-    val showReportDialog = remember { mutableStateOf(false) }
-    var showFullReviewDetails by remember { mutableStateOf(false) }
-    val generatedReport = rememberSaveable { mutableStateOf("") }
-    var isExportingPdf by remember { mutableStateOf(false) }
-
-    var fullScreenImageUri by remember { mutableStateOf<String?>(null) }   // ← replaces AlertDialog
-    var showResourceForm   by remember { mutableStateOf(false) }
-    var requestRefreshKey by remember { mutableIntStateOf(0) }
-    var reviewRefreshKey by remember { mutableIntStateOf(0) }
-    var selectedRequest by remember { mutableStateOf<SavedResourceRequest?>(null) }
-    var requestToCancel by remember { mutableStateOf<SavedResourceRequest?>(null) }
-    var showAllRequests by remember { mutableStateOf(false) }
-    var showAllReviews by remember { mutableStateOf(false) }
-
     var isSubmittingReview by remember { mutableStateOf(false) }
 
-    suspend fun submitReview(
-        incident: ReviewableIncident,
-        text: String,
-        responseRatingVal: Int,
-        communicationRatingVal: Int,
-        professionalismRatingVal: Int,
-        outcome: String
-    ): Boolean {
-        val incidentIdLong = incident.id.removePrefix("#").toLongOrNull()
-        if (incidentIdLong == null || responderId <= 0) {
-            Toast.makeText(context, "Unable to submit review", Toast.LENGTH_SHORT).show()
-            return false
-        }
-        val repo = com.ers.emergencyresponseapp.data.IncidentRepository()
-        val result = repo.submitIncidentReview(
-            incidentId = incidentIdLong,
-            responderId = responderId,
-            responseRating = responseRatingVal,
-            communicationRating = communicationRatingVal,
-            professionalismRating = professionalismRatingVal,
-            outcome = outcome,
-            reviewText = text
-        )
-        return result.onSuccess {
-            Toast.makeText(context, "Review submitted for admin verification", Toast.LENGTH_SHORT).show()
-        }.onFailure { error ->
-            Toast.makeText(context, "Failed to submit review: ${error.message}", Toast.LENGTH_LONG).show()
-        }.isSuccess
-    }
-
-    var serverReviewIncidents by remember { mutableStateOf<List<com.ers.emergencyresponseapp.network.PendingReviewIncidentDto>>(emptyList()) }
+    val detailsTarget = remember { mutableStateOf<ReviewableIncident?>(null) }
+    val detailsText = rememberSaveable { mutableStateOf("") }
+    var showIncidentRecord by remember { mutableStateOf(false) }
+    val generatedReport = rememberSaveable { mutableStateOf("") }
+    val showReportDialog = remember { mutableStateOf(false) }
+    var isExportingPdf by remember { mutableStateOf(false) }
+    var fullScreenImageUri by remember { mutableStateOf<String?>(null) }
 
     suspend fun refreshReviewIncidents() {
         if (responderId <= 0) return
@@ -1554,1123 +2783,973 @@ fun ReviewsFeedbackScreen() {
         serverReviewIncidents = repo.getPendingReviewIncidents(responderId)
     }
 
-    // Immediate refresh on manual triggers (e.g. right after a review submits)
-    LaunchedEffect(reviewRefreshKey, responderId) {
-        refreshReviewIncidents()
+    suspend fun refreshResourceRequests() {
+        if (responderId <= 0) return
+        val repo = com.ers.emergencyresponseapp.data.IncidentRepository()
+        parsedRequests = repo.getMyResourceRequests(responderId)
+            .map { dto ->
+                val createdAt = parseServerTimestamp(dto.created_at)
+                val updatedAt = parseServerTimestamp(dto.updated_at).takeIf { it > 0L } ?: createdAt
+                SavedResourceRequest(
+                    id = dto.id.toString(),
+                    resourceName = dto.resource_name,
+                    category = dto.category,
+                    quantity = dto.quantity.toString(),
+                    urgency = dto.urgency,
+                    status = dto.status.replaceFirstChar { it.uppercase() },
+                    incidentId = dto.incident_id.orEmpty().trim(),
+                    location = dto.location.trim(),
+                    notes = dto.notes.orEmpty().trim(),
+                    createdAt = createdAt,
+                    updatedAt = updatedAt
+                )
+            }
+            .sortedWith(
+                compareByDescending<SavedResourceRequest> { it.createdAt }
+                    .thenByDescending { it.id.toLongOrNull() ?: 0L }
+            )
     }
 
-    // Background poll every 5s so admin-side status changes show up automatically
+    suspend fun refreshAfterActionReports() {
+        if (responderId <= 0) return
+        operationalRepository.getAfterActionReports(responderId)
+            .onSuccess { records ->
+                afterActionReports = records
+                    .map { it.toUiReport() }
+                    .sortedByDescending { it.updatedAt }
+            }
+            .onFailure { error ->
+                Log.e("AfterActionReport", "Load failed", error)
+            }
+    }
+
+    suspend fun refreshIncidentReviewAnalytics() {
+        if (responderId <= 0) return
+        operationalRepository.getIncidentReviews(responderId)
+            .onSuccess { result ->
+                incidentReviewSummary = result.summary
+            }
+            .onFailure { error ->
+                Log.e("IncidentReviewAnalytics", "Load failed", error)
+            }
+    }
+
+    LaunchedEffect(reviewRefreshKey, responderId) {
+        refreshReviewIncidents()
+        refreshIncidentReviewAnalytics()
+    }
+    LaunchedEffect(requestRefreshKey, responderId) { refreshResourceRequests() }
+    LaunchedEffect(reportRefreshKey, responderId) { refreshAfterActionReports() }
+
     LaunchedEffect(responderId) {
         if (responderId <= 0) return@LaunchedEffect
         while (true) {
             delay(5000L)
             refreshReviewIncidents()
+            refreshIncidentReviewAnalytics()
+            refreshResourceRequests()
+            refreshAfterActionReports()
         }
     }
 
     val allIncidents = remember(serverReviewIncidents) {
         serverReviewIncidents.map { dto ->
-            val status = when (dto.review_status) {
-                "pending_review"   -> ReviewStatus.Pending
+            val status = when (dto.review_status.trim().lowercase(Locale.US)) {
+                "pending_review" -> ReviewStatus.Pending
                 "submitted_review" -> ReviewStatus.Submitted
-                "resolved"         -> ReviewStatus.Completed
-                else               -> ReviewStatus.Pending
+                "resolved", "completed", "verified" -> ReviewStatus.Completed
+                else -> ReviewStatus.Unknown
             }
-            val dateStr = dto.completed_at?.let { raw ->
-                runCatching {
-                    val parsed = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).parse(raw)
-                    java.text.SimpleDateFormat("yyyy-MM-dd · HH:mm", Locale.getDefault()).format(parsed!!)
-                }.getOrDefault(raw)
-            } ?: "—"
+            val completedAtMillis = parseServerTimestamp(dto.completed_at)
+            val dateLabel = if (completedAtMillis > 0L) {
+                SimpleDateFormat("MMM dd, yyyy • hh:mm a", Locale.getDefault())
+                    .format(Date(completedAtMillis))
+            } else {
+                dto.completed_at?.takeIf { it.isNotBlank() } ?: "Date unavailable"
+            }
 
             ReviewableIncident(
                 id = "#${dto.id}",
-                type = dto.type.replaceFirstChar { it.uppercase() },
-                date = dateStr,
+                type = dto.type.trim()
+                    .takeIf { it.isNotBlank() }
+                    ?.replaceFirstChar { it.uppercase() }
+                    ?: "General Incident",
+                date = dateLabel,
                 status = status,
                 proofUri = dto.completion_image_path,
-                completionNotes = dto.completion_notes
+                completionNotes = dto.completion_notes,
+                completedAtMillis = completedAtMillis
             )
-        }
-    }
-
-    val pendingCount   = allIncidents.count { it.status == ReviewStatus.Pending }
-    val submittedCount = allIncidents.count { it.status == ReviewStatus.Submitted }
-    val completedCount = allIncidents.count { it.status == ReviewStatus.Completed }
-
-    val filtered = allIncidents
-        .filter { it.status == selected }
-
-    val reviewsShownOnMainScreen = when (selected) {
-        ReviewStatus.Pending -> filtered
-        ReviewStatus.Submitted,
-        ReviewStatus.Completed -> filtered.take(2)
-    }
-
-    val hasMoreReviews = when (selected) {
-        ReviewStatus.Pending -> false
-        ReviewStatus.Submitted,
-        ReviewStatus.Completed -> filtered.size > 2
-    }
-
-    val resourcePrefs = context.getSharedPreferences("resource_requests", Context.MODE_PRIVATE)
-
-    val reviewPrefs = context.getSharedPreferences("review_ratings", Context.MODE_PRIVATE)
-    var ratingRefreshKey by remember { mutableIntStateOf(0) }
-
-
-
-    var parsedRequests by remember { mutableStateOf<List<SavedResourceRequest>>(emptyList()) }
-
-    suspend fun refreshResourceRequests() {
-        if (responderId <= 0) return
-        val repo = com.ers.emergencyresponseapp.data.IncidentRepository()
-        val serverRequests = repo.getMyResourceRequests(responderId)
-        parsedRequests = serverRequests.map {
-            SavedResourceRequest(
-                id = it.id.toString(),
-                resourceName = it.resource_name,
-                category = it.category,
-                quantity = it.quantity.toString(),
-                urgency = it.urgency,
-                status = it.status.replaceFirstChar { c -> c.uppercase() },
-                timestamp = 0L
-            )
-        }
-    }
-    // Requests actually shown in the UI: cancelled requests disappear 24hrs after
-    // their last status change so the list doesn't fill up with dead clutter.
-    val visibleResourceRequests = remember(parsedRequests) {
-        val now = System.currentTimeMillis()
-        parsedRequests.filter { req ->
-            if (req.status.equals("Cancelled", ignoreCase = true)) {
-                val hoursSinceUpdate = (now - req.timestamp) / (1000 * 60 * 60)
-                hoursSinceUpdate < 24
-            } else {
-                true
-            }
-        }
-    }
-
-    // Latest request — highlighted in the list, no separate duplicate card needed anymore
-    val latestResourceRequest = visibleResourceRequests.firstOrNull()
-
-    val resourceRequests = visibleResourceRequests.size
-
-// Immediate refresh on manual triggers (submit, cancel, pull-to-refresh button)
-    LaunchedEffect(requestRefreshKey, responderId) {
-        refreshResourceRequests()
-    }
-
-// Background poll every 5s so status changes made by admin show up automatically
-    LaunchedEffect(responderId) {
-        if (responderId <= 0) return@LaunchedEffect
-        while (true) {
-            delay(5000L)
-            refreshResourceRequests()
-        }
-    }
-
-
-    val savedRatings = remember(ratingRefreshKey) {
-        parseSavedReviewRatings(
-            reviewPrefs.getStringSet("ratings", emptySet()) ?: emptySet()
+        }.sortedWith(
+            compareByDescending<ReviewableIncident> { it.completedAtMillis }
+                .thenByDescending { normalizedIncidentId(it.id).toLongOrNull() ?: 0L }
         )
     }
 
-    val avgRating = if (savedRatings.isNotEmpty()) {
-        val totalAverage = savedRatings.map {
-            (it.responseRating + it.communicationRating + it.professionalismRating) / 3f
-        }.average()
+    val pendingCount = allIncidents.count { it.status == ReviewStatus.Pending }
+    val submittedCount = allIncidents.count { it.status == ReviewStatus.Submitted }
+    val completedCount = allIncidents.count { it.status == ReviewStatus.Completed }
+    val unknownStatusCount = allIncidents.count { it.status == ReviewStatus.Unknown }
 
-        String.format(Locale.getDefault(), "%.1f", totalAverage).toFloat()
-    } else {
-        0f
+    val filteredIncidents = remember(allIncidents, selectedStatus) {
+        allIncidents.filter { it.status == selectedStatus }
     }
-    val scope = rememberCoroutineScope()
+    val incidentsShown = if (selectedStatus == ReviewStatus.Pending) filteredIncidents else filteredIncidents.take(3)
+    val hasMoreIncidents = selectedStatus != ReviewStatus.Pending && filteredIncidents.size > incidentsShown.size
+
+    val visibleResourceRequests = remember(parsedRequests) {
+        parsedRequests.filterNot { it.status.equals("Cancelled", ignoreCase = true) }
+    }
+    val latestResourceRequest = visibleResourceRequests.firstOrNull()
+    val filteredRequests = remember(visibleResourceRequests, requestSearch) {
+        visibleResourceRequests.filter {
+            it.resourceName.contains(requestSearch, ignoreCase = true) ||
+                    it.id.contains(requestSearch, ignoreCase = true) ||
+                    it.category.contains(requestSearch, ignoreCase = true)
+        }
+    }
+
+    val reportByIncident = remember(afterActionReports) {
+        afterActionReports.associateBy { normalizedIncidentId(it.incidentId) }
+    }
+    val draftReportCount = afterActionReports.count {
+        it.status == OperationalReportStatus.DRAFT || it.status == OperationalReportStatus.RETURNED
+    }
+    val submittedReportCount = afterActionReports.count { it.status == OperationalReportStatus.SUBMITTED }
+    val verifiedReportCount = afterActionReports.count { it.status == OperationalReportStatus.VERIFIED }
+    val serviceReviewCount = incidentReviewSummary?.reviewCount ?: 0
+    val averageServiceRating = incidentReviewSummary?.averageOverallRating ?: 0.0
+
+    suspend fun submitServiceReview(
+        incident: ReviewableIncident,
+        text: String,
+        responseRatingValue: Int,
+        communicationRatingValue: Int,
+        professionalismRatingValue: Int,
+        outcome: String
+    ): Boolean {
+        val incidentId = normalizedIncidentId(incident.id).toLongOrNull()
+        if (incidentId == null || responderId <= 0) {
+            Toast.makeText(context, "Unable to submit service review", Toast.LENGTH_SHORT).show()
+            return false
+        }
+        val result = com.ers.emergencyresponseapp.data.IncidentRepository().submitIncidentReview(
+            incidentId = incidentId,
+            responderId = responderId,
+            responseRating = responseRatingValue,
+            communicationRating = communicationRatingValue,
+            professionalismRating = professionalismRatingValue,
+            outcome = outcome,
+            reviewText = text
+        )
+        return result.onSuccess {
+            Toast.makeText(context, "Service review submitted for verification", Toast.LENGTH_SHORT).show()
+        }.onFailure { error ->
+            Toast.makeText(context, "Review failed: ${error.message}", Toast.LENGTH_LONG).show()
+        }.isSuccess
+    }
+
+    fun openServiceReview(incident: ReviewableIncident) {
+        composeTarget.value = incident
+        reviewText.value = ""
+        responseRating = 3
+        communicationRating = 3
+        professionalismRating = 3
+        selectedOutcome = "Resolved"
+        showComposeDialog.value = true
+    }
+
+    fun openIncidentRecord(incident: ReviewableIncident) {
+        detailsTarget.value = incident
+        detailsText.value = incident.completionNotes?.takeIf { it.isNotBlank() }
+            ?: "No completion notes were provided."
+        showIncidentRecord = true
+    }
 
     fun cancelResourceRequest(requestId: String) {
-        val idInt = requestId.toIntOrNull() ?: return
-
+        val id = requestId.toIntOrNull() ?: return
         scope.launch {
-            val repo = com.ers.emergencyresponseapp.data.IncidentRepository()
-            val result = repo.cancelResourceRequest(idInt, responderId)
-
+            val result = com.ers.emergencyresponseapp.data.IncidentRepository()
+                .cancelResourceRequest(id, responderId)
             result.onSuccess {
                 requestRefreshKey++
                 Toast.makeText(context, "Resource request cancelled", Toast.LENGTH_SHORT).show()
             }.onFailure { error ->
-                Toast.makeText(context, "Failed to cancel: ${error.message}", Toast.LENGTH_LONG).show()
+                Toast.makeText(context, "Unable to cancel: ${error.message}", Toast.LENGTH_LONG).show()
             }
         }
     }
 
-    val recentRequests = visibleResourceRequests.take(1)
-    val filteredRequests = visibleResourceRequests.filter {
-        it.resourceName.contains(requestSearch, ignoreCase = true) ||
-                it.id.contains(requestSearch, ignoreCase = true)
+    fun refreshPostIncidentHub() {
+        if (isPullRefreshing || responderId <= 0) return
+        scope.launch {
+            isPullRefreshing = true
+            try {
+                refreshReviewIncidents()
+                refreshIncidentReviewAnalytics()
+                refreshResourceRequests()
+                refreshAfterActionReports()
+            } finally {
+                isPullRefreshing = false
+            }
+        }
     }
 
     Scaffold(containerColor = RFColors.SurfaceBg) { paddingValues ->
-        LazyColumn(
+        AppPullToRefresh(
+            isRefreshing = isPullRefreshing,
+            onRefresh = ::refreshPostIncidentHub,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .windowInsetsPadding(WindowInsets.navigationBars),
-            contentPadding      = PaddingValues(bottom = 24.dp),
+        ) {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .windowInsetsPadding(WindowInsets.navigationBars),
+            contentPadding = PaddingValues(bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // ── HEADER ────────────────────────────────────────────────────
+            item { PostIncidentHeader() }
+
             item {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth().height(160.dp)
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                        .shadow(14.dp, RoundedCornerShape(28.dp))
-                        .clip(RoundedCornerShape(28.dp))
-                        .background(Brush.verticalGradient(listOf(RFColors.Primary, RFColors.Secondary, RFColors.Tertiary)))
+                OperationalWorkflowCard(
+                    draftCount = draftReportCount,
+                    submittedCount = submittedReportCount
+                )
+            }
+
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Box(modifier = Modifier.fillMaxSize().background(Brush.radialGradient(listOf(Color.White.copy(alpha = 0.15f), Color.Transparent), radius = 600f)))
-                    Row(modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 18.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                        Column {
-                            Text("My Reviews", color = Color.White.copy(alpha = 0.85f), fontSize = 14.sp)
-                            Spacer(Modifier.height(6.dp))
-                            Text("Reviews & Feedback", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 22.sp)
-                            Text(
-                                "Monitor reviews, reports, and resource requests",
-                                color = Color.White.copy(alpha = 0.68f),
-                                fontSize = 11.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        Box(modifier = Modifier.size(56.dp).shadow(10.dp, CircleShape).clip(CircleShape).background(Color.White.copy(alpha = 0.15f)).border(1.dp, Color.White.copy(alpha = 0.5f), CircleShape), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.RateReview, contentDescription = null, tint = Color.White, modifier = Modifier.size(28.dp))
-                        }
-                    }
+                    ReviewStatCard(pendingCount, "Needs review", ReviewStatus.Pending.color, Modifier.weight(1f))
+                    ReviewStatCard(submittedCount, "Submitted", ReviewStatus.Submitted.color, Modifier.weight(1f))
+                    ReviewStatCard(completedCount, "Verified", ReviewStatus.Completed.color, Modifier.weight(1f))
                 }
             }
 
-
-            item {
-                Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    ReviewStatCard(pendingCount,   "Pending",   Color(0xFFE65100), Modifier.weight(1f))
-                    ReviewStatCard(submittedCount, "Submitted", Color(0xFF0277BD), Modifier.weight(1f))
-                    ReviewStatCard(completedCount, "Completed", Color(0xFF2E7D32), Modifier.weight(1f))
+            if (unknownStatusCount > 0) {
+                item {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                        color = tonalSurface(ReviewStatus.Unknown.color),
+                        shape = RoundedCornerShape(14.dp),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            ReviewStatus.Unknown.color.copy(alpha = 0.35f)
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Info,
+                                contentDescription = null,
+                                tint = ReviewStatus.Unknown.color,
+                                modifier = Modifier.size(17.dp)
+                            )
+                            Text(
+                                "$unknownStatusCount incident record${if (unknownStatusCount == 1) " has" else "s have"} a server status this app does not recognize.",
+                                color = RFColors.TextSecondary,
+                                fontSize = 11.sp,
+                                lineHeight = 16.sp
+                            )
+                        }
+                    }
                 }
             }
 
             item {
                 Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text(
-                        "Performance Overview",
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = RFColors.Text
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
+                    Text("Operational snapshot", color = RFColors.Text, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         AnalyticsCard(
-                            title = "Avg Rating",
-                            value = if (avgRating > 0f) "⭐ ${String.format(Locale.getDefault(), "%.1f", avgRating)} / 5" else "No ratings",
+                            title = "Unit reports • $verifiedReportCount verified",
+                            value = "${submittedReportCount} submitted • ${draftReportCount} drafts",
                             modifier = Modifier.weight(1f)
                         )
-
                         AnalyticsCard(
-                            title = "Resource Requests",
-                            value = resourceRequests.toString(),
+                            title = if (serviceReviewCount == 1) {
+                                "1 submitted service review"
+                            } else {
+                                "$serviceReviewCount submitted service reviews"
+                            },
+                            value = if (serviceReviewCount > 0) {
+                                "${String.format(Locale.getDefault(), "%.1f", averageServiceRating)} / 5"
+                            } else {
+                                "No ratings"
+                            },
                             modifier = Modifier.weight(1f)
                         )
                     }
                 }
             }
 
-            // ── REQUEST RESOURCES BUTTON ──────────────────────────────────
             item {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp),
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = RFColors.Bg),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
-                ) {
+                HubTabSwitcher(
+                    selected = hubTab,
+                    pendingIncidents = pendingCount,
+                    resourceCount = visibleResourceRequests.size,
+                    onSelect = { hubTab = it }
+                )
+            }
+
+            if (hubTab == ReviewHubTab.INCIDENTS) {
+                item {
                     Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(7.dp)
                     ) {
-                        // Header row
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Column {
+                                Text("Completed incident records", color = RFColors.Text, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                                Text("Operational report and service review are separate actions", color = RFColors.TextSecondary, fontSize = 10.sp)
+                            }
+                            Text("Latest first", color = RFColors.Primary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                            item {
+                                FilterPill("Needs Review", Icons.Default.HourglassTop, selectedStatus == ReviewStatus.Pending, ReviewStatus.Pending.color) {
+                                    selectedStatus = ReviewStatus.Pending
+                                }
+                            }
+                            item {
+                                FilterPill("Submitted", Icons.AutoMirrored.Filled.Send, selectedStatus == ReviewStatus.Submitted, ReviewStatus.Submitted.color) {
+                                    selectedStatus = ReviewStatus.Submitted
+                                }
+                            }
+                            item {
+                                FilterPill("Verified", Icons.Default.CheckCircle, selectedStatus == ReviewStatus.Completed, ReviewStatus.Completed.color) {
+                                    selectedStatus = ReviewStatus.Completed
+                                }
+                            }
+                            if (unknownStatusCount > 0) {
+                                item {
+                                    FilterPill("Other", Icons.Default.HelpOutline, selectedStatus == ReviewStatus.Unknown, ReviewStatus.Unknown.color) {
+                                        selectedStatus = ReviewStatus.Unknown
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (filteredIncidents.isEmpty()) {
+                    item {
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                            shape = RoundedCornerShape(20.dp),
+                            colors = CardDefaults.cardColors(containerColor = RFColors.Bg),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
+                        ) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 34.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(9.dp)
+                            ) {
                                 Box(
-                                    modifier = Modifier
-                                        .size(38.dp)
-                                        .clip(RoundedCornerShape(11.dp))
-                                        .background(RFColors.Primary.copy(alpha = 0.10f)),
+                                    modifier = Modifier.size(58.dp).clip(RoundedCornerShape(19.dp)).background(tonalSurface(RFColors.Primary)),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    Icon(
-                                        Icons.Default.Inventory,
-                                        contentDescription = null,
-                                        tint = RFColors.Primary,
-                                        modifier = Modifier.size(19.dp)
-                                    )
+                                    Icon(Icons.Default.Inbox, contentDescription = null, tint = RFColors.Primary, modifier = Modifier.size(29.dp))
                                 }
-                                Column {
-                                    Text(
-                                        "Resource Requests",
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = RFColors.Text
-                                    )
-                                    Text(
-                                        if (visibleResourceRequests.isEmpty()) "No requests yet"
-                                        else "${visibleResourceRequests.size} total • updated ${SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date())}",
-                                        fontSize = 11.sp,
-                                        color = RFColors.TextSecondary
-                                    )
-                                }
-                            }
-
-                            IconButton(
-                                onClick = { requestRefreshKey++ },
-                                modifier = Modifier.size(32.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.Refresh,
-                                    contentDescription = "Refresh",
-                                    tint = RFColors.TextSecondary,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                        }
-
-                        HorizontalDivider(color = RFColors.Border, thickness = 0.8.dp)
-
-                        // Action row — single, unambiguous entry point
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Button(
-                                onClick = { showResourceForm = true },
-                                modifier = Modifier.weight(1f).height(44.dp),
-                                shape = RoundedCornerShape(12.dp),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = RFColors.Primary,
-                                    contentColor = Color.White
-                                )
-                            ) {
-                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(6.dp))
-                                Text("New Request", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                            }
-
-                            OutlinedButton(
-                                onClick = { showAllRequests = true },
-                                enabled = visibleResourceRequests.size > 1,
-                                modifier = Modifier.weight(1f).height(44.dp),
-                                shape = RoundedCornerShape(12.dp),
-                                colors = ButtonDefaults.outlinedButtonColors(
-                                    contentColor = if (ThemeController.isDarkMode.value) RFColors.Primary else RFColors.Secondary
-                                ),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
-                            ) {
-                                Text("View All", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                            }
-                        }
-
-                        // List or empty state
-                        if (recentRequests.isEmpty()) {
-                            Column(
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.Inbox,
-                                    contentDescription = null,
-                                    tint = RFColors.TextSecondary.copy(alpha = 0.5f),
-                                    modifier = Modifier.size(28.dp)
-                                )
-                                Spacer(Modifier.height(4.dp))
                                 Text(
-                                    "Requests you submit will appear here",
-                                    fontSize = 12.sp,
+                                    when (selectedStatus) {
+                                        ReviewStatus.Pending -> "No incidents need a service review"
+                                        ReviewStatus.Submitted -> "No submitted reviews"
+                                        ReviewStatus.Completed -> "No verified reviews yet"
+                                        ReviewStatus.Unknown -> "No records with an unrecognized status"
+                                    },
+                                    color = RFColors.Text,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp,
+                                    textAlign = TextAlign.Center
+                                )
+                                Text(
+                                    "Completed incidents will appear here when they are available for post-incident documentation.",
                                     color = RFColors.TextSecondary,
+                                    fontSize = 11.sp,
+                                    lineHeight = 16.sp,
                                     textAlign = TextAlign.Center
                                 )
                             }
-                        } else {
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                recentRequests.forEach { request ->
-                                    ResourceRequestHistoryCard(
-                                        request = request,
-                                        onClick = { selectedRequest = request },
-                                        onCancel = { requestToCancel = request },
-                                        isLatest = request.id == latestResourceRequest?.id
-                                    )
-                                }
-                            }
                         }
                     }
-                }
-            }
-
-
-            // ── FILTER PILLS ──────────────────────────────────────────────
-            item {
-                Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Filter by Status", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = RFColors.Text, modifier = Modifier.padding(start = 4.dp))
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        item { FilterPill("Pending",   Icons.Default.HourglassTop,            selected == ReviewStatus.Pending,   Color(0xFFE65100)) { selected = ReviewStatus.Pending } }
-                        item { FilterPill("Submitted", Icons.AutoMirrored.Filled.Send,         selected == ReviewStatus.Submitted, Color(0xFF0277BD)) { selected = ReviewStatus.Submitted } }
-                        item { FilterPill("Completed", Icons.Default.CheckCircle,              selected == ReviewStatus.Completed, Color(0xFF2E7D32)) { selected = ReviewStatus.Completed } }
-                    }
-                }
-            }
-
-            // ── SECTION HEADER ────────────────────────────────────────────
-            item {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp),
-                    shape = RoundedCornerShape(18.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = RFColors.Bg
-                    ),
-                    border = androidx.compose.foundation.BorderStroke(
-                        1.dp,
-                        RFColors.Border
-                    )
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column {
-                            Text(
-                                selected.label,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 16.sp,
-                                color = RFColors.Text
-                            )
-
-                            Text(
-                                "${filtered.size} review${if (filtered.size == 1) "" else "s"}",
-                                fontSize = 12.sp,
-                                color = RFColors.TextSecondary
+                } else {
+                    itemsIndexed(
+                        items = incidentsShown,
+                        key = { _, incident -> incident.id }
+                    ) { index, incident ->
+                        Box(modifier = Modifier.padding(horizontal = 12.dp)) {
+                            ReviewCard(
+                                incident = incident,
+                                index = index,
+                                report = reportByIncident[normalizedIncidentId(incident.id)],
+                                onOpenReport = { reportTarget = it },
+                                onWriteReview = ::openServiceReview,
+                                onViewDetails = ::openIncidentRecord,
+                                onViewImage = { fullScreenImageUri = it }
                             )
                         }
-
-                        if (hasMoreReviews) {
-                            TextButton(
-                                onClick = {
-                                    showAllReviews = true
-                                }
+                    }
+                    if (hasMoreIncidents) {
+                        item {
+                            OutlinedButton(
+                                onClick = { showAllReviews = true },
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).height(44.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = RFColors.Primary)
                             ) {
-                                Text(
-                                    "View All",
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = RFColors.Primary
-                                )
-
-                                Spacer(Modifier.width(4.dp))
-
-                                Icon(
-                                    Icons.AutoMirrored.Filled.ArrowForward,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp),
-                                    tint = RFColors.Primary
-                                )
+                                Text("View all ${filteredIncidents.size} records", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                             }
-                        } else {
-                            Text(
-                                "Latest first",
-                                fontSize = 12.sp,
-                                color = RFColors.TextSecondary
-                            )
                         }
                     }
                 }
-            }
-
-            // ── EMPTY STATE ───────────────────────────────────────────────
-            if (filtered.isEmpty()) {
+            } else {
                 item {
-                    Card(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).shadow(6.dp, RoundedCornerShape(20.dp)),
-                        shape = RoundedCornerShape(20.dp),
-                        colors = CardDefaults.cardColors(containerColor = RFColors.Bg),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
-                    ) {
-                        Column(modifier = Modifier.fillMaxWidth().padding(40.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Box(modifier = Modifier.size(64.dp).clip(CircleShape).background(RFColors.Primary.copy(alpha = 0.1f)), contentAlignment = Alignment.Center) {
-                                Icon(Icons.Default.Inbox, contentDescription = null, modifier = Modifier.size(32.dp), tint = RFColors.Primary)
-                            }
-                            Text("No ${selected.label.lowercase()} incidents", fontWeight = FontWeight.SemiBold, color = RFColors.Text)
-                            Text("Items will appear here once available", fontSize = 13.sp, color = RFColors.TextSecondary, textAlign = TextAlign.Center)
-                        }
-                    }
-                }
-            }
-
-            // ── REVIEW CARDS ──────────────────────────────────────────────
-            itemsIndexed(reviewsShownOnMainScreen) { index, incident ->
-                Box(modifier = Modifier.padding(horizontal = 12.dp)) {
-                    ReviewCard(
-                        incident      = incident,
-                        index         = index,
-                        onWriteReview = { inc ->
-                            composeTarget.value = inc
-                            reviewText.value = ""
-                            responseRating = 3
-                            communicationRating = 3
-                            professionalismRating = 3
-                            selectedOutcome = "Resolved"
-                            showComposeDialog.value = true
-                        },
-                        onViewDetails = { inc ->
-                            detailsText.value = inc.completionNotes?.takeIf { it.isNotBlank() }
-                                ?: "No review details available."
-                            detailsTarget.value = inc
-                            showFullReviewDetails = true
-                        },
-                        onViewImage = { uri -> fullScreenImageUri = uri }   // ← use full-screen dialog
+                    ResourceRequestsPanel(
+                        requests = visibleResourceRequests,
+                        latestRequest = latestResourceRequest,
+                        onNewRequest = { showResourceForm = true },
+                        onViewAll = { showAllRequests = true },
+                        onRefresh = ::refreshPostIncidentHub,
+                        onSelect = { selectedRequest = it },
+                        onCancel = { requestToCancel = it }
                     )
                 }
             }
-        }
-
-        if (showAllReviews) {
-            Dialog(
-                onDismissRequest = {
-                    showAllReviews = false
-                },
-                properties = DialogProperties(
-                    usePlatformDefaultWidth = false,
-                    decorFitsSystemWindows = false
-                )
-            ) {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = RFColors.SurfaceBg
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .statusBarsPadding()
-                            .navigationBarsPadding()
-                    ) {
-                        Surface(
-                            color = RFColors.Bg,
-                            shadowElevation = 3.dp
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text(
-                                        "All ${selected.label}",
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 20.sp,
-                                        color = RFColors.Text
-                                    )
-
-                                    Text(
-                                        "${filtered.size} total reviews",
-                                        fontSize = 12.sp,
-                                        color = RFColors.TextSecondary
-                                    )
-                                }
-
-                                IconButton(
-                                    onClick = {
-                                        showAllReviews = false
-                                    }
-                                ) {
-                                    Icon(
-                                        Icons.Default.Close,
-                                        contentDescription = "Close",
-                                        tint = RFColors.TextSecondary
-                                    )
-                                }
-                            }
-                        }
-
-                        LazyColumn(
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(
-                                horizontal = 12.dp,
-                                vertical = 14.dp
-                            ),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            itemsIndexed(filtered) { index, incident ->
-                                ReviewCard(
-                                    incident = incident,
-                                    index = index,
-                                    onWriteReview = { inc ->
-                                        showAllReviews = false
-                                        composeTarget.value = inc
-                                        reviewText.value = ""
-                                        responseRating = 3
-                                        communicationRating = 3
-                                        professionalismRating = 3
-                                        selectedOutcome = "Resolved"
-                                        showComposeDialog.value = true
-                                    },
-                                    onViewDetails = { inc ->
-                                        detailsText.value =
-                                            inc.completionNotes
-                                                ?.takeIf { it.isNotBlank() }
-                                                ?: "No review details available."
-
-                                        detailsTarget.value = inc
-                                        showFullReviewDetails = true
-                                    },
-                                    onViewImage = { uri ->
-                                        fullScreenImageUri = uri
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
             }
         }
+    }
 
-        // ── COMPOSE REVIEW DIALOG ─────────────────────────────────────────
-        if (showSubmitReviewConfirm && composeTarget.value != null) {
-            val target = composeTarget.value!!
-
-            AlertDialog(
-                onDismissRequest = {
-                    showSubmitReviewConfirm = false
-                },
-                shape = RoundedCornerShape(20.dp),
-                containerColor = RFColors.Bg,
-                title = {
-                    Text(
-                        "Submit Review?",
-                        fontWeight = FontWeight.Bold,
-                        color = RFColors.Text
-                    )
-                },
-                text = {
-                    Text(
-                        "Please confirm that your ratings and feedback are final before submitting.",
-                        fontSize = 14.sp,
-                        color = RFColors.TextSecondary
-                    )
-                },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            if (isSubmittingReview) return@Button
-                            val fullReview = """
-                        Outcome: $selectedOutcome
-
-                        Response Time Rating: $responseRating/5
-                        Communication Rating: $communicationRating/5
-                        Professionalism Rating: $professionalismRating/5
-
-                        Feedback:
-                        ${reviewText.value}
-                    """.trimIndent()
-
-                            isSubmittingReview = true
-                            scope.launch {
-                                val success = submitReview(
-                                    target, fullReview, responseRating,
-                                    communicationRating, professionalismRating, selectedOutcome
-                                )
-                                isSubmittingReview = false
-                                if (success) {
-                                    val ratingJson = """
-                                {
-                                  "incidentId": "${target.id.removePrefix("#")}",
-                                  "responseRating": $responseRating,
-                                  "communicationRating": $communicationRating,
-                                  "professionalismRating": $professionalismRating,
-                                  "outcome": "$selectedOutcome",
-                                  "timestamp": ${System.currentTimeMillis()}
-                                }
-                            """.trimIndent()
-                                    val oldRatings = reviewPrefs.getStringSet("ratings", emptySet()) ?: emptySet()
-                                    reviewPrefs.edit().putStringSet("ratings", oldRatings + ratingJson).apply()
-                                    ratingRefreshKey++
-                                    reviewRefreshKey++
-
-                                    showSubmitReviewConfirm = false
-                                    showComposeDialog.value = false
-                                    composeTarget.value = null
-                                    reviewText.value = ""
-                                }
-                            }
-                        },
-                        enabled = !isSubmittingReview,
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = RFColors.Primary)
-                    ) {
-                        if (isSubmittingReview) {
-                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
-                        } else {
-                            Text("Yes, Submit")
+    reportTarget?.let { incident ->
+        val initial = reportByIncident[normalizedIncidentId(incident.id)]
+        AfterActionReportDialog(
+            incident = incident,
+            responderName = responderName,
+            initialReport = initial,
+            isSaving = isSavingAfterActionReport,
+            onDismiss = { if (!isSavingAfterActionReport) reportTarget = null },
+            onSave = { report ->
+                if (!isSavingAfterActionReport) {
+                    isSavingAfterActionReport = true
+                    scope.launch {
+                        operationalRepository.upsertAfterActionReport(
+                            report.toApiRequest(responderId)
+                        ).onSuccess {
+                            refreshAfterActionReports()
+                            reportRefreshKey++
+                            reportTarget = null
+                            Toast.makeText(
+                                context,
+                                if (report.status == OperationalReportStatus.DRAFT) {
+                                    "After-action draft saved to the server"
+                                } else {
+                                    "After-action report submitted for verification"
+                                },
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }.onFailure { error ->
+                            Toast.makeText(
+                                context,
+                                "Report was not saved: ${error.message ?: "server error"}",
+                                Toast.LENGTH_LONG
+                            ).show()
                         }
-                    }
-                },
-                dismissButton = {
-                    OutlinedButton(
-                        onClick = {
-                            showSubmitReviewConfirm = false
-                        },
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text("Review Again")
+                        isSavingAfterActionReport = false
                     }
                 }
-            )
-        }
+            },
+            onExport = { report ->
+                runCatching { exportIncidentReportPdf(context, report.toPrintableText()) }
+                    .onFailure {
+                        Toast.makeText(context, "Unable to export report", Toast.LENGTH_SHORT).show()
+                    }
+            }
+        )
+    }
 
-        if (showFullReviewDetails && detailsTarget.value != null) {
-            val inc = detailsTarget.value!!
-
-            Dialog(
-                onDismissRequest = {
-                    showFullReviewDetails = false
-                    detailsTarget.value = null
-                },
-                properties = DialogProperties(
-                    usePlatformDefaultWidth = false,
-                    decorFitsSystemWindows = false
-                )
-            ) {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = RFColors.SurfaceBg
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .statusBarsPadding()
-                            .navigationBarsPadding()
-                            .padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
+    if (showAllReviews) {
+        Dialog(
+            onDismissRequest = { showAllReviews = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
+        ) {
+            Surface(modifier = Modifier.fillMaxSize(), color = RFColors.SurfaceBg) {
+                Column(modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+                    Surface(color = RFColors.Bg, shadowElevation = 2.dp) {
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    "Review Details",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 20.sp,
-                                    color = RFColors.Text
-                                )
-
-                                Text(
-                                    "${inc.type} • ${inc.id}",
-                                    fontSize = 13.sp,
-                                    color = RFColors.Primary,
-                                    fontWeight = FontWeight.SemiBold
-                                )
+                                Text(selectedStatus.label, color = RFColors.Text, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                                Text("${filteredIncidents.size} incident records • latest first", color = RFColors.TextSecondary, fontSize = 11.sp)
                             }
-
-                            IconButton(
-                                onClick = {
-                                    showFullReviewDetails = false
-                                    detailsTarget.value = null
-                                }
-                            ) {
-                                Icon(
-                                    Icons.Default.Close,
-                                    contentDescription = "Close",
-                                    tint = RFColors.TextSecondary
-                                )
+                            IconButton(onClick = { showAllReviews = false }) {
+                                Icon(Icons.Default.Close, contentDescription = "Close", tint = RFColors.TextSecondary)
                             }
                         }
-
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(18.dp),
-                            colors = CardDefaults.cardColors(containerColor = RFColors.Bg),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(14.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                InfoRow("Status", inc.status.label)
-                                InfoRow("Date", inc.date)
-                            }
-                        }
-
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1f),
-                            shape = RoundedCornerShape(18.dp),
-                            colors = CardDefaults.cardColors(containerColor = RFColors.Bg),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
-                        ) {
-                            LazyColumn(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(16.dp)
-                            ) {
-                                item {
-                                    Text(
-                                        detailsText.value,
-                                        fontSize = 14.sp,
-                                        color = RFColors.Text,
-                                        lineHeight = 22.sp
-                                    )
-                                }
-                            }
-                        }
-
-                        Button(
-                            onClick = {
-                                generatedReport.value = """
-                            INCIDENT REPORT
-
-                            Incident ID: ${inc.id}
-                            Incident Type: ${inc.type}
-                            Date Completed: ${inc.date}
-
-                            Status: ${inc.status.label}
-
-                            Review Details:
-                            ${detailsText.value}
-
-                            Generated By:
-                            $responderName
-
-                            Generated On:
-                            ${
-                                    SimpleDateFormat(
-                                        "MMM dd, yyyy hh:mm a",
-                                        Locale.getDefault()
-                                    ).format(Date())
-                                }
-                        """.trimIndent()
-
-                                showReportDialog.value = true
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(52.dp),
-                            shape = RoundedCornerShape(14.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = RFColors.Primary)
-                        ) {
-                            Icon(Icons.Default.Description, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("Generate Report", fontWeight = FontWeight.Bold)
+                    }
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(11.dp)
+                    ) {
+                        itemsIndexed(
+                            items = filteredIncidents,
+                            key = { _, incident -> incident.id }
+                        ) { index, incident ->
+                            ReviewCard(
+                                incident = incident,
+                                index = index,
+                                report = reportByIncident[normalizedIncidentId(incident.id)],
+                                onOpenReport = {
+                                    showAllReviews = false
+                                    reportTarget = it
+                                },
+                                onWriteReview = {
+                                    showAllReviews = false
+                                    openServiceReview(it)
+                                },
+                                onViewDetails = {
+                                    showAllReviews = false
+                                    openIncidentRecord(it)
+                                },
+                                onViewImage = { fullScreenImageUri = it }
+                            )
                         }
                     }
                 }
             }
         }
+    }
 
-        // ── WRITE REVIEW FORM DIALOG (the missing piece) ────────────────
-        if (showComposeDialog.value && composeTarget.value != null) {
-            val target = composeTarget.value!!
+    if (showSubmitReviewConfirm && composeTarget.value != null) {
+        val target = composeTarget.value!!
+        AlertDialog(
+            onDismissRequest = { if (!isSubmittingReview) showSubmitReviewConfirm = false },
+            containerColor = RFColors.Bg,
+            shape = RoundedCornerShape(20.dp),
+            title = { Text("Submit Service Review?", color = RFColors.Text, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "This sends ratings and feedback for verification. It does not replace the operational After-Action Report.",
+                    color = RFColors.TextSecondary,
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (isSubmittingReview) return@Button
+                        val fullReview = """
+                            Outcome: $selectedOutcome
 
-            Dialog(
-                onDismissRequest = { showComposeDialog.value = false },
-                properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
-            ) {
-                Surface(modifier = Modifier.fillMaxSize(), color = RFColors.SurfaceBg) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .statusBarsPadding()
-                            .navigationBarsPadding()
-                            .padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                            Response Time Rating: $responseRating/5
+                            Communication Rating: $communicationRating/5
+                            Professionalism Rating: $professionalismRating/5
+
+                            Service Feedback:
+                            ${reviewText.value.trim()}
+                        """.trimIndent()
+                        isSubmittingReview = true
+                        scope.launch {
+                            val success = submitServiceReview(
+                                target,
+                                fullReview,
+                                responseRating,
+                                communicationRating,
+                                professionalismRating,
+                                selectedOutcome
+                            )
+                            isSubmittingReview = false
+                            if (success) {
+                                reviewRefreshKey++
+                                showSubmitReviewConfirm = false
+                                showComposeDialog.value = false
+                                composeTarget.value = null
+                                reviewText.value = ""
+                            }
+                        }
+                    },
+                    enabled = !isSubmittingReview,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = RFColors.Primary)
+                ) {
+                    if (isSubmittingReview) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                    } else {
+                        Text("Submit Review")
+                    }
+                }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = { showSubmitReviewConfirm = false },
+                    enabled = !isSubmittingReview,
+                    shape = RoundedCornerShape(12.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
+                ) {
+                    Text("Go Back", color = RFColors.TextSecondary)
+                }
+            }
+        )
+    }
+
+    if (showIncidentRecord && detailsTarget.value != null) {
+        val incident = detailsTarget.value!!
+        Dialog(
+            onDismissRequest = {
+                showIncidentRecord = false
+                detailsTarget.value = null
+            },
+            properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
+        ) {
+            Surface(modifier = Modifier.fillMaxSize(), color = RFColors.SurfaceBg) {
+                Column(
+                    modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(11.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Incident Record", color = RFColors.Text, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                            Text("${incident.type} • ${incident.id}", color = RFColors.Primary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                        IconButton(onClick = {
+                            showIncidentRecord = false
+                            detailsTarget.value = null
+                        }) {
+                            Icon(Icons.Default.Close, contentDescription = "Close", tint = RFColors.TextSecondary)
+                        }
+                    }
+
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(17.dp),
+                        colors = CardDefaults.cardColors(containerColor = RFColors.Bg),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
                     ) {
-                        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            InfoRow("Review status", incident.status.label)
+                            InfoRow("Completed", incident.date)
+                            InfoRow(
+                                "Unit report",
+                                reportByIncident[normalizedIncidentId(incident.id)]?.status?.label ?: "Not started"
+                            )
+                        }
+                    }
+
+                    Card(
+                        modifier = Modifier.fillMaxWidth().weight(1f),
+                        shape = RoundedCornerShape(17.dp),
+                        colors = CardDefaults.cardColors(containerColor = RFColors.Bg),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
+                    ) {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(15.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            item {
+                                Text("Completion notes", color = RFColors.Text, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                Spacer(Modifier.height(6.dp))
+                                Text(detailsText.value, color = RFColors.TextSecondary, fontSize = 13.sp, lineHeight = 20.sp)
+                            }
+                        }
+                    }
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = {
+                                showIncidentRecord = false
+                                reportTarget = incident
+                            },
+                            modifier = Modifier.weight(1f).height(48.dp),
+                            shape = RoundedCornerShape(13.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = RFColors.Primary)
+                        ) {
+                            Icon(Icons.Default.Assignment, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Unit Report", fontSize = 12.sp)
+                        }
+                        Button(
+                            onClick = {
+                                generatedReport.value = """
+                                    INCIDENT COMPLETION SUMMARY
+
+                                    Incident ID: ${incident.id}
+                                    Incident Type: ${incident.type}
+                                    Date Completed: ${incident.date}
+                                    Review Status: ${incident.status.label}
+
+                                    Completion Notes:
+                                    ${detailsText.value}
+
+                                    Generated By: $responderName
+                                    Generated On: ${SimpleDateFormat("MMM dd, yyyy hh:mm a", Locale.getDefault()).format(Date())}
+                                """.trimIndent()
+                                showReportDialog.value = true
+                            },
+                            modifier = Modifier.weight(1.2f).height(48.dp),
+                            shape = RoundedCornerShape(13.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = RFColors.Primary)
+                        ) {
+                            Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Export Summary", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showComposeDialog.value && composeTarget.value != null) {
+        val target = composeTarget.value!!
+        Dialog(
+            onDismissRequest = { showComposeDialog.value = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
+        ) {
+            Surface(modifier = Modifier.fillMaxSize(), color = RFColors.SurfaceBg) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .statusBarsPadding()
+                        .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars).only(WindowInsetsSides.Bottom))
+                ) {
+                    Surface(color = RFColors.Bg, shadowElevation = 2.dp) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 15.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text("Write Review", fontWeight = FontWeight.Bold, fontSize = 20.sp, color = RFColors.Text)
-                                Text("${target.type} • ${target.id}", fontSize = 13.sp, color = RFColors.Primary, fontWeight = FontWeight.SemiBold)
+                                Text("Service Review", color = RFColors.Text, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                                Text("${target.type} • ${target.id}", color = RFColors.Primary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                             }
                             IconButton(onClick = { showComposeDialog.value = false }) {
                                 Icon(Icons.Default.Close, contentDescription = "Close", tint = RFColors.TextSecondary)
                             }
                         }
+                    }
 
-                        LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                            item {
-                                SectionCard(title = "Ratings", icon = Icons.Default.Star) {
-                                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                        RatingSelector("Response Time", responseRating) { responseRating = it }
-                                        RatingSelector("Communication", communicationRating) { communicationRating = it }
-                                        RatingSelector("Professionalism", professionalismRating) { professionalismRating = it }
-                                    }
-                                }
-                            }
-                            item {
-                                SectionCard(title = "Outcome", icon = Icons.Default.Flag) {
-                                    OutcomeSelector(selectedOutcome) { selectedOutcome = it }
-                                }
-                            }
-                            item {
-                                SectionCard(title = "Feedback", icon = Icons.AutoMirrored.Filled.Notes) {
-                                    OutlinedTextField(
-                                        value = reviewText.value,
-                                        onValueChange = { reviewText.value = it },
-                                        placeholder = { Text("Describe how the response went…") },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        minLines = 4,
-                                        shape = RoundedCornerShape(12.dp)
+                    LazyColumn(
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 14.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        item {
+                            Surface(
+                                color = tonalSurface(RFColors.Info, lightAlpha = 0.08f, darkAlpha = 0.17f),
+                                shape = RoundedCornerShape(13.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Info.copy(alpha = 0.24f))
+                            ) {
+                                Row(modifier = Modifier.padding(11.dp), verticalAlignment = Alignment.Top) {
+                                    Icon(Icons.Default.Info, contentDescription = null, tint = RFColors.Info, modifier = Modifier.size(17.dp))
+                                    Spacer(Modifier.width(7.dp))
+                                    Text(
+                                        "Rate response quality and communication here. Operational actions, handoff, safety concerns, and follow-up belong in the After-Action Report.",
+                                        color = RFColors.TextSecondary,
+                                        fontSize = 10.sp,
+                                        lineHeight = 15.sp
                                     )
                                 }
                             }
                         }
+                        item {
+                            SectionCard(title = "Service ratings", icon = Icons.Default.Star) {
+                                RatingSelector("Response time", responseRating) { responseRating = it }
+                                RatingSelector("Communication", communicationRating) { communicationRating = it }
+                                RatingSelector("Professionalism", professionalismRating) { professionalismRating = it }
+                            }
+                        }
+                        item {
+                            SectionCard(title = "Outcome", icon = Icons.Default.Flag) {
+                                OutcomeSelector(selectedOutcome) { selectedOutcome = it }
+                            }
+                        }
+                        item {
+                            SectionCard(title = "Feedback", icon = Icons.AutoMirrored.Filled.Notes) {
+                                OutlinedTextField(
+                                    value = reviewText.value,
+                                    onValueChange = { reviewText.value = it },
+                                    placeholder = { Text("What worked well, and what should improve?") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    minLines = 5,
+                                    maxLines = 8,
+                                    shape = RoundedCornerShape(13.dp),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedContainerColor = RFColors.InputBg,
+                                        unfocusedContainerColor = RFColors.InputBg,
+                                        focusedTextColor = RFColors.Text,
+                                        unfocusedTextColor = RFColors.Text,
+                                        focusedBorderColor = RFColors.Primary,
+                                        unfocusedBorderColor = RFColors.Border,
+                                        cursorColor = RFColors.Primary
+                                    )
+                                )
+                            }
+                        }
+                    }
 
+                    Surface(color = RFColors.Bg, shadowElevation = 5.dp) {
                         Button(
                             onClick = { showSubmitReviewConfirm = true },
                             enabled = reviewText.value.isNotBlank(),
-                            modifier = Modifier.fillMaxWidth().height(52.dp),
-                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(14.dp).height(50.dp),
+                            shape = RoundedCornerShape(13.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = RFColors.Primary)
                         ) {
-                            Text("Review Summary", fontWeight = FontWeight.Bold)
+                            Text("Review and Submit", fontWeight = FontWeight.Bold)
                         }
                     }
                 }
             }
         }
+    }
 
-        if (showReportDialog.value) {
-            AlertDialog(
-                onDismissRequest = {
-                    if (!isExportingPdf) showReportDialog.value = false
-                },
-                shape = RoundedCornerShape(20.dp),
-                containerColor = RFColors.Bg,
-                title = {
-                    Text(
-                        "Incident Report",
-                        fontWeight = FontWeight.Bold,
-                        color = RFColors.Text
-                    )
-                },
-                text = {
-                    Card(
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = RFColors.SurfaceBg),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
-                    ) {
-                        LazyColumn(
-                            modifier = Modifier
-                                .heightIn(max = 360.dp)
-                                .padding(14.dp)
-                        ) {
-                            item {
-                                Text(
-                                    generatedReport.value,
-                                    fontSize = 13.sp,
-                                    color = RFColors.Text,
-                                    lineHeight = 20.sp
-                                )
-                            }
+    if (showReportDialog.value) {
+        AlertDialog(
+            onDismissRequest = { if (!isExportingPdf) showReportDialog.value = false },
+            containerColor = RFColors.Bg,
+            shape = RoundedCornerShape(20.dp),
+            title = { Text("Completion Summary", color = RFColors.Text, fontWeight = FontWeight.Bold) },
+            text = {
+                Card(
+                    shape = RoundedCornerShape(15.dp),
+                    colors = CardDefaults.cardColors(containerColor = RFColors.MutedBg),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
+                ) {
+                    LazyColumn(modifier = Modifier.heightIn(max = 360.dp).padding(13.dp)) {
+                        item {
+                            Text(generatedReport.value, color = RFColors.Text, fontSize = 12.sp, lineHeight = 19.sp)
                         }
-                    }
-                },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            isExportingPdf = true
-
-                            val success = runCatching {
-                                exportIncidentReportPdf(
-                                    context = context,
-                                    reportText = generatedReport.value
-                                )
-                            }.isSuccess
-
-                            isExportingPdf = false
-
-                            Toast.makeText(
-                                context,
-                                if (success) "PDF ready to share" else "Failed to export PDF",
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        },
-                        enabled = !isExportingPdf,
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = RFColors.Primary)
-                    ) {
-                        if (isExportingPdf) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                strokeWidth = 2.dp,
-                                color = Color.White
-                            )
-                        } else {
-                            Icon(
-                                Icons.Default.PictureAsPdf,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text("Export PDF")
-                        }
-                    }
-                },
-                dismissButton = {
-                    OutlinedButton(
-                        onClick = { showReportDialog.value = false },
-                        enabled = !isExportingPdf,
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text("Close")
                     }
                 }
-            )
-        }
-
-        // ── FULL-SCREEN IMAGE PREVIEW (replaces the old small AlertDialog) ──
-        fullScreenImageUri?.let { uri ->
-            FullScreenImageDialog(uriStr = uri, onDismiss = { fullScreenImageUri = null })
-        }
-
-        if (showAllRequests) {
-            Dialog(
-                onDismissRequest = { showAllRequests = false },
-                properties = DialogProperties(
-                    usePlatformDefaultWidth = false
-                )
-            ) {
-                Surface(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .statusBarsPadding()
-                        .navigationBarsPadding(),
-                    color = RFColors.SurfaceBg
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        isExportingPdf = true
+                        val success = runCatching { exportIncidentReportPdf(context, generatedReport.value) }.isSuccess
+                        isExportingPdf = false
+                        Toast.makeText(context, if (success) "PDF ready to share" else "PDF export failed", Toast.LENGTH_SHORT).show()
+                    },
+                    enabled = !isExportingPdf,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = RFColors.Primary)
                 ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
+                    if (isExportingPdf) CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                    else {
+                        Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Export PDF")
+                    }
+                }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = { showReportDialog.value = false },
+                    enabled = !isExportingPdf,
+                    shape = RoundedCornerShape(12.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
+                ) {
+                    Text("Close", color = RFColors.TextSecondary)
+                }
+            }
+        )
+    }
+
+    fullScreenImageUri?.let { uri ->
+        FullScreenImageDialog(uriStr = uri, onDismiss = { fullScreenImageUri = null })
+    }
+
+    if (showAllRequests) {
+        Dialog(
+            onDismissRequest = { showAllRequests = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
+        ) {
+            Surface(modifier = Modifier.fillMaxSize(), color = RFColors.SurfaceBg) {
+                Column(modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+                    Surface(color = RFColors.Bg, shadowElevation = 2.dp) {
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 15.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    "All Resource Requests",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 20.sp,
-                                    color = RFColors.Text
-                                )
-                                Text(
-                                    "${visibleResourceRequests.size} total requests",
-                                    fontSize = 13.sp,
-                                    color = RFColors.TextSecondary
-                                )
+                                Text("Resource Requests", color = RFColors.Text, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                                Text("${visibleResourceRequests.size} requests • latest first", color = RFColors.TextSecondary, fontSize = 11.sp)
                             }
-
                             IconButton(onClick = { showAllRequests = false }) {
-                                Icon(
-                                    Icons.Default.Close,
-                                    contentDescription = "Close",
-                                    tint = RFColors.TextSecondary
-                                )
+                                Icon(Icons.Default.Close, contentDescription = "Close", tint = RFColors.TextSecondary)
                             }
                         }
+                    }
 
-                        // ── View All Requests dialog ────────────────────────────────────────────────
-                        OutlinedTextField(
-                            value = requestSearch,
-                            onValueChange = {
-                                requestSearch = it
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(14.dp),
-                            singleLine = true,
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Default.Search,
-                                    contentDescription = null
-                                )
-                            },
-                            placeholder = {
-                                Text("Search resource name or ID")
-                            }
+                    OutlinedTextField(
+                        value = requestSearch,
+                        onValueChange = { requestSearch = it },
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                        trailingIcon = if (requestSearch.isNotBlank()) {
+                            { IconButton(onClick = { requestSearch = "" }) { Icon(Icons.Default.Close, contentDescription = "Clear") } }
+                        } else null,
+                        placeholder = { Text("Search resource, category, or request ID") },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = RFColors.InputBg,
+                            unfocusedContainerColor = RFColors.InputBg,
+                            focusedTextColor = RFColors.Text,
+                            unfocusedTextColor = RFColors.Text,
+                            focusedBorderColor = RFColors.Primary,
+                            unfocusedBorderColor = RFColors.Border,
+                            cursorColor = RFColors.Primary
                         )
+                    )
 
-                        LazyColumn(
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
-                            contentPadding = PaddingValues(bottom = 20.dp)
-                        ) {
-                            if (filteredRequests.isEmpty()) {
-                                item {
-                                    Card(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        shape = RoundedCornerShape(16.dp)
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+                        verticalArrangement = Arrangement.spacedBy(9.dp)
+                    ) {
+                        if (filteredRequests.isEmpty()) {
+                            item {
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(16.dp),
+                                    colors = CardDefaults.cardColors(containerColor = RFColors.Bg),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
+                                ) {
+                                    Column(
+                                        modifier = Modifier.fillMaxWidth().padding(24.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
                                     ) {
-                                        Column(
-                                            modifier = Modifier.padding(20.dp),
-                                            horizontalAlignment = Alignment.CenterHorizontally
-                                        ) {
-                                            Icon(
-                                                Icons.Default.SearchOff,
-                                                contentDescription = null,
-                                                tint = RFColors.TextSecondary
-                                            )
-
-                                            Spacer(Modifier.height(8.dp))
-
-                                            Text(
-                                                "No matching requests found",
-                                                color = RFColors.TextSecondary
-                                            )
-                                        }
+                                        Icon(Icons.Default.SearchOff, contentDescription = null, tint = RFColors.TextMuted)
+                                        Spacer(Modifier.height(7.dp))
+                                        Text("No matching requests", color = RFColors.TextSecondary)
                                     }
                                 }
                             }
-
-                            items(filteredRequests.size) { index ->
-                                val request = filteredRequests[index]
-
+                        } else {
+                            items(filteredRequests, key = { it.id }) { request ->
                                 ResourceRequestHistoryCard(
                                     request = request,
-                                    onClick = {
-                                        selectedRequest = request
-                                    },
-                                    onCancel = {
-                                        requestToCancel = request
-                                    },
+                                    onClick = { selectedRequest = request },
+                                    onCancel = { requestToCancel = request },
                                     isLatest = request.id == latestResourceRequest?.id
                                 )
                             }
@@ -2679,83 +3758,64 @@ fun ReviewsFeedbackScreen() {
                 }
             }
         }
+    }
 
-        requestToCancel?.let { req ->
-            AlertDialog(
-                onDismissRequest = {
-                    requestToCancel = null
-                },
-                shape = RoundedCornerShape(20.dp),
-                containerColor = RFColors.Bg,
-                title = {
-                    Text(
-                        "Cancel Request?",
-                        fontWeight = FontWeight.Bold,
-                        color = RFColors.Text
-                    )
-                },
-                text = {
-                    Text(
-                        "Are you sure you want to cancel ${req.resourceName}? This action will mark the request as Cancelled.",
-                        fontSize = 14.sp,
-                        color = RFColors.TextSecondary
-                    )
-                },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            cancelResourceRequest(req.id)
-                            requestToCancel = null
-                            selectedRequest = null
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFFD32F2F),
-                            contentColor = Color.White
-                        ),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text("Yes, Cancel")
-                    }
-                },
-                dismissButton = {
-                    OutlinedButton(
-                        onClick = {
-                            requestToCancel = null
-                        },
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text("Keep Request")
-                    }
+    requestToCancel?.let { request ->
+        AlertDialog(
+            onDismissRequest = { requestToCancel = null },
+            containerColor = RFColors.Bg,
+            shape = RoundedCornerShape(20.dp),
+            title = { Text("Cancel Resource Request?", color = RFColors.Text, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "Cancel ${request.resourceName}? Dispatch will see this request as cancelled.",
+                    color = RFColors.TextSecondary,
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        cancelResourceRequest(request.id)
+                        requestToCancel = null
+                        selectedRequest = null
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = RFColors.Danger)
+                ) {
+                    Text("Cancel Request")
                 }
-            )
-        }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = { requestToCancel = null },
+                    shape = RoundedCornerShape(12.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
+                ) {
+                    Text("Keep Request", color = RFColors.TextSecondary)
+                }
+            }
+        )
+    }
 
-        selectedRequest?.let { req ->
-            ResourceRequestDetailsSheet(
-                request = req,
-                onDismiss = {
-                    selectedRequest = null
-                },
-                onCancel = {
-                    requestToCancel = req
-                }
-            )
-        }
+    selectedRequest?.let { request ->
+        ResourceRequestDetailsSheet(
+            request = request,
+            onDismiss = { selectedRequest = null },
+            onCancel = { requestToCancel = request }
+        )
+    }
 
-        // ── RESOURCE REQUEST FORM SHEET ───────────────────────────────────
-        if (showResourceForm) {
-            ResourceRequestFullScreenDialog(
-                responderId = responderId,
-                responderName = responderName,
-                onDismiss = {
-                    showResourceForm = false
-                },
-                onSubmit = {
-                    showResourceForm = false
-                    requestRefreshKey++
-                }
-            )
-        }
+    if (showResourceForm) {
+        ResourceRequestFullScreenDialog(
+            responderId = responderId,
+            responderName = responderName,
+            onDismiss = { showResourceForm = false },
+            onSubmit = {
+                showResourceForm = false
+                requestRefreshKey++
+            }
+        )
     }
 }
 
@@ -2852,39 +3912,87 @@ private fun AnalyticsCard(
     }
 }
 
+private fun wrapPdfLine(text: String, paint: Paint, maxWidth: Float): List<String> {
+    if (text.isBlank()) return listOf("")
+
+    val result = mutableListOf<String>()
+    var remaining = text.trimEnd()
+
+    while (remaining.isNotEmpty()) {
+        val measured = paint.breakText(remaining, true, maxWidth, null)
+            .coerceAtLeast(1)
+            .coerceAtMost(remaining.length)
+
+        var endIndex = measured
+        if (endIndex < remaining.length) {
+            val lastSpace = remaining.lastIndexOf(' ', startIndex = endIndex - 1)
+            if (lastSpace > 0) endIndex = lastSpace
+        }
+
+        val line = remaining.substring(0, endIndex).trimEnd()
+        result += line
+        remaining = remaining.substring(endIndex).trimStart()
+    }
+
+    return result
+}
+
 private fun exportIncidentReportPdf(
     context: Context,
     reportText: String
 ) {
     val pdfDocument = PdfDocument()
-    val pageInfo = PdfDocument.PageInfo.Builder(595, 842, 1).create()
-    val page = pdfDocument.startPage(pageInfo)
+    val pageWidth = 595
+    val pageHeight = 842
+    val margin = 42f
+    val lineHeight = 18f
+    val maxTextWidth = pageWidth - (margin * 2)
 
-    val canvas = page.canvas
-    val paint = Paint().apply {
-        textSize = 14f
+    val bodyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textSize = 11.5f
         color = android.graphics.Color.BLACK
     }
-
-    var y = 60f
-    reportText.lines().forEach { line ->
-        canvas.drawText(line, 40f, y, paint)
-        y += 22f
+    val footerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textSize = 9f
+        color = android.graphics.Color.DKGRAY
     }
 
-    pdfDocument.finishPage(page)
+    val wrappedLines = reportText.lines().flatMap { line ->
+        wrapPdfLine(line, bodyPaint, maxTextWidth)
+    }
+    val usableHeight = pageHeight - (margin * 2) - 18f
+    val linesPerPage = (usableHeight / lineHeight).toInt().coerceAtLeast(1)
+    val pages = wrappedLines.chunked(linesPerPage).ifEmpty { listOf(listOf("")) }
 
-    val file = File(
-        context.cacheDir,
-        "incident_report_${System.currentTimeMillis()}.pdf"
-    )
+    pages.forEachIndexed { pageIndex, lines ->
+        val pageInfo = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageIndex + 1).create()
+        val page = pdfDocument.startPage(pageInfo)
+        val canvas = page.canvas
+        var y = margin
 
-    pdfDocument.writeTo(FileOutputStream(file))
+        lines.forEach { line ->
+            canvas.drawText(line, margin, y, bodyPaint)
+            y += lineHeight
+        }
+
+        val footer = "Page ${pageIndex + 1} of ${pages.size}"
+        canvas.drawText(
+            footer,
+            pageWidth - margin - footerPaint.measureText(footer),
+            pageHeight - 24f,
+            footerPaint
+        )
+        pdfDocument.finishPage(page)
+    }
+
+    val reportDirectory = File(context.cacheDir, "shared_reports").apply { mkdirs() }
+    val file = File(reportDirectory, "post_incident_report_${System.currentTimeMillis()}.pdf")
+    FileOutputStream(file).use { output -> pdfDocument.writeTo(output) }
     pdfDocument.close()
 
     val uri = FileProvider.getUriForFile(
         context,
-        "${context.packageName}.provider",
+        "${context.packageName}.fileprovider",
         file
     )
 
@@ -2895,7 +4003,7 @@ private fun exportIncidentReportPdf(
     }
 
     context.startActivity(
-        android.content.Intent.createChooser(intent, "Share Incident Report")
+        android.content.Intent.createChooser(intent, "Share Post-Incident Document")
     )
 }
 
@@ -2937,83 +4045,25 @@ private fun InfoRow(
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-
         Text(
             label,
-            color = RFColors.TextSecondary
+            color = RFColors.TextSecondary,
+            fontSize = 12.sp,
+            modifier = Modifier.weight(0.8f)
         )
-
         Text(
             value,
             fontWeight = FontWeight.SemiBold,
-            color = RFColors.Text
+            color = RFColors.Text,
+            fontSize = 12.sp,
+            textAlign = TextAlign.End,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1.2f)
         )
-    }
-}
-
-private fun parseSavedResourceRequests(raw: Set<String>): List<SavedResourceRequest> {
-    return raw.mapNotNull { json ->
-        runCatching {
-            fun pick(key: String): String {
-                return Regex("\"$key\"\\s*:\\s*\"(.*?)\"")
-                    .find(json)
-                    ?.groupValues
-                    ?.get(1)
-                    ?: ""
-            }
-
-            fun pickNumber(key: String): String {
-                return Regex("\"$key\"\\s*:\\s*(\\d+)")
-                    .find(json)
-                    ?.groupValues
-                    ?.get(1)
-                    ?: "0"
-            }
-
-            SavedResourceRequest(
-                id = pick("id"),
-                resourceName = pick("resourceName"),
-                category = pick("category"),
-                quantity = pickNumber("quantity"),
-                urgency = pick("urgency"),
-                status = pick("status").ifBlank { "Pending" },
-                timestamp = pickNumber("timestamp").toLongOrNull() ?: 0L
-            )
-        }.getOrNull()
-    }.sortedByDescending { it.timestamp }
-}
-
-private fun parseSavedReviewRatings(raw: Set<String>): List<SavedReviewRating> {
-    return raw.mapNotNull { json ->
-        runCatching {
-            fun pick(key: String): String {
-                return Regex("\"$key\"\\s*:\\s*\"(.*?)\"")
-                    .find(json)
-                    ?.groupValues
-                    ?.get(1)
-                    ?: ""
-            }
-
-            fun pickNumber(key: String): Int {
-                return Regex("\"$key\"\\s*:\\s*(\\d+)")
-                    .find(json)
-                    ?.groupValues
-                    ?.get(1)
-                    ?.toIntOrNull()
-                    ?: 0
-            }
-
-            SavedReviewRating(
-                incidentId = pick("incidentId"),
-                responseRating = pickNumber("responseRating"),
-                communicationRating = pickNumber("communicationRating"),
-                professionalismRating = pickNumber("professionalismRating"),
-                outcome = pick("outcome"),
-                timestamp = pickNumber("timestamp").toLong()
-            )
-        }.getOrNull()
     }
 }
 
@@ -3091,6 +4141,11 @@ private fun ResourceRequestHistoryCard(
                         "${request.category} • ${request.urgency} urgency",
                         color = RFColors.TextSecondary,
                         fontSize = 12.sp
+                    )
+                    Text(
+                        formatRequestTimestamp(request.createdAt),
+                        color = RFColors.TextMuted,
+                        fontSize = 10.sp
                     )
                 }
 
@@ -3235,6 +4290,17 @@ private fun ResourceRequestDetailsSheet(
                     InfoRow("Quantity", request.quantity)
                     InfoRow("Urgency", request.urgency)
                     InfoRow("Status", request.status)
+                    InfoRow(
+                        "Incident",
+                        request.incidentId.takeIf { it.isNotBlank() && !it.equals("N/A", true) }
+                            ?: "Not linked"
+                    )
+                    InfoRow("Requested", formatRequestTimestamp(request.createdAt))
+                    if (request.updatedAt > request.createdAt) {
+                        InfoRow("Last updated", formatRequestTimestamp(request.updatedAt))
+                    }
+                    InfoRow("Location", request.location.ifBlank { "Not provided" })
+                    InfoRow("Notes", request.notes.ifBlank { "None" })
                 }
             }
 

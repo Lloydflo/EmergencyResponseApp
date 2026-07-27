@@ -3,10 +3,18 @@ package com.ers.emergencyresponseapp.network
 import com.google.gson.annotations.SerializedName
 
 data class UserDto(
+
     val id: Int,
+
     val name: String? = null,
+
+    @SerializedName("username")
+    val username: String? = null,
+
     val email: String,
+
     val role: String? = null,
+
     val department: String? = null,
 
     @SerializedName("unit_code")
@@ -22,29 +30,15 @@ data class UserDto(
     val profileImagePath: String? = null
 )
 
-data class LoginResponse(
-    val success: Boolean,
-    val message: String,
-    val user: UserDto? = null
-)
-
 data class SendOtpResponse(
     val success: Boolean,
-    val message: String,
-    val otp: String? = null
+    val message: String
 )
 
 data class VerifyOtpResponse(
     val success: Boolean,
     val message: String,
     val user: UserDto? = null
-)
-
-data class UpsertUserResponse(
-    val success: Boolean,
-    val message: String,
-    val user: UserDto? = null,
-    val user_id: Int? = null
 )
 
 data class UploadProfileImageResponse(
@@ -55,27 +49,13 @@ data class UploadProfileImageResponse(
     val profile_image_url: String? = null
 )
 
-
-data class IncidentDto(
-    val id: Long,
-    val reference_no: String? = null,
-    val type: String? = null,
-    val priority: String? = null,
-    val status: String? = null,
-    val title: String? = null,
-    val description: String? = null,
-    val location_address: String? = null,
-    val latitude: Double? = null,
-    val longitude: Double? = null
-)
-
-data class IncidentsResponse(
-    val success: Boolean,
-    val message: String,
-    val incidents: List<IncidentDto> = emptyList()
-)
-
 data class UpdateProfileResponse(
     val success: Boolean,
     val message: String? = null
+)
+
+data class LogoutResponse(
+    val success: Boolean,
+    val message: String? = null,
+    val user_id: Int? = null
 )

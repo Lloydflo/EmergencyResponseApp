@@ -1,14 +1,19 @@
 package com.ers.emergencyresponseapp
 
+import android.content.Context
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.ers.emergencyresponseapp.firebase.repository.FirebaseChatRepository  // ← NEW
+import com.ers.emergencyresponseapp.firebase.repository.FirebaseChatRepository
 import com.ers.emergencyresponseapp.network.RetrofitProvider
+import com.ers.emergencyresponseapp.network.UserDto
+import com.ers.emergencyresponseapp.notification.PushTokenManager
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import com.ers.emergencyresponseapp.network.UserDto
 
 
 data class LoginApiUiState(
@@ -24,22 +29,22 @@ data class LoginApiUiState(
 )
 
 class LoginApiViewModel : ViewModel() {
-
     private val _uiState = MutableStateFlow(LoginApiUiState())
     val uiState: StateFlow<LoginApiUiState> = _uiState.asStateFlow()
 
-    // ── Firebase repository instance ──────────────────────────────────────────
-    // We create it once here so we can reuse it in any function
-    private val firebaseChatRepo = FirebaseChatRepository()   // ← NEW
+    private val firebasePresenceRepository = FirebaseChatRepository()
+    private var resendTimerJob: Job? = null
 
     fun onEmailChanged(value: String) {
-        val clean = value.trim().replace("'", "")
-        _uiState.value = _uiState.value.copy(email = clean, error = null)
+        _uiState.value = _uiState.value.copy(
+            email = value.trim().replace("'", ""),
+            error = null
+        )
     }
 
     fun onOtpChanged(value: String) {
         _uiState.value = _uiState.value.copy(
-            otp   = value.filter(Char::isDigit).take(6),
+            otp = value.filter(Char::isDigit).take(6),
             error = null
         )
     }
@@ -53,31 +58,30 @@ class LoginApiViewModel : ViewModel() {
 
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(loading = true, message = null, error = null)
-            try {
-                val response = RetrofitProvider.authApi.sendOtp(email)
-                _uiState.value = _uiState.value.copy(
-                    loading  = false,
-                    email    = email,
-                    otpSent  = response.success,
-                    message  = response.message,
-                    error    = if (response.success) null else response.message
-                )
-                if (response.success) {
-                    startResendTimer()
+            runCatching { RetrofitProvider.authApi.sendOtp(email) }
+                .onSuccess { response ->
+                    _uiState.value = _uiState.value.copy(
+                        loading = false,
+                        email = email,
+                        otpSent = response.success,
+                        otp = if (response.success) "" else _uiState.value.otp,
+                        message = response.message,
+                        error = response.message.takeUnless { response.success }
+                    )
+                    if (response.success) startResendTimer()
                 }
-            } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(
-                    loading = false,
-                    error   = e.message ?: "Failed to send OTP"
-                )
-            }
+                .onFailure { error ->
+                    _uiState.value = _uiState.value.copy(
+                        loading = false,
+                        error = error.message ?: "Failed to send OTP"
+                    )
+                }
         }
     }
 
-    fun verifyOtp(context: android.content.Context, onSuccess: (String) -> Unit) {
+    fun verifyOtp(context: Context, onSuccess: (String) -> Unit) {
         val email = _uiState.value.email.trim()
-        val otp   = _uiState.value.otp.trim()
-
+        val otp = _uiState.value.otp.trim()
         if (email.isBlank() || otp.length != 6) {
             _uiState.value = _uiState.value.copy(error = "Enter a valid email and 6-digit OTP")
             return
@@ -87,158 +91,142 @@ class LoginApiViewModel : ViewModel() {
             _uiState.value = _uiState.value.copy(loading = true, message = null, error = null)
             try {
                 val response = RetrofitProvider.authApi.verifyOtp(email, otp)
-                val success  = response.success
-
-                _uiState.value = _uiState.value.copy(
-                    loading      = false,
-                    verified     = success,
-                    message      = response.message,
-                    error        = if (success) null else response.message,
-                    loggedInUser = if (success) response.user else null
-                )
-
-                if (success) {
-                    // ── ✅ LOGIN SUCCEEDED — save user to Firebase ─────────────
-                    // response.user is your UserDto from MySQL.
-                    // We push the user's info to Firebase so chat partners
-                    // can see their name, department, and online status.
-                    val user = response.user
-                    android.util.Log.d("LOGIN_DEBUG",
-                        "id=${user?.id} name=${user?.name} role=${user?.role} department=${user?.department}")
-                    if (user != null) {
-
-                        // ── ✅ NEW: persist resolved profile photo URL (or null) on EVERY login ──
-                        val resolvedPhotoUrl = resolveProfileImageUrl(user.profileImagePath)
-                        context.applicationContext
-                            .getSharedPreferences("user_prefs", android.content.Context.MODE_PRIVATE)
-                            .edit()
-                            .putString("user_id", user.id.toString())
-                            .apply()
-                        context.applicationContext
-                            .getSharedPreferences("ers_prefs", android.content.Context.MODE_PRIVATE)
-                            .edit()
-                            .putString("account_photo", resolvedPhotoUrl)
-                            .apply()
-                        // ── end NEW ──
-
-                        viewModelScope.launch {
-                        firebaseChatRepo.saveUserToFirebase(
-                            userId     = user.id.toString(),        // MySQL user ID
-                            fullName   = user.name ?: "",           // UserDto uses "name" not "fullName"
-                            email      = user.email,                // String (non-nullable in UserDto)
-                            department = user.department?.takeIf { it.isNotBlank() }
-                                ?: user.role?.takeIf { it.isNotBlank() }
-                                ?: ""     // e.g. "Fire", "Medical", "Police"
-                        )
-                        // Mark this user as Online in Firebase
-                        firebaseChatRepo.setOnlineStatus(
-                            userId   = user.id.toString(),
-                            isOnline = true
-                        )
-                        }
-                        
-                        // ── ✅ UPSERT USER TO MYSQL - Persist responder profile ─────────────
-                        try {
-                            val upsertResponse = RetrofitProvider.authApi.upsertUser(
-                                id = user.id,
-                                email = user.email,
-                                name = user.name,
-                                department = user.department,
-                                role = user.role,
-                                status = "active",
-                                isActive = 1,
-                                unitCode = user.unitCode,
-                                unitType = user.unitType,
-                                vehiclePlate = null,
-                                unitStatus = user.unitStatus,
-                                lastLogin = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())
-                            )
-                            if (upsertResponse.success) {
-                                android.util.Log.d("UPSERT_DEBUG", "User profile persisted: ${upsertResponse.message}")
-                            } else {
-                                android.util.Log.e("UPSERT_DEBUG", "Failed to persist profile: ${upsertResponse.message}")
-                            }
-                        } catch (e: Exception) {
-                            android.util.Log.e("UPSERT_DEBUG", "Error upserting user: ${e.message}")
-                        }
-                        // ── end of upsert code ───────────────────────────────────
-                    }
-                    // ── end of Firebase code ───────────────────────────────────
-
-                    onSuccess(email)   // your existing navigation call — unchanged
+                val user = response.user
+                if (!response.success || user == null || user.id <= 0) {
+                    _uiState.value = _uiState.value.copy(
+                        loading = false,
+                        verified = false,
+                        loggedInUser = null,
+                        error = response.message.ifBlank { "The server did not return a valid responder account." }
+                    )
+                    return@launch
                 }
 
-            } catch (e: Exception) {
                 _uiState.value = _uiState.value.copy(
                     loading = false,
-                    error   = e.message ?: "OTP verification failed"
+                    verified = true,
+                    message = response.message,
+                    error = null,
+                    loggedInUser = user
+                )
+
+                val resolvedPhotoUrl = resolveProfileImageUrl(user.profileImagePath)
+                context.applicationContext
+                    .getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
+                    .edit()
+                    .putString("user_id", user.id.toString())
+                    .apply()
+                context.applicationContext
+                    .getSharedPreferences("ers_prefs", Context.MODE_PRIVATE)
+                    .edit()
+                    .apply {
+
+                        putString(
+                            "account_full_name",
+                            user.name.orEmpty()
+                        )
+
+                        putString(
+                            "account_username",
+                            user.username?.takeIf { it.isNotBlank() }
+                                ?: user.name.orEmpty()
+                        )
+
+                        putString(
+                            "account_email",
+                            user.email
+                        )
+
+                        putString(
+                            "department",
+                            user.department.orEmpty()
+                        )
+
+                        putString(
+                            "unit_code",
+                            user.unitCode.orEmpty()
+                        )
+
+                        putString(
+                            "unit_type",
+                            user.unitType.orEmpty()
+                        )
+
+                        putString(
+                            "unit_status",
+                            user.unitStatus.orEmpty()
+                        )
+
+                        if (resolvedPhotoUrl.isNullOrBlank())
+                            remove("account_photo")
+                        else
+                            putString("account_photo", resolvedPhotoUrl)
+
+                    }
+                    .apply()
+
+                runCatching {
+                    firebasePresenceRepository.saveUserToFirebase(
+                        userId = user.id.toString(),
+                        fullName = user.name.orEmpty(),
+                        email = user.email,
+                        department = user.department?.takeIf { it.isNotBlank() }
+                            ?: user.role.orEmpty()
+                    )
+                }.onFailure { error ->
+                    // MySQL login remains authoritative; presence can recover on next app start.
+                    Log.e("Login", "Firebase responder presence sync failed", error)
+                }
+
+                viewModelScope.launch {
+                    PushTokenManager.registerCurrentToken(
+                        context = context.applicationContext,
+                        responderId = user.id
+                    )
+                }
+
+                resendTimerJob?.cancel()
+                onSuccess(email)
+            } catch (error: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    loading = false,
+                    verified = false,
+                    error = error.message ?: "OTP verification failed"
                 )
             }
         }
     }
 
     private fun resolveProfileImageUrl(path: String?): String? {
-        if (path.isNullOrBlank()) return null
-        return if (path.startsWith("http", ignoreCase = true)) path
-        else "https://emergency-response.alertaraqc.com/${path.trimStart('/')}"
+        val clean = path?.trim().orEmpty()
+        if (clean.isBlank()) return null
+        return if (clean.startsWith("http://", true) || clean.startsWith("https://", true)) {
+            clean
+        } else {
+            BuildConfig.BASE_URL.trimEnd('/') + "/" + clean.trimStart('/')
+        }
     }
 
     private fun startResendTimer() {
-        viewModelScope.launch {
-            for (sec in 180 downTo 0) {
-                _uiState.value = _uiState.value.copy(resendSeconds = sec)
-                kotlinx.coroutines.delay(1000)
-            }
-        }
-    }
-
-    fun loginThenSendOtp() {
-        val email = _uiState.value.email.trim().replace("'", "")
-        if (email.isBlank()) {
-            _uiState.value = _uiState.value.copy(error = "Email is required")
-            return
-        }
-
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(loading = true, message = null, error = null)
-            try {
-                // 1) LOGIN CHECK (email exists)
-                val loginRes = RetrofitProvider.authApi.login(email)
-                if (!loginRes.success) {
-                    _uiState.value = _uiState.value.copy(
-                        loading  = false,
-                        otpSent  = false,
-                        verified = false,
-                        message  = loginRes.message,
-                        error    = loginRes.message
-                    )
-                    return@launch
-                }
-
-                // 2) SEND OTP
-                val otpRes = RetrofitProvider.authApi.sendOtp(email)
-                _uiState.value = _uiState.value.copy(
-                    loading = false,
-                    email   = email,
-                    otpSent = otpRes.success,
-                    message = otpRes.message,
-                    error   = if (otpRes.success) null else otpRes.message
-                )
-            } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(
-                    loading = false,
-                    error   = e.message ?: "Network error"
-                )
+        resendTimerJob?.cancel()
+        resendTimerJob = viewModelScope.launch {
+            // Server OTP lifetime is five minutes.
+            for (seconds in 300 downTo 0) {
+                _uiState.value = _uiState.value.copy(resendSeconds = seconds)
+                delay(1_000)
             }
         }
     }
 
     fun backToEmailStep() {
+        resendTimerJob?.cancel()
         _uiState.value = _uiState.value.copy(
             otpSent = false,
-            otp     = "",
-            error   = null,
-            message = null
+            otp = "",
+            verified = false,
+            error = null,
+            message = null,
+            resendSeconds = 0
         )
     }
 }

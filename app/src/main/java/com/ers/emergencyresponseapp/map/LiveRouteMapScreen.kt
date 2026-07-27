@@ -66,10 +66,8 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.ers.emergencyresponseapp.BuildConfig
-import com.ers.emergencyresponseapp.analytics.RouteHistoryStore
-import com.ers.emergencyresponseapp.features.assigned.AssignedIncidentsViewModel
+import com.ers.emergencyresponseapp.data.IncidentRepository
 import com.ers.emergencyresponseapp.network.AlternativeRouteRequestBody
 import com.ers.emergencyresponseapp.network.MarkRouteArrivedRequest
 import com.ers.emergencyresponseapp.network.RetrofitProvider
@@ -110,6 +108,21 @@ import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
 
+private const val OPEN_STREET_MAP_RASTER_STYLE = """{
+  "version": 8,
+  "sources": {
+    "osm": {
+      "type": "raster",
+      "tiles": ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+      "tileSize": 256,
+      "attribution": "© OpenStreetMap contributors"
+    }
+  },
+  "layers": [
+    {"id": "osm", "type": "raster", "source": "osm", "minzoom": 0, "maxzoom": 19}
+  ]
+}"""
+
 /**
  * Live navigation map screen showing the responder's current GPS position,
  * the incident destination, a road-following OSRM route, and an optional
@@ -130,7 +143,7 @@ fun LiveRouteMapScreen(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val assignedVm: AssignedIncidentsViewModel = viewModel()
+    val incidentRepository = remember { IncidentRepository() }
     val scope = rememberCoroutineScope()
 
     // Live GPS state.
@@ -175,6 +188,7 @@ fun LiveRouteMapScreen(
     // On-scene and dialog state.
     var isNearDestination by remember { mutableStateOf(false) }
     var onSceneSubmitted by remember { mutableStateOf(false) }
+    var isCancellingRoute by remember { mutableStateOf(false) }
     var showExitConfirmDialog by remember { mutableStateOf(false) }
 
     BackHandler(enabled = !showExitConfirmDialog) {
@@ -412,65 +426,129 @@ fun LiveRouteMapScreen(
 
     fun confirmOnScene() {
         if (onSceneSubmitted) return
-        onSceneSubmitted = true
 
-        assignedVm.updateStatus(
-            assignmentId = assignmentId ?: incidentId ?: "",
-            status = "on_scene",
-            responderId = responderId
-        )
+        val assignmentKey = assignmentId?.takeIf { it.isNotBlank() }
+            ?: incidentId?.takeIf { it.isNotBlank() }
+        val routeRecordId = incidentId?.toIntOrNull()
 
-        context.stopService(
-            Intent(context, RouteMonitoringService::class.java)
-        )
-
-        context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
-            .edit()
-            .putBoolean("pending_en_route_check", false)
-            .remove("pending_en_route_incident_id")
-            .apply()
-
-        incidentId?.let { id ->
-            RouteHistoryStore.completeRoute(context, id)
+        if (assignmentKey == null || responderId <= 0) {
+            Toast.makeText(
+                context,
+                "Unable to report on-scene: assignment information is missing.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
         }
 
+        onSceneSubmitted = true
         scope.launch {
             try {
-                val response = RetrofitProvider.incidentApi.markRouteArrived(
-                    MarkRouteArrivedRequest(
-                        incident_id = incidentId?.toIntOrNull() ?: 0,
-                        responder_id = responderId
-                    )
+                // This live PHP call is the authoritative status transition. Do
+                // not stop tracking or leave the screen until it succeeds.
+                incidentRepository.updateAssignmentStatus(
+                    assignmentId = assignmentKey,
+                    responderId = responderId,
+                    status = "on_scene"
                 )
-
+            } catch (cancelled: CancellationException) {
+                onSceneSubmitted = false
+                throw cancelled
+            } catch (error: Exception) {
+                onSceneSubmitted = false
+                Log.e("LiveGPS", "On-scene status update failed", error)
                 Toast.makeText(
                     context,
-                    if (response.success) {
-                        "On-scene reported to command"
-                    } else {
-                        response.message ?: "Arrival already recorded"
-                    },
-                    Toast.LENGTH_SHORT
+                    "On-scene was not submitted: ${error.message ?: "server unavailable"}",
+                    Toast.LENGTH_LONG
                 ).show()
+                return@launch
+            }
+
+            val routeSummaryMessage = if (routeRecordId != null && routeRecordId > 0) {
+                try {
+                    val response = RetrofitProvider.incidentApi.markRouteArrived(
+                        MarkRouteArrivedRequest(
+                            incident_id = routeRecordId,
+                            assignment_id = assignmentId?.toIntOrNull(),
+                            responder_id = responderId
+                        )
+                    )
+
+                    when {
+                        response.success -> "On-scene reported to command"
+                        response.message.orEmpty().contains("already recorded", ignoreCase = true) ->
+                            "On-scene reported; arrival was already recorded"
+                        else ->
+                            "On-scene reported; route summary was not saved: " +
+                                    response.message.orEmpty().ifBlank { "server rejected the route summary" }
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    Log.e("LiveGPS", "Route summary save failed", error)
+                    "On-scene reported; route summary could not be saved: " +
+                            (error.message ?: "server unavailable")
+                }
+            } else {
+                "On-scene reported; no route reference was available for analytics"
+            }
+
+            context.stopService(Intent(context, RouteMonitoringService::class.java))
+            context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean("pending_en_route_check", false)
+                .remove("pending_en_route_incident_id")
+                .apply()
+
+            Toast.makeText(context, routeSummaryMessage, Toast.LENGTH_LONG).show()
+            onBack()
+        }
+    }
+
+    fun cancelLiveRoute() {
+        if (isCancellingRoute) return
+
+        val assignmentKey = assignmentId?.takeIf { it.isNotBlank() }
+            ?: incidentId?.takeIf { it.isNotBlank() }
+        if (assignmentKey == null || responderId <= 0) {
+            Toast.makeText(
+                context,
+                "Unable to cancel route: assignment information is missing.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+
+        isCancellingRoute = true
+        scope.launch {
+            try {
+                incidentRepository.updateAssignmentStatus(
+                    assignmentId = assignmentKey,
+                    responderId = responderId,
+                    status = "received"
+                )
+
+                context.stopService(Intent(context, RouteMonitoringService::class.java))
+                context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
+                    .edit()
+                    .putBoolean("pending_en_route_check", false)
+                    .remove("pending_en_route_incident_id")
+                    .apply()
+
+                showExitConfirmDialog = false
+                onCancelRoute()
+                onBack()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                Log.e(
-                    "LiveGPS",
-                    "Route arrived save failed",
-                    error
-                )
-
                 Toast.makeText(
                     context,
-                    "Arrival was saved locally, but command could not be reached.",
+                    "Route was not cancelled: ${error.message ?: "server unavailable"}",
                     Toast.LENGTH_LONG
                 ).show()
+            } finally {
+                isCancellingRoute = false
             }
-
-            // Navigate only after the API attempt, otherwise this screen's
-            // coroutine scope would be cancelled before the request finishes.
-            onBack()
         }
     }
 
@@ -912,12 +990,22 @@ fun LiveRouteMapScreen(
                         mapLibreMap = map
                         styleReady = false
 
-                        val styleUrl =
-                            "https://api.maptiler.com/maps/streets-v2/style.json" +
-                                    "?key=${BuildConfig.MAPTILER_API_KEY}"
+                        val mapTilerKey = BuildConfig.MAPTILER_API_KEY.trim()
+                        val style = if (mapTilerKey.isNotBlank()) {
+                            Style.Builder().fromUri(
+                                "https://api.maptiler.com/maps/streets-v2/style.json" +
+                                        "?key=$mapTilerKey"
+                            )
+                        } else {
+                            Log.w(
+                                "LiveRouteMap",
+                                "MAPTILER_API_KEY is not configured; using the OSM raster fallback."
+                            )
+                            Style.Builder().fromJson(OPEN_STREET_MAP_RASTER_STYLE)
+                        }
 
-                        map.setStyle(styleUrl) { style ->
-                            setupRouteSource(style)
+                        map.setStyle(style) { loadedStyle ->
+                            setupRouteSource(loadedStyle)
                             styleReady = true
                         }
 
@@ -1311,47 +1399,19 @@ fun LiveRouteMapScreen(
                     ) {
                         OutlinedButton(
                             modifier = Modifier.weight(1f),
-                            onClick = {
-                                showExitConfirmDialog = false
-
-                                context.stopService(
-                                    Intent(
-                                        context,
-                                        RouteMonitoringService::class.java
-                                    )
-                                )
-
-                                context.getSharedPreferences(
-                                    "nav_prefs",
-                                    Context.MODE_PRIVATE
-                                )
-                                    .edit()
-                                    .putBoolean(
-                                        "pending_en_route_check",
-                                        false
-                                    )
-                                    .remove(
-                                        "pending_en_route_incident_id"
-                                    )
-                                    .apply()
-
-                                if (
-                                    !incidentId.isNullOrBlank() &&
-                                    responderId > 0
-                                ) {
-                                    assignedVm.updateStatus(
-                                        assignmentId =
-                                        assignmentId ?: incidentId,
-                                        status = "received",
-                                        responderId = responderId
-                                    )
-                                }
-
-                                onCancelRoute()
-                                onBack()
-                            }
+                            enabled = !isCancellingRoute && !onSceneSubmitted,
+                            onClick = { cancelLiveRoute() }
                         ) {
-                            Text("Cancel Route")
+                            if (isCancellingRoute) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Cancelling...")
+                            } else {
+                                Text("Cancel Route")
+                            }
                         }
 
                         Button(

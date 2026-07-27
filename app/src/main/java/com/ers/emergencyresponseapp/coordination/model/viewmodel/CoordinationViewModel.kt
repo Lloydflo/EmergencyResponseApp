@@ -18,10 +18,14 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.ers.emergencyresponseapp.DepartmentInfo
+import com.ers.emergencyresponseapp.data.NotificationRepository
+import com.ers.emergencyresponseapp.BuildConfig
+import com.ers.emergencyresponseapp.network.RetrofitProvider
 import com.ers.emergencyresponseapp.AppState
 import com.ers.emergencyresponseapp.AppScreenTracker
 import com.ers.emergencyresponseapp.MainActivity
 import com.ers.emergencyresponseapp.R
+import com.ers.emergencyresponseapp.notification.AppNotificationManager
 import com.ers.emergencyresponseapp.ResponderBrief
 import com.ers.emergencyresponseapp.coordination.model.ChatMessage
 import com.ers.emergencyresponseapp.coordination.model.ChatThread
@@ -32,6 +36,8 @@ import com.ers.emergencyresponseapp.firebase.repository.FirebaseChatRepository
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.FirebaseDatabase
+import com.google.firebase.database.MutableData
+import com.google.firebase.database.Transaction
 import com.google.firebase.database.ValueEventListener
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -44,15 +50,47 @@ import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import android.provider.OpenableColumns
 import android.content.Context
 import java.util.concurrent.atomic.AtomicInteger
+import java.io.IOException
+import android.util.Log
 
 class CoordinationViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── Repositories ─────────────────────────────────────────────────────────
     private val firebaseRepo = FirebaseChatRepository()
+    private val notificationRepository = NotificationRepository()
     private val db = FirebaseDatabase.getInstance().reference
+    private val apiBaseUrl = BuildConfig.BASE_URL.trimEnd('/') + "/api/api_app/"
+    private val httpClient: OkHttpClient = RetrofitProvider.okHttpClient
+
+    private fun apiUrl(endpoint: String): String =
+        apiBaseUrl + endpoint.trimStart('/')
+
+    private fun executeJson(request: Request): JSONObject {
+        httpClient.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty().trim()
+            val json = runCatching { JSONObject(body) }.getOrElse {
+                throw IOException(
+                    "Invalid server response (${response.code})" +
+                            body.takeIf { it.isNotBlank() }
+                                ?.let { raw -> ": ${raw.take(180)}" }
+                                .orEmpty()
+                )
+            }
+
+            if (!response.isSuccessful) {
+                throw IOException(
+                    json.optString("message").ifBlank {
+                        "Request failed with HTTP ${response.code}"
+                    }
+                )
+            }
+            return json
+        }
+    }
 
     // ── UI State ──────────────────────────────────────────────────────────────
     val responders   = mutableStateListOf<ResponderBrief>()
@@ -63,6 +101,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
     val selectedDepartment = mutableStateOf<DepartmentInfo?>(null)
     val latestNotification = mutableStateOf<String?>(null)
     private val currentThread = mutableStateOf<ChatThread?>(null)
+    val activeThreadId: String? get() = currentThread.value?.id
 
     var isPeerTyping: Boolean by mutableStateOf(false)
         private set
@@ -83,6 +122,17 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
     private val groupMessagesRequestId = AtomicInteger(0)
     private val hasPrimedThread = mutableSetOf<String>()
     private val lastNotifiedMessageIdByThread = mutableMapOf<String, String>()
+
+    private data class DirectThreadPreview(
+        val lastMessage: String,
+        val lastMessageTime: Long
+    )
+
+    // /threads can arrive before /users (or vice versa). Keep the complete
+    // thread snapshot by thread ID and merge it into responders deterministically.
+    // This removes the previous asynchronous get() race that returned null.
+    private val directThreadPreviewByThreadId = mutableMapOf<String, DirectThreadPreview>()
+    private val privateUnreadByThreadId = mutableMapOf<String, Int>()
 
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -134,50 +184,208 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
+    private fun DataSnapshot.readLongChild(name: String): Long {
+        return when (val value = child(name).value) {
+            is Long -> value
+            is Int -> value.toLong()
+            is Double -> value.toLong()
+            is Float -> value.toLong()
+            is Number -> value.toLong()
+            is String -> value.toLongOrNull() ?: 0L
+            else -> 0L
+        }
+    }
+
+    private fun sortRespondersLatestFirst(
+        source: List<ResponderBrief>
+    ): List<ResponderBrief> {
+        return source.sortedWith(
+            compareByDescending<ResponderBrief> {
+                if (it.lastMessageTime > 0L || it.lastMessage.isNotBlank()) 1 else 0
+            }
+                .thenByDescending { it.lastMessageTime }
+                .thenByDescending { it.unreadCount }
+                .thenBy { it.fullName.lowercase() }
+        )
+    }
+
+    private fun applyThreadPreviewsToResponders() {
+        if (responders.isEmpty()) return
+
+        val merged = responders.map { responder ->
+            val threadId = buildChatId(myUserId, responder.id)
+            val preview = directThreadPreviewByThreadId[threadId]
+
+            if (preview != null) {
+                responder.copy(
+                    lastMessage = preview.lastMessage,
+                    lastMessageTime = preview.lastMessageTime
+                )
+            } else {
+                // The /threads snapshot is authoritative. A missing thread means
+                // this responder belongs in the Responders tab, not Recent Chats.
+                responder.copy(
+                    lastMessage = "",
+                    lastMessageTime = 0L
+                )
+            }
+        }
+
+        responders.clear()
+        responders.addAll(sortRespondersLatestFirst(merged))
+    }
+
+    private fun updateLocalThreadPreview(
+        threadId: String,
+        lastMessage: String,
+        lastMessageTime: Long
+    ) {
+        if (!threadId.startsWith("pm_")) return
+
+        directThreadPreviewByThreadId[threadId] = DirectThreadPreview(
+            lastMessage = lastMessage,
+            lastMessageTime = lastMessageTime
+        )
+
+        // Update only the affected row while the full /threads snapshot is
+        // still loading; do not temporarily erase other conversation previews.
+        val updated = responders.map { responder ->
+            if (buildChatId(myUserId, responder.id) == threadId) {
+                responder.copy(
+                    lastMessage = lastMessage,
+                    lastMessageTime = lastMessageTime
+                )
+            } else {
+                responder
+            }
+        }
+
+        responders.clear()
+        responders.addAll(sortRespondersLatestFirst(updated))
+    }
+
+    private fun incrementPrivateUnread(recipientId: String, threadId: String) {
+        if (recipientId.isBlank() || threadId.isBlank()) return
+
+        // Keep the per-user unread value inside the existing thread metadata.
+        // This works with the currently deployed /threads rules and avoids a
+        // second Firebase root that the existing project rules do not expose.
+        db.child("threads")
+            .child(threadId)
+            .child("unreadCounts")
+            .child(recipientId)
+            .runTransaction(object : Transaction.Handler {
+                override fun doTransaction(currentData: MutableData): Transaction.Result {
+                    val current = when (val value = currentData.value) {
+                        is Number -> value.toInt()
+                        is String -> value.toIntOrNull() ?: 0
+                        else -> 0
+                    }
+                    currentData.value = (current + 1).coerceAtMost(999)
+                    return Transaction.success(currentData)
+                }
+
+                override fun onComplete(
+                    error: DatabaseError?,
+                    committed: Boolean,
+                    currentData: DataSnapshot?
+                ) {
+                    if (error != null || !committed) {
+                        Log.w(
+                            "CoordinationVM",
+                            "Message sent but unread counter was not updated",
+                            error?.toException()
+                        )
+                    }
+                }
+            })
+    }
+
+    private fun resetPrivateUnread(threadId: String) {
+        if (myUserId.isBlank() || threadId.isBlank()) return
+        db.child("threads")
+            .child(threadId)
+            .child("unreadCounts")
+            .child(myUserId)
+            .setValue(0)
+            .addOnFailureListener { error ->
+                Log.w("CoordinationVM", "Failed to reset unread counter", error)
+            }
+    }
+
+    private fun restoreLocalThreadPreview(
+        threadId: String,
+        previous: DirectThreadPreview?
+    ) {
+        if (previous == null) {
+            directThreadPreviewByThreadId.remove(threadId)
+        } else {
+            directThreadPreviewByThreadId[threadId] = previous
+        }
+        applyThreadPreviewsToResponders()
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     //  LOAD REAL RESPONDERS FROM FIREBASE /users
     // ─────────────────────────────────────────────────────────────────────────
     private fun loadRespondersFromFirebase() {
-        // Remove old listener if any
         respondersListener?.let { db.child("users").removeEventListener(it) }
 
         respondersListener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
                 val loaded = mutableListOf<ResponderBrief>()
+
                 for (child in snapshot.children) {
-                    val uid = child.key ?: return
-                    val fullName   = child.child("fullName").getValue(String::class.java) ?: "Unknown"
-                    val department = child.child("department").getValue(String::class.java) ?: "general"
-                    val isOnline   = child.child("isOnline").getValue(Boolean::class.java) ?: false
-
-
-                    // Skip the current user — you don't chat with yourself
+                    val uid = child.key ?: continue
                     if (uid == myUserId) continue
 
-                    // Find existing entry to preserve unread count / last message
+                    val fullName = child.child("fullName")
+                        .getValue(String::class.java)
+                        ?.trim()
+                        .orEmpty()
+                        .ifBlank { "Unknown" }
+                    val department = child.child("department")
+                        .getValue(String::class.java)
+                        ?.trim()
+                        .orEmpty()
+                        .ifBlank { "general" }
+                    val isOnline = when (val value = child.child("isOnline").value) {
+                        is Boolean -> value
+                        is String -> value.toBoolean()
+                        is Number -> value.toInt() != 0
+                        else -> false
+                    }
+
                     val existing = responders.firstOrNull { it.id == uid }
-
-                    val latestThread = findLatestThreadForResponder(uid)
-
-                    val previewMessage = latestThread?.first ?: existing?.lastMessage ?: ""
-                    val previewTime = latestThread?.second ?: existing?.lastMessageTime ?: 0L
+                    val preview = directThreadPreviewByThreadId[
+                        buildChatId(myUserId, uid)
+                    ]
 
                     loaded.add(
                         ResponderBrief(
-                            id          = uid,
-                            username    = uid,
-                            fullName    = fullName,
-                            role        = department,
-                            status      = if (isOnline) "online" else "offline",
-                            lastMessage = previewMessage,
-                            lastMessageTime = previewTime,
-                            unreadCount = existing?.unreadCount ?: 0
+                            id = uid,
+                            username = child.child("email")
+                                .getValue(String::class.java)
+                                ?.takeIf { it.isNotBlank() }
+                                ?: uid,
+                            fullName = fullName,
+                            role = department,
+                            status = if (isOnline) "online" else "offline",
+                            lastMessage = preview?.lastMessage
+                                ?: existing?.lastMessage
+                                .orEmpty(),
+                            lastMessageTime = preview?.lastMessageTime
+                                ?: existing?.lastMessageTime
+                                ?: 0L,
+                            unreadCount = privateUnreadByThreadId[
+                                buildChatId(myUserId, uid)
+                            ] ?: existing?.unreadCount ?: 0
                         )
                     )
                 }
-                // Update the list on main thread (StateList triggers recompose)
+
                 responders.clear()
-                responders.addAll(loaded)
+                responders.addAll(sortRespondersLatestFirst(loaded))
             }
 
             override fun onCancelled(error: DatabaseError) {
@@ -189,39 +397,46 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
     }
 
     private fun listenToThreads() {
-        threadsListener?.let {
-            db.child("threads").removeEventListener(it)
-        }
+        threadsListener?.let { db.child("threads").removeEventListener(it) }
 
         threadsListener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
+                val latestSnapshot = mutableMapOf<String, DirectThreadPreview>()
+                val latestUnread = mutableMapOf<String, Int>()
+
                 for (thread in snapshot.children) {
                     val threadId = thread.key ?: continue
-                    val lastMessage = thread.child("lastMessage")
-                        .getValue(String::class.java) ?: ""
+                    if (!threadId.startsWith("pm_")) continue
 
-                    val lastMessageTime = thread.child("lastMessageTime")
-                        .getValue(Long::class.java) ?: 0L
+                    latestSnapshot[threadId] = DirectThreadPreview(
+                        lastMessage = thread.child("lastMessage")
+                            .getValue(String::class.java)
+                            .orEmpty(),
+                        lastMessageTime = thread.readLongChild("lastMessageTime")
+                    )
 
-                    val responderId = threadId
-                        .removePrefix("pm_")
-                        .split("_")
-                        .firstOrNull { it != myUserId }
-                        ?: continue
-
-                    val index = responders.indexOfFirst { it.id == responderId }
-
-                    if (index >= 0) {
-                        responders[index] = responders[index].copy(
-                            lastMessage = lastMessage,
-                            lastMessageTime = lastMessageTime
-                        )
-                    }
+                    val unreadValue = thread.child("unreadCounts").child(myUserId).value
+                    latestUnread[threadId] = when (unreadValue) {
+                        is Number -> unreadValue.toInt()
+                        is String -> unreadValue.toIntOrNull() ?: 0
+                        else -> 0
+                    }.coerceAtLeast(0)
                 }
 
-                val sorted = responders.sortedByDescending { it.lastMessageTime }
-                responders.clear()
-                responders.addAll(sorted)
+                directThreadPreviewByThreadId.clear()
+                directThreadPreviewByThreadId.putAll(latestSnapshot)
+                privateUnreadByThreadId.clear()
+                privateUnreadByThreadId.putAll(latestUnread)
+
+                if (responders.isNotEmpty()) {
+                    val withUnread = responders.map { responder ->
+                        val threadId = buildChatId(myUserId, responder.id)
+                        responder.copy(unreadCount = latestUnread[threadId] ?: 0)
+                    }
+                    responders.clear()
+                    responders.addAll(sortRespondersLatestFirst(withUnread))
+                }
+                applyThreadPreviewsToResponders()
             }
 
             override fun onCancelled(error: DatabaseError) {
@@ -232,21 +447,25 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         db.child("threads").addValueEventListener(threadsListener!!)
     }
 
-    private fun loadInteragencyGroups(userId: String) {
+    private fun loadInteragencyGroups(
+        userId: String,
+        onFinished: ((String?) -> Unit)? = null
+    ) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val request = Request.Builder()
-                    .url("https://emergency-response.alertaraqc.com/api/api_app/get-interagency-groups.php?user_id=$userId")
+                    .url(apiUrl("get-interagency-groups.php") + "?user_id=$userId")
                     .get()
                     .build()
 
-                val response = OkHttpClient().newCall(request).execute()
-                val body = response.body?.string() ?: ""
-
-                val json = JSONObject(body)
+                val json = executeJson(request)
 
                 if (!json.optBoolean("success")) {
-                    latestNotification.value = json.optString("message", "Failed to load groups")
+                    withContext(Dispatchers.Main) {
+                        val message = json.optString("message", "Failed to load groups")
+                        latestNotification.value = message
+                        onFinished?.invoke(message)
+                    }
                     return@launch
                 }
 
@@ -271,17 +490,23 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
                     val isMember = item.optBoolean("isMember")
                     val requestPending = item.optBoolean("requestPending")
+                    val latestMessage = item.optString("lastMessage").trim()
+                    val latestMessageTime = item.optLong("lastMessageTime", 0L)
 
                     loadedGroups.add(
                         DepartmentInfo(
                             name = groupId.toString(),
                             displayName = displayName,
                             emoji = icon,
+                            isMember = isMember,
+                            requestPending = requestPending,
                             lastMessage = when {
+                                isMember && latestMessage.isNotBlank() -> latestMessage
                                 isMember -> "Tap to open group chat"
                                 requestPending -> "Request pending approval"
                                 else -> "Request access to join"
                             },
+                            lastMessageTime = if (isMember) latestMessageTime else 0L,
                             unreadCount = if (isMember) item.optInt("unreadCount", 0) else 0
                         )
                     )
@@ -289,16 +514,38 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
                 launch(Dispatchers.Main) {
                     departments.clear()
-                    departments.addAll(loadedGroups)
+                    departments.addAll(
+                        loadedGroups.sortedWith(
+                            compareByDescending<DepartmentInfo> { it.unreadCount }
+                                .thenByDescending { it.lastMessageTime }
+                                .thenBy { it.displayName.lowercase() }
+                        )
+                    )
+                    onFinished?.invoke(null)
                 }
 
             } catch (e: Exception) {
                 launch(Dispatchers.Main) {
-                    latestNotification.value = "Failed to load groups: ${e.message}"
+                    val message = "Failed to load groups: ${e.message}"
+                    latestNotification.value = message
+                    onFinished?.invoke(message)
                 }
             }
         }
     }
+    fun refreshInbox(
+        userId: String,
+        onFinished: (String?) -> Unit = {}
+    ) {
+        if (userId.isBlank()) {
+            onFinished("Responder session is unavailable")
+            return
+        }
+        loadRespondersFromFirebase()
+        listenToThreads()
+        loadInteragencyGroups(userId, onFinished)
+    }
+
     fun requestGroupAccess(
         groupId: Int,
         userId: Int
@@ -311,13 +558,11 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                     .build()
 
                 val request = Request.Builder()
-                    .url("https://emergency-response.alertaraqc.com/api/api_app/request-group-access.php")
+                    .url(apiUrl("request-group-access.php"))
                     .post(formBody)
                     .build()
 
-                val response = OkHttpClient().newCall(request).execute()
-                val body = response.body?.string()?.trim() ?: ""
-                val json = JSONObject(body)
+                val json = executeJson(request)
 
                 launch(Dispatchers.Main) {
                     latestNotification.value =
@@ -356,6 +601,8 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         groupPollingJob?.cancel()
         groupPollingJob = null
         activeGroupId = null
+        directThreadPreviewByThreadId.clear()
+        privateUnreadByThreadId.clear()
     }
 
 
@@ -416,23 +663,10 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val request = Request.Builder()
-                    .url("https://emergency-response.alertaraqc.com/api/api_app/get-interagency-group-messages.php?group_id=$groupId&user_id=$myUserId")
+                    .url(apiUrl("get-interagency-group-messages.php") + "?group_id=$groupId&user_id=$myUserId")
                     .get()
                     .build()
-
-                val response = OkHttpClient().newCall(request).execute()
-                val body = response.body?.string()?.trim() ?: ""
-
-                if (!response.isSuccessful || body.isBlank()) {
-                    launch(Dispatchers.Main) {
-                        if (requestId == groupMessagesRequestId.get() && currentThread.value?.id == "group_$groupId") {
-                            latestNotification.value = "Failed to load groups: empty API response"
-                        }
-                    }
-                    return@launch
-                }
-
-                val json = JSONObject(body)
+                val json = executeJson(request)
 
                 if (!json.optBoolean("success")) return@launch
 
@@ -537,11 +771,11 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                     .build()
 
                 val request = Request.Builder()
-                    .url("https://emergency-response.alertaraqc.com/api/api_app/mark-group-thread-read.php")
+                    .url(apiUrl("mark-group-read.php"))
                     .post(formBody)
                     .build()
 
-                OkHttpClient().newCall(request).execute().close()
+                executeJson(request)
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -641,6 +875,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         if (peerId == null) return
 
         val threadId = buildChatId(myId, peerId)
+        resetPrivateUnread(threadId)
 
         db.child("messages")
             .child(threadId)
@@ -698,82 +933,55 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
     private fun showMessageNotification(threadId: String, message: ChatMessage) {
         val context = getApplication<Application>()
-        val channelId = "coordination_messages"
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val manager = context.getSystemService(NotificationManager::class.java)
-            val existing = manager.getNotificationChannel(channelId)
-            if (existing == null) {
-                manager.createNotificationChannel(
-                    NotificationChannel(
-                        channelId,
-                        "Coordination Messages",
-                        NotificationManager.IMPORTANCE_HIGH
-                    ).apply {
-                        description = "New coordination chat messages"
-                    }
-                )
-            }
-        }
-
-        val openIntent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            putExtra("open_coordination", true)
-        }
-
-        val pendingIntent = PendingIntent.getActivity(
-            context,
-            threadId.hashCode(),
-            openIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val sender = message.senderName.ifBlank { "Responder" }
         val content = when {
-            !message.text.isNullOrBlank() -> message.text!!
+            message.text.orEmpty().contains("ERS_COORDINATION_TIP_") -> "Incident tip shared"
+            !message.text.isNullOrBlank() -> message.text!!.trim()
             message.type == MessageType.IMAGE -> "Sent an image"
             message.type == MessageType.FILE -> "Sent a file"
             else -> "New message"
         }
 
-        val notification = NotificationCompat.Builder(context, channelId)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle("$sender sent a message")
-            .setContentText(content)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(content))
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-            .setAutoCancel(true)
-            .setContentIntent(pendingIntent)
-            .build()
-
-        val hasNotificationPermission =
-            Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-                    ContextCompat.checkSelfPermission(
-                        context,
-                        android.Manifest.permission.POST_NOTIFICATIONS
-                    ) == PackageManager.PERMISSION_GRANTED
-
-        if (hasNotificationPermission) {
-            NotificationManagerCompat.from(context).notify(threadId.hashCode(), notification)
+        if (threadId.startsWith("group_")) {
+            val groupId = threadId.removePrefix("group_").toIntOrNull() ?: return
+            val groupName = departments.firstOrNull { it.name == groupId.toString() }
+                ?.displayName
+                .orEmpty()
+            AppNotificationManager.showDepartmentChat(
+                context = context,
+                eventKey = "department:$groupId:${message.id}",
+                groupId = groupId,
+                groupName = groupName,
+                senderName = message.senderName,
+                body = content
+            )
+        } else {
+            AppNotificationManager.showPrivateChat(
+                context = context,
+                eventKey = "private:$threadId:${message.id}",
+                peerId = message.senderId,
+                threadId = threadId,
+                senderName = message.senderName,
+                body = content
+            )
         }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
     //  SEND MESSAGE — writes to Firebase, listener picks it up on ALL devices
     // ─────────────────────────────────────────────────────────────────────────
-    fun sendMockPrivateMessage(meId: String, peer: ResponderBrief, body: String) {
+    fun sendPrivateMessage(meId: String, peer: ResponderBrief, body: String) {
         val threadId = buildChatId(meId, peer.id)
         pushMessageToFirebase(
             threadId   = threadId,
             senderId   = meId,
             senderName = myUserName.ifBlank { meId },
             role       = myRole,
+            recipientId = peer.id,
             text       = body
         )
     }
 
-    fun sendMockDepartmentMessage(meId: String, department: String, body: String) {
+    fun sendDepartmentMessage(meId: String, department: String, body: String) {
         val groupId = department.toIntOrNull() ?: return
         val threadId = "group_$groupId"
 
@@ -804,12 +1012,11 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                     .build()
 
                 val request = Request.Builder()
-                    .url("https://emergency-response.alertaraqc.com/api/api_app/send-interagency-group-message.php")
+                    .url(apiUrl("send-interagency-group-message.php"))
                     .post(formBody)
                     .build()
 
-                val response = OkHttpClient().newCall(request).execute()
-                val json = JSONObject(response.body?.string() ?: "")
+                val json = executeJson(request)
 
                 if (json.optBoolean("success")) {
                     loadInteragencyGroupMessages(groupId)   // reconciles/replaces optimistic entry with the real one
@@ -833,84 +1040,184 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
-    private fun pushMessageToFirebase(
-        threadId   : String,
-        senderId   : String,
-        senderName : String,
-        role       : String,
-        text       : String
+    private fun dispatchPrivatePush(
+        senderId: String,
+        recipientId: String,
+        threadId: String,
+        messageId: String,
+        senderName: String,
+        messageType: String,
+        preview: String
     ) {
-        val msgRef = db.child("messages").child(threadId).push()
+        val sender = senderId.toIntOrNull() ?: return
+        val recipient = recipientId.toIntOrNull() ?: return
+        val safePreview = when {
+            preview.contains("ERS_COORDINATION_TIP_") -> "Incident tip shared"
+            messageType.equals("image", ignoreCase = true) -> "Sent an image"
+            messageType.equals("file", ignoreCase = true) -> "Sent a file: ${preview.take(100)}"
+            else -> preview.trim().take(240)
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            notificationRepository.notifyPrivateMessage(
+                senderId = sender,
+                recipientId = recipient,
+                threadId = threadId,
+                messageId = messageId,
+                senderName = senderName,
+                messageType = messageType,
+                preview = safePreview
+            ).onFailure { error ->
+                Log.w("CoordinationVM", "Private push notification was not delivered", error)
+            }
+        }
+    }
+
+    private fun pushMessageToFirebase(
+        threadId: String,
+        senderId: String,
+        senderName: String,
+        role: String,
+        recipientId: String,
+        text: String
+    ) {
+        val cleanText = text.trim()
+        if (cleanText.isBlank()) return
+
+        val now = System.currentTimeMillis()
+        val messageId = db.child("messages").child(threadId).push().key
+        if (messageId.isNullOrBlank()) {
+            latestNotification.value = "Unable to create message. Please try again."
+            return
+        }
+
         val data = mapOf(
-            "senderId"   to senderId,
+            "senderId" to senderId,
             "senderName" to senderName,
-            "role"       to role,
-            "text"       to text,
-            "createdAt"  to System.currentTimeMillis(),
+            "role" to role,
+            "type" to "TEXT",
+            "text" to cleanText,
+            "createdAt" to now,
             "status" to "sent"
         )
-        msgRef.setValue(data)
 
-        // Also update the thread's lastMessage so the inbox shows a preview
-        db.child("threads").child(threadId).updateChildren(mapOf(
-            "lastMessage"     to text,
-            "lastMessageTime" to System.currentTimeMillis()
-        ))
+        val previousPreview = directThreadPreviewByThreadId[threadId]
+        updateLocalThreadPreview(threadId, cleanText, now)
+
+        val updates: Map<String, Any?> = mapOf(
+            "messages/$threadId/$messageId" to data,
+            "threads/$threadId/lastMessage" to cleanText,
+            "threads/$threadId/lastMessageTime" to now,
+            "threads/$threadId/lastSenderId" to senderId,
+            "threads/$threadId/lastSenderName" to senderName,
+            "threads/$threadId/participants/$senderId" to true,
+            "threads/$threadId/participants/$recipientId" to true
+        )
+
+        db.updateChildren(updates)
+            .addOnSuccessListener {
+                incrementPrivateUnread(recipientId, threadId)
+                dispatchPrivatePush(
+                    senderId = senderId,
+                    recipientId = recipientId,
+                    threadId = threadId,
+                    messageId = messageId,
+                    senderName = senderName,
+                    messageType = "text",
+                    preview = cleanText
+                )
+            }
+            .addOnFailureListener { error ->
+                restoreLocalThreadPreview(threadId, previousPreview)
+                latestNotification.value =
+                    "Message was not sent: ${error.localizedMessage ?: "Firebase write failed"}"
+            }
+    }
+
+    private fun safeAttachmentName(rawName: String): String {
+        val leaf = rawName
+            .substringAfterLast('/')
+            .substringAfterLast('\\')
+            .trim()
+            .replace(Regex("[^A-Za-z0-9._ ()-]"), "_")
+            .take(140)
+        return leaf.ifBlank { "attachment" }
     }
 
     private fun uploadFileToServer(
         uri: Uri,
         fileName: String,
-        onSuccess: (fileUrl: String, uploadedName: String) -> Unit,
+        onSuccess: (
+            fileUrl: String,
+            uploadedName: String,
+            fileSize: Long,
+            mimeType: String
+        ) -> Unit,
         onError: (String) -> Unit
     ) {
         viewModelScope.launch(Dispatchers.IO) {
+            var tempFile: File? = null
             try {
                 val context = getApplication<Application>()
+                val safeName = safeAttachmentName(fileName)
+                val extension = safeName.substringAfterLast('.', "")
+                    .takeIf { it.isNotBlank() && it.length <= 12 }
+                val uploadFile = File.createTempFile(
+                    "chat_upload_",
+                    extension?.let { ".$it" } ?: ".bin",
+                    context.cacheDir
+                )
+                tempFile = uploadFile
 
-                val inputStream = context.contentResolver.openInputStream(uri)
-                    ?: throw Exception("Cannot open file")
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    FileOutputStream(uploadFile).use { output -> input.copyTo(output) }
+                } ?: throw IOException("Cannot open the selected file")
 
-                val tempFile = File(context.cacheDir, fileName)
-                FileOutputStream(tempFile).use { output ->
-                    inputStream.copyTo(output)
+                val size = uploadFile.length()
+                if (size <= 0L) throw IOException("The selected file is empty")
+                if (size > 25L * 1024L * 1024L) {
+                    throw IOException("The selected file exceeds the 25 MB limit")
                 }
 
-                val requestBody = tempFile
-                    .asRequestBody("application/octet-stream".toMediaTypeOrNull())
-
-                val filePart = MultipartBody.Part.createFormData(
-                    "file",
-                    fileName,
-                    requestBody
-                )
+                val mediaType = context.contentResolver.getType(uri)
+                    ?.toMediaTypeOrNull()
+                    ?: "application/octet-stream".toMediaTypeOrNull()
+                val requestBody = uploadFile.asRequestBody(mediaType)
+                val uploaderUserId = myUserId.toIntOrNull()
+                    ?: throw IllegalStateException("Responder session is unavailable")
 
                 val multipartBody = MultipartBody.Builder()
                     .setType(MultipartBody.FORM)
-                    .addPart(filePart)
+                    .addFormDataPart("uploader_user_id", uploaderUserId.toString())
+                    .addFormDataPart("file", safeName, requestBody)
                     .build()
 
                 val request = Request.Builder()
-                    .url("https://emergency-response.alertaraqc.com/api/api_app/upload_chat_file.php")
+                    .url(apiUrl("upload_chat_file.php"))
                     .post(multipartBody)
                     .build()
 
-                val response = OkHttpClient().newCall(request).execute()
-                val body = response.body?.string() ?: ""
+                val json = executeJson(request)
+                val uploadedUrl = json.optString("file_url").trim()
+                val uploadedName = json.optString("file_name", safeName).trim().ifBlank { safeName }
+                val uploadedSize = json.optLong("file_size", size).takeIf { it > 0L } ?: size
+                val uploadedMime = json.optString("mime_type", mediaType.toString())
+                    .trim()
+                    .ifBlank { mediaType.toString() }
 
-                val json = JSONObject(body)
-
-                if (json.optBoolean("success")) {
-                    onSuccess(
-                        json.optString("file_url"),
-                        json.optString("file_name")
-                    )
-                } else {
-                    onError(json.optString("message", "Upload failed"))
+                if (!json.optBoolean("success") || uploadedUrl.isBlank()) {
+                    throw IOException(json.optString("message", "Upload failed"))
                 }
 
+                withContext(Dispatchers.Main) {
+                    onSuccess(uploadedUrl, uploadedName, uploadedSize, uploadedMime)
+                }
             } catch (e: Exception) {
-                onError(e.message ?: "Upload error")
+                withContext(Dispatchers.Main) {
+                    onError(e.message ?: "Upload error")
+                }
+            } finally {
+                tempFile?.delete()
             }
         }
     }
@@ -930,14 +1237,17 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         uploadFileToServer(
             uri = uri,
             fileName = fileName,
-            onSuccess = { fileUrl, uploadedName ->
+            onSuccess = { fileUrl, uploadedName, fileSize, mimeType ->
                 pushFileMessageToFirebase(
                     threadId = threadId,
                     senderId = meId,
                     senderName = myUserName.ifBlank { meId },
                     role = myRole,
+                    recipientId = peer.id,
                     fileUrl = fileUrl,
-                    fileName = fileName,
+                    fileName = uploadedName,
+                    fileSize = fileSize,
+                    mimeType = mimeType,
                     isImage = isImage
                 )
             },
@@ -961,12 +1271,14 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         uploadFileToServer(
             uri = uri,
             fileName = realFileName,
-            onSuccess = { fileUrl, uploadedName ->
+            onSuccess = { fileUrl, uploadedName, fileSize, mimeType ->
                 sendGroupAttachmentToSql(
                     groupId = groupId,
                     senderUserId = meId,
                     fileUrl = fileUrl,
-                    fileName = realFileName,
+                    fileName = uploadedName,
+                    fileSize = fileSize,
+                    mimeType = mimeType,
                     isImage = isImage
                 )
             },
@@ -981,36 +1293,28 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         senderUserId: String,
         fileUrl: String,
         fileName: String,
+        fileSize: Long,
+        mimeType: String,
         isImage: Boolean
     ) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val mimeType = when {
-                    isImage -> "image/*"
-                    fileName.endsWith(".pdf", true) -> "application/pdf"
-                    fileName.endsWith(".docx", true) -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                    fileName.endsWith(".doc", true) -> "application/msword"
-                    else -> "application/octet-stream"
-                }
-
                 val formBody = okhttp3.FormBody.Builder()
                     .add("group_id", groupId.toString())
                     .add("sender_user_id", senderUserId)
                     .add("file_url", fileUrl)
                     .add("file_name", fileName)
                     .add("mime_type", mimeType)
-                    .add("file_size", "0")
+                    .add("file_size", fileSize.coerceAtLeast(0L).toString())
                     .add("is_image", if (isImage) "1" else "0")
                     .build()
 
                 val request = Request.Builder()
-                    .url("https://emergency-response.alertaraqc.com/api/api_app/send-interagency-group-attachment.php")
+                    .url(apiUrl("send-interagency-group-attachment.php"))
                     .post(formBody)
                     .build()
 
-                val response = OkHttpClient().newCall(request).execute()
-                val body = response.body?.string()?.trim() ?: ""
-                val json = JSONObject(body)
+                val json = executeJson(request)
 
                 if (json.optBoolean("success")) {
                     loadInteragencyGroupMessages(groupId)
@@ -1028,43 +1332,28 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
-    private fun findLatestThreadForResponder(responderId: String): Pair<String, Long>? {
-        val threadId = buildChatId(myUserId, responderId)
 
-        var result: Pair<String, Long>? = null
-
-        db.child("threads").child(threadId).get()
-            .addOnSuccessListener { snapshot ->
-                val lastMessage = snapshot.child("lastMessage").getValue(String::class.java) ?: ""
-                val lastMessageTime = snapshot.child("lastMessageTime").getValue(Long::class.java) ?: 0L
-
-                if (lastMessage.isNotBlank() && lastMessageTime > 0L) {
-                    val index = responders.indexOfFirst { it.id == responderId }
-
-                    if (index >= 0) {
-                        responders[index] = responders[index].copy(
-                            lastMessage = lastMessage,
-                            lastMessageTime = lastMessageTime
-                        )
-                    }
-                }
-            }
-
-        return result
-    }
 
     private fun pushFileMessageToFirebase(
         threadId: String,
         senderId: String,
         senderName: String,
         role: String,
+        recipientId: String,
         fileUrl: String,
         fileName: String,
+        fileSize: Long,
+        mimeType: String,
         isImage: Boolean
     ) {
         val now = System.currentTimeMillis()
-        val msgRef = db.child("messages").child(threadId).push()
+        val messageId = db.child("messages").child(threadId).push().key
+        if (messageId.isNullOrBlank()) {
+            latestNotification.value = "Unable to create attachment message."
+            return
+        }
 
+        val previewText = if (isImage) "📷 Image" else "📎 $fileName"
         val data = mapOf(
             "senderId" to senderId,
             "senderName" to senderName,
@@ -1073,17 +1362,43 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
             "type" to if (isImage) "IMAGE" else "FILE",
             "attachmentUri" to fileUrl,
             "attachmentName" to fileName,
-            "createdAt" to now
+            "attachmentSize" to fileSize.coerceAtLeast(0L),
+            "attachmentMimeType" to mimeType,
+            "createdAt" to now,
+            "status" to "sent"
         )
 
-        msgRef.setValue(data)
+        val previousPreview = directThreadPreviewByThreadId[threadId]
+        updateLocalThreadPreview(threadId, previewText, now)
 
-        db.child("threads").child(threadId).updateChildren(
-            mapOf(
-                "lastMessage" to if (isImage) "📷 Image" else "📎 $fileName",
-                "lastMessageTime" to now
-            )
+        val updates: Map<String, Any?> = mapOf(
+            "messages/$threadId/$messageId" to data,
+            "threads/$threadId/lastMessage" to previewText,
+            "threads/$threadId/lastMessageTime" to now,
+            "threads/$threadId/lastSenderId" to senderId,
+            "threads/$threadId/lastSenderName" to senderName,
+            "threads/$threadId/participants/$senderId" to true,
+            "threads/$threadId/participants/$recipientId" to true
         )
+
+        db.updateChildren(updates)
+            .addOnSuccessListener {
+                incrementPrivateUnread(recipientId, threadId)
+                dispatchPrivatePush(
+                    senderId = senderId,
+                    recipientId = recipientId,
+                    threadId = threadId,
+                    messageId = messageId,
+                    senderName = senderName,
+                    messageType = if (isImage) "image" else "file",
+                    preview = if (isImage) "Image" else fileName
+                )
+            }
+            .addOnFailureListener { error ->
+                restoreLocalThreadPreview(threadId, previousPreview)
+                latestNotification.value =
+                    "Attachment message was not sent: ${error.localizedMessage ?: "Firebase write failed"}"
+            }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -1113,6 +1428,10 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
     //  UNREAD / NOTIFICATION HELPERS
     // ─────────────────────────────────────────────────────────────────────────
     fun markResponderRead(responderId: String) {
+        val threadId = buildChatId(myUserId, responderId)
+        resetPrivateUnread(threadId)
+        privateUnreadByThreadId[threadId] = 0
+
         val idx = responders.indexOfFirst { it.id == responderId }
         if (idx >= 0 && responders[idx].unreadCount > 0) {
             responders[idx] = responders[idx].copy(unreadCount = 0)

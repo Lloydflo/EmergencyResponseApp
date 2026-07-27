@@ -19,7 +19,10 @@ data class DepartmentInfo(
     val name: String,
     val displayName: String,
     val emoji: String,
+    val isMember: Boolean = false,
+    val requestPending: Boolean = false,
     val lastMessage: String = "",
+    val lastMessageTime: Long = 0L,
     val unreadCount: Int = 0
 )
 

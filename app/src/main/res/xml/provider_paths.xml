@@ -5,6 +5,10 @@
         name="completion_photos"
         path="completion_photos/" />
 
+    <cache-path
+        name="shared_reports"
+        path="shared_reports/" />
+
     <files-path
         name="profile_photos"
         path="profile_photos/" />

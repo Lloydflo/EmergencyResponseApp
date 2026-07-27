@@ -40,6 +40,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -69,7 +70,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -94,7 +94,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -127,8 +126,13 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
-import com.ers.emergencyresponseapp.analytics.RouteHistoryStore
+import com.ers.emergencyresponseapp.data.BroadcastNotice
+import com.ers.emergencyresponseapp.data.NotificationRepository
 import com.ers.emergencyresponseapp.features.assigned.AssignedIncidentsViewModel
+import com.ers.emergencyresponseapp.notification.AppNotificationManager
+import com.ers.emergencyresponseapp.notification.NotificationDestination
+import com.ers.emergencyresponseapp.notification.NotificationNavigation
+import com.ers.emergencyresponseapp.ui.components.AppPullToRefresh
 import com.ers.emergencyresponseapp.features.assigned.toDomain
 import com.ers.emergencyresponseapp.home.Incident
 import com.ers.emergencyresponseapp.home.IncidentPriority
@@ -153,6 +157,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.Locale
 import androidx.core.content.FileProvider
+import androidx.compose.material.icons.filled.Info
 
 
 
@@ -161,18 +166,35 @@ import androidx.core.content.FileProvider
 // ─────────────────────────────────────────────────────────────────────────────
 
 private object AppColors {
+    private val isDark: Boolean get() = ThemeController.isDarkMode.value
+
     val Primary: Color get() = Color(0xFF4C8A89)
     val Secondary: Color get() = Color(0xFF3A506B)
     val Tertiary: Color get() = Color(0xFF1C2541)
     val Dark: Color get() = Color(0xFF0B132B)
-    val Text: Color get() = if (ThemeController.isDarkMode.value) Color(0xFFFAFAFA) else Color(0xFF171717)
-    val TextSecondary: Color get() = if (ThemeController.isDarkMode.value) Color(0xFFA1A1AA) else Color(0xFF575757)
-    val Border: Color get() = if (ThemeController.isDarkMode.value) Color(0xFF27272A) else Color(0xFFE5E5E5)
-    val Bg: Color get() = if (ThemeController.isDarkMode.value) Color(0xFF0A0A0A) else Color(0xFFFFFFFF)
-    val CardBg: Color get() = if (ThemeController.isDarkMode.value) Color(0xFF16181D) else Color(0xFFFFFFFF)
-    val HeaderBg: Color get() = if (ThemeController.isDarkMode.value) Color(0xFF16181D) else Color(0xFFFFFFFF)
-    val FooterBg: Color get() = if (ThemeController.isDarkMode.value) Color(0xFF16181D) else Color(0xFFFAFAFA)
 
+    val Text: Color get() = if (isDark) Color(0xFFFAFAFA) else Color(0xFF171717)
+    val TextSecondary: Color get() = if (isDark) Color(0xFFB7BAC2) else Color(0xFF575757)
+    val Border: Color get() = if (isDark) Color(0xFF343840) else Color(0xFFE5E5E5)
+    val Bg: Color get() = if (isDark) Color(0xFF0A0A0A) else Color(0xFFF7F9F9)
+    val CardBg: Color get() = if (isDark) Color(0xFF16181D) else Color(0xFFFFFFFF)
+    val HeaderBg: Color get() = if (isDark) Color(0xFF16181D) else Color(0xFFFFFFFF)
+    val FooterBg: Color get() = if (isDark) Color(0xFF16181D) else Color(0xFFFAFAFA)
+
+    // Semantic surfaces keep cards, warnings, dialogs, and placeholders legible
+    // in both themes instead of relying on hardcoded light backgrounds.
+    val SubtleSurface: Color get() = if (isDark) Color(0xFF20242B) else Color(0xFFF3F6F6)
+    val ElevatedSurface: Color get() = if (isDark) Color(0xFF242830) else Color(0xFFF7F7F7)
+    val Skeleton: Color get() = if (isDark) Color(0xFF24272D) else Color(0xFFEAEAEA)
+
+    val DispatchSurface: Color get() = if (isDark) Color(0xFF3A2917) else Color(0xFFFFF3E0)
+    val DispatchText: Color get() = if (isDark) Color(0xFFFFBE73) else Color(0xFFEF6C00)
+
+    val SuccessSurface: Color get() = if (isDark) Color(0xFF15351F) else Color(0xFFE8F5E9)
+    val SuccessText: Color get() = if (isDark) Color(0xFFA5D6A7) else Color(0xFF2E7D32)
+
+    val DangerSurface: Color get() = if (isDark) Color(0xFF3B171A) else Color(0xFFFFEBEE)
+    val DangerText: Color get() = if (isDark) Color(0xFFFFB4AB) else Color(0xFFC62828)
 }
 
 
@@ -192,13 +214,35 @@ private fun assignedBarBrush() = Brush.verticalGradient(
 
 // FIX 3: Pre-compute per-type accent brushes as stable top-level objects.
 // Previously these were created inside items{} lambdas on every scroll frame.
-private fun fireCardBrush()    = Brush.verticalGradient(listOf(Color(0xFFE53935).copy(0.07f), AppColors.CardBg))
-private fun medicalCardBrush() = Brush.verticalGradient(listOf(Color(0xFF1E88E5).copy(0.07f), AppColors.CardBg))
-private fun crimeCardBrush()   = Brush.verticalGradient(listOf(Color(0xFF6D4C41).copy(0.07f), AppColors.CardBg))
+private fun fireCardBrush(): Brush {
+    val accent = if (ThemeController.isDarkMode.value) Color(0xFFEF5350) else Color(0xFFE53935)
+    return Brush.verticalGradient(listOf(accent.copy(alpha = 0.09f), AppColors.CardBg))
+}
 
-private fun fireBarBrush()     = Brush.horizontalGradient(listOf(Color(0xFFE53935).copy(0.4f), Color(0xFFE53935)))
-private fun medicalBarBrush()  = Brush.horizontalGradient(listOf(Color(0xFF1E88E5).copy(0.4f), Color(0xFF1E88E5)))
-private fun crimeBarBrush()    = Brush.horizontalGradient(listOf(Color(0xFF6D4C41).copy(0.4f), Color(0xFF6D4C41)))
+private fun medicalCardBrush(): Brush {
+    val accent = if (ThemeController.isDarkMode.value) Color(0xFF64B5F6) else Color(0xFF1E88E5)
+    return Brush.verticalGradient(listOf(accent.copy(alpha = 0.09f), AppColors.CardBg))
+}
+
+private fun crimeCardBrush(): Brush {
+    val accent = if (ThemeController.isDarkMode.value) Color(0xFFBCAAA4) else Color(0xFF6D4C41)
+    return Brush.verticalGradient(listOf(accent.copy(alpha = 0.09f), AppColors.CardBg))
+}
+
+private fun fireBarBrush(): Brush {
+    val accent = if (ThemeController.isDarkMode.value) Color(0xFFEF5350) else Color(0xFFE53935)
+    return Brush.horizontalGradient(listOf(accent.copy(alpha = 0.4f), accent))
+}
+
+private fun medicalBarBrush(): Brush {
+    val accent = if (ThemeController.isDarkMode.value) Color(0xFF64B5F6) else Color(0xFF1E88E5)
+    return Brush.horizontalGradient(listOf(accent.copy(alpha = 0.4f), accent))
+}
+
+private fun crimeBarBrush(): Brush {
+    val accent = if (ThemeController.isDarkMode.value) Color(0xFFBCAAA4) else Color(0xFF6D4C41)
+    return Brush.horizontalGradient(listOf(accent.copy(alpha = 0.4f), accent))
+}
 
 private fun cardBrushesStable() = listOf(fireCardBrush(), medicalCardBrush(), crimeCardBrush())
 private fun barBrushesStable()  = listOf(fireBarBrush(),  medicalBarBrush(),  crimeBarBrush())
@@ -216,24 +260,6 @@ private fun isDeviceLocationEnabled(context: Context): Boolean {
 
 private enum class ResponderOnlineStatus { Online, Offline }
 
-private enum class EmergencyPriority(val color: Color) {
-    High(Color(0xFFD32F2F)),
-    Medium(Color(0xFFFFA000)),
-    Low(Color(0xFF388E3C))
-}
-
-private data class EmergencyRequest(
-    val id: Int,
-    val type: String,
-    val distance: String,
-    val timestamp: String,
-    val priority: EmergencyPriority,
-    val latitude: Double? = null,
-    val longitude: Double? = null,
-    val address: String? = null,
-    val description: String? = null,
-    val status: String = "Reported"
-)
 
 private fun saveUriToAppStorage(ctx: Context, uri: Uri, userId: Int): String? {
     return try {
@@ -249,25 +275,11 @@ private fun saveUriToAppStorage(ctx: Context, uri: Uri, userId: Int): String? {
     }
 }
 
-private fun demoFeedIncomingRequests(list: MutableList<EmergencyRequest>) {
-    val types      = listOf("Medical", "Fire", "Crime", "Disaster")
-    val priorities = EmergencyPriority.entries
-    val random     = java.util.Random()
-    while (list.size < 6) {
-        val id       = list.size + 1
-        val type     = types[random.nextInt(types.size)]
-        val priority = priorities[random.nextInt(priorities.size)]
-        val dist     = "${(1..20).random()} km"
-        val ts       = "${(1..12).random()}:${(0..59).random().toString().padStart(2,'0')} ${if (random.nextBoolean()) "AM" else "PM"}"
-        val lat      = random.nextDouble() * 180.0 - 90.0
-        val lng      = random.nextDouble() * 360.0 - 180.0
-        list.add(EmergencyRequest(id, type, dist, ts, priority, lat, lng, "Random $type $id St", "Description for ${type.lowercase()} incident #$id"))
-    }
-}
 
 private fun startRouteUpdateMonitoring(
     context: Context,
     incidentId: String,
+    assignmentId: String?,
     destLat: Double?,
     destLng: Double?,
     destAddress: String?
@@ -276,7 +288,8 @@ private fun startRouteUpdateMonitoring(
     Log.d("LiveGPS", "Calling startForegroundService incident=$incidentId")
     Toast.makeText(context, "Starting monitor…", Toast.LENGTH_SHORT).show()
     val intent = Intent(context, RouteMonitoringService::class.java).apply {
-        putExtra(RouteMonitoringService.EXTRA_INCIDENT_ID,   incidentId)
+        putExtra(RouteMonitoringService.EXTRA_INCIDENT_ID, incidentId)
+        putExtra(RouteMonitoringService.EXTRA_ASSIGNMENT_ID, assignmentId.orEmpty())
         putExtra(RouteMonitoringService.EXTRA_DEST_LAT,      destLat ?: Double.NaN)
         putExtra(RouteMonitoringService.EXTRA_DEST_LNG,      destLng ?: Double.NaN)
         putExtra(RouteMonitoringService.EXTRA_DEST_ADDRESS,  destAddress ?: "")
@@ -297,12 +310,16 @@ private fun formatUnitStatus(status: String): String {
 }
 
 private fun timeAgoLabel(timeReported: java.util.Date): String {
-    val diffMin = ((System.currentTimeMillis() - timeReported.time) / 60000).toInt()
+    if (timeReported.time <= 0L) return "time unavailable"
+
+    val diffMin = ((System.currentTimeMillis() - timeReported.time) / 60000)
+        .coerceAtLeast(0L)
+        .toInt()
     return when {
         diffMin < 1    -> "just now"
         diffMin < 60   -> "${diffMin}m ago"
         diffMin < 1440 -> "${diffMin / 60}h ago"
-        else           -> java.text.SimpleDateFormat("h:mm a", Locale.getDefault()).format(timeReported)
+        else           -> java.text.SimpleDateFormat("MMM d, h:mm a", Locale.getDefault()).format(timeReported)
     }
 }
 
@@ -331,7 +348,12 @@ private enum class ActivePriorityFilter { ALL, HIGH, MEDIUM, LOW }
 // re-allocated on every recomposition that calls sortedWith().
 private val incidentPriorityComparator: Comparator<Incident> =
     compareByDescending<Incident> {
-        when (it.priority) { IncidentPriority.HIGH -> 3; IncidentPriority.MEDIUM -> 2; IncidentPriority.LOW -> 1 }
+        when (it.priority) {
+            IncidentPriority.HIGH -> 3
+            IncidentPriority.MEDIUM -> 2
+            IncidentPriority.LOW -> 1
+            IncidentPriority.UNKNOWN -> 0
+        }
     }.thenByDescending { it.timeReported.time }
 
 
@@ -403,7 +425,7 @@ private fun ResponderAvatar(
                 .padding(2.dp)
                 .clip(CircleShape)
                 .background(dotColor)
-                .border(1.dp, MaterialTheme.colorScheme.surface, CircleShape)
+                .border(1.dp, AppColors.CardBg, CircleShape)
         )
     }
 }
@@ -432,11 +454,13 @@ private fun AssignedActionButtons(
     openMarkDone: (Incident) -> Unit,
     onNavigateStatusUpdate: (Incident) -> Unit
 ) {
+    val completeColor = if (ThemeController.isDarkMode.value) Color(0xFF81C784) else Color(0xFF2E7D32)
+
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        OutlinedButton(
+        Button(
             onClick = {
                 context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
                     .edit()
@@ -449,6 +473,7 @@ private fun AssignedActionButtons(
                 startRouteUpdateMonitoring(
                     context,
                     inc.id,
+                    inc.assignmentId,
                     inc.latitude,
                     inc.longitude,
                     inc.location
@@ -471,27 +496,31 @@ private fun AssignedActionButtons(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(48.dp),
-            shape = RoundedCornerShape(14.dp)
+            shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = AppColors.Primary,
+                contentColor = Color.White
+            )
         ) {
             Icon(Icons.Default.LocationOn, contentDescription = null)
             Spacer(Modifier.width(8.dp))
             Text("Navigate to Incident", fontWeight = FontWeight.SemiBold)
         }
 
-        Button(
+        OutlinedButton(
             onClick = { openMarkDone(inc) },
             modifier = Modifier
                 .fillMaxWidth()
                 .height(48.dp),
             shape = RoundedCornerShape(14.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = Color(0xFF2E7D32),
-                contentColor = Color.White
+            border = BorderStroke(1.dp, completeColor.copy(alpha = 0.65f)),
+            colors = ButtonDefaults.outlinedButtonColors(
+                contentColor = completeColor
             )
         ) {
             Icon(Icons.Default.Done, contentDescription = null)
             Spacer(Modifier.width(6.dp))
-            Text("Complete", fontSize = 13.sp)
+            Text("Complete Incident", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }
@@ -506,7 +535,8 @@ private fun AssignedActionButtons(
 @Composable
 private fun NotificationCountBadge(
     count: Int,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    borderColor: Color = AppColors.CardBg
 ) {
     if (count <= 0) return
 
@@ -527,7 +557,7 @@ private fun NotificationCountBadge(
             .background(Color(0xFFE53935))
             .border(
                 width = 2.dp,
-                color = AppColors.Bg,
+                color = borderColor,
                 shape = badgeShape
             ),
         contentAlignment = Alignment.Center
@@ -538,6 +568,42 @@ private fun NotificationCountBadge(
             fontSize = 9.sp,
             fontWeight = FontWeight.ExtraBold,
             maxLines = 1
+        )
+    }
+}
+
+@Composable
+private fun HeaderNotificationButton(
+    count: Int,
+    onClick: () -> Unit
+) {
+    // The outer Box is intentionally not clipped. The badge can therefore sit
+    // outside the circular bell button instead of being cut off inside it.
+    Box(
+        modifier = Modifier.size(50.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .size(42.dp)
+                .clip(CircleShape)
+                .background(Color.White.copy(alpha = 0.15f))
+                .clickable(onClick = onClick),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Notifications,
+                contentDescription = "Notifications",
+                tint = Color.White
+            )
+        }
+
+        NotificationCountBadge(
+            count = count,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .offset(x = 4.dp, y = (-4).dp),
+            borderColor = Color.White
         )
     }
 }
@@ -561,13 +627,14 @@ private fun BackupRequestStatusCard(
     }
     val isDeclined  = status == "declined"
     val isCancelled = status == "cancelled"
+    val isDarkTheme = ThemeController.isDarkMode.value
 
     val (badgeText, badgeColor) = when (status) {
-        "pending"   -> "Pending" to Color(0xFFEF6C00)
-        "accepted"  -> "Accepted" to Color(0xFF2E7D32)
-        "en_route"  -> "En Route" to Color(0xFF1E88E5)
-        "completed" -> "Completed" to Color(0xFF2E7D32)
-        "declined"  -> "Declined" to Color(0xFFD32F2F)
+        "pending"   -> "Pending" to if (isDarkTheme) Color(0xFFFFCC80) else Color(0xFFEF6C00)
+        "accepted"  -> "Accepted" to if (isDarkTheme) Color(0xFF81C784) else Color(0xFF2E7D32)
+        "en_route"  -> "En Route" to if (isDarkTheme) Color(0xFF90CAF9) else Color(0xFF1E88E5)
+        "completed" -> "Completed" to if (isDarkTheme) Color(0xFF81C784) else Color(0xFF2E7D32)
+        "declined"  -> "Declined" to if (isDarkTheme) Color(0xFFFF8A80) else Color(0xFFD32F2F)
         "cancelled" -> "Cancelled" to AppColors.TextSecondary
         else        -> status.replaceFirstChar { it.uppercase() } to AppColors.TextSecondary
     }
@@ -575,7 +642,7 @@ private fun BackupRequestStatusCard(
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = AppColors.Bg),
+        colors = CardDefaults.cardColors(containerColor = AppColors.CardBg),
         border = BorderStroke(1.dp, if (status == "pending") AppColors.Primary.copy(alpha = 0.35f) else AppColors.Border)
     ) {
         Column(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -600,7 +667,7 @@ private fun BackupRequestStatusCard(
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(999.dp))
-                        .background(badgeColor.copy(alpha = 0.12f))
+                        .background(badgeColor.copy(alpha = if (isDarkTheme) 0.20f else 0.12f))
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
                     Text(badgeText, color = badgeColor, fontSize = 10.sp, fontWeight = FontWeight.Bold)
@@ -610,7 +677,7 @@ private fun BackupRequestStatusCard(
             if (isDeclined || isCancelled) {
                 Text(
                     if (isDeclined) "Declined by dispatch" else "Request cancelled",
-                    color = if (isDeclined) Color(0xFFD32F2F) else AppColors.TextSecondary,
+                    color = if (isDeclined) badgeColor else AppColors.TextSecondary,
                     fontSize = 11.sp
                 )
             } else {
@@ -688,6 +755,7 @@ fun HomeScreen(
     assignedVm: AssignedIncidentsViewModel = viewModel()
 ) {
     val context = LocalContext.current
+    val notificationDestination by NotificationNavigation.destination.collectAsState()
     var resumedFromBackground by remember { mutableStateOf(false) }
     var wasGpsEnabled by remember {
         mutableStateOf(isDeviceLocationEnabled(context))
@@ -754,10 +822,11 @@ fun HomeScreen(
 
     val effectiveRole    = storedDepartment?.lowercase() ?: responderRole?.takeIf { it.isNotBlank() }
     val departmentFilter: IncidentType? = when (effectiveRole?.trim()?.lowercase()) {
-        "fire"    -> IncidentType.FIRE
-        "medical" -> IncidentType.MEDICAL
-        "crime"   -> IncidentType.CRIME
-        else      -> null
+        "fire", "firefighter" -> IncidentType.FIRE
+        "medical", "ems", "ambulance", "paramedic" -> IncidentType.MEDICAL
+        "crime", "police", "law enforcement", "security" -> IncidentType.CRIME
+        "disaster", "rescue" -> IncidentType.DISASTER
+        else -> null
     }
 
     val prefs                        = context.getSharedPreferences("ers_prefs", Context.MODE_PRIVATE)
@@ -786,7 +855,6 @@ fun HomeScreen(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     var onlineStatus     by remember { mutableStateOf(ResponderOnlineStatus.Online) }
-    val incomingRequests  = remember { mutableStateListOf<EmergencyRequest>() }
 
     var showNewIncidentNotification by remember { mutableStateOf(false) }
     var newIncidentMessage by remember { mutableStateOf("") }
@@ -860,6 +928,14 @@ fun HomeScreen(
     }
 
     var notificationCount by remember { mutableStateOf(0) }
+    val notificationRepository = remember { NotificationRepository() }
+    var broadcastNotices by remember { mutableStateOf<List<BroadcastNotice>>(emptyList()) }
+    var selectedBroadcastId by remember { mutableStateOf<Long?>(null) }
+    var hasPrimedBroadcastFeed by remember(responderId) { mutableStateOf(false) }
+    val knownBroadcastIds = remember(responderId) { mutableSetOf<Long>() }
+    val unreadBroadcastCount = remember(broadcastNotices) {
+        broadcastNotices.count { !it.acknowledged }
+    }
 
 
     val takePictureLauncher =
@@ -961,6 +1037,16 @@ fun HomeScreen(
     var isRefreshing by remember { mutableStateOf(false) }
     var showNotificationsDialog by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val dialogTextFieldColors = OutlinedTextFieldDefaults.colors(
+        focusedTextColor = AppColors.Text,
+        unfocusedTextColor = AppColors.Text,
+        focusedBorderColor = AppColors.Primary,
+        unfocusedBorderColor = AppColors.Border,
+        focusedLabelColor = AppColors.Primary,
+        unfocusedLabelColor = AppColors.TextSecondary,
+        cursorColor = AppColors.Primary
+    )
+
     fun cancelBackupRequest(id: Int) {
         scope.launch {
             val repo = com.ers.emergencyresponseapp.data.IncidentRepository()
@@ -1029,27 +1115,99 @@ fun HomeScreen(
     }
 
 
+    suspend fun loadBroadcasts(showError: Boolean = false) {
+        if (responderId <= 0) return
+        notificationRepository.getBroadcasts(responderId)
+            .onSuccess { latest ->
+                val ordered = latest.sortedWith(
+                    compareByDescending<BroadcastNotice> { it.createdAtMillis }
+                        .thenByDescending { it.id }
+                )
+
+                if (!hasPrimedBroadcastFeed) {
+                    // The first load is history, not a new event. Priming prevents a
+                    // notification storm after a fresh install or sign-in.
+                    knownBroadcastIds.addAll(ordered.map { it.id })
+                    hasPrimedBroadcastFeed = true
+                } else {
+                    ordered.asReversed()
+                        .filter { notice ->
+                            notice.id > 0L &&
+                                    !notice.acknowledged &&
+                                    notice.id !in knownBroadcastIds
+                        }
+                        .forEach { notice ->
+                            AppNotificationManager.showBroadcast(
+                                context = context.applicationContext,
+                                eventKey = "broadcast:${notice.id}",
+                                broadcastId = notice.id,
+                                incidentId = notice.incidentId,
+                                priority = notice.priority,
+                                title = buildString {
+                                    append("Emergency broadcast")
+                                    notice.incidentReference
+                                        .takeIf { it.isNotBlank() }
+                                        ?.let { append(" • ").append(it) }
+                                },
+                                body = notice.message
+                            )
+                        }
+                    knownBroadcastIds.addAll(ordered.map { it.id })
+                }
+
+                broadcastNotices = ordered
+            }
+            .onFailure { error ->
+                if (showError) {
+                    Toast.makeText(
+                        context,
+                        error.message ?: "Unable to refresh broadcasts",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+    }
+
     fun refreshHomeData() {
-        if (isRefreshing) return
+        if (isRefreshing || responderId <= 0) return
 
         scope.launch {
             isRefreshing = true
-            assignedVm.load(responderId)
-            assignedVm.loadActive(responderId)
-            delay(500)
-            isRefreshing = false
+            try {
+                val repository = com.ers.emergencyresponseapp.data.IncidentRepository()
+                assignedVm.load(responderId)
+                assignedVm.loadActive(responderId)
+                backupRequestsList = repository.getMyBackupRequests(responderId)
+                lastBackupUpdateTime = java.util.Date()
+                loadBroadcasts(showError = true)
+            } finally {
+                isRefreshing = false
+            }
         }
     }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(responderId) {
+        if (responderId <= 0) return@LaunchedEffect
         isLoading = true
         assignedVm.load(responderId)
         assignedVm.loadActive(responderId)
+        loadBroadcasts()
         isLoading = false
 
-        if (incomingRequests.isEmpty()) {
-            demoFeedIncomingRequests(incomingRequests)
+        while (true) {
+            delay(30_000L)
+            loadBroadcasts()
         }
+    }
+
+    LaunchedEffect(notificationDestination, broadcastNotices) {
+        val destination = notificationDestination as? NotificationDestination.Broadcast
+            ?: return@LaunchedEffect
+        val broadcast = broadcastNotices.firstOrNull { it.id == destination.broadcastId }
+            ?: return@LaunchedEffect
+        selectedBroadcastId = broadcast.id
+        showNotificationsDialog = true
+        NotificationNavigation.clear(destination)
     }
 
 
@@ -1287,13 +1445,12 @@ fun HomeScreen(
 
             assignedVm.load(responderId)
             assignedVm.loadActive(responderId)
-            RouteHistoryStore.completeRoute(context, incident.id)
-
             scope.launch {
                 try {
                     val response = RetrofitProvider.incidentApi.markRouteArrived(
                         MarkRouteArrivedRequest(
                             incident_id = incident.id.toIntOrNull() ?: 0,
+                            assignment_id = incident.assignmentId?.toIntOrNull(),
                             responder_id = responderId
                         )
                     )
@@ -1531,12 +1688,15 @@ fun HomeScreen(
     // ─────────────────────────────────────────────────────────────────────────
     val listState = rememberLazyListState()
     Scaffold(
+        containerColor = AppColors.Bg,
+        contentColor = AppColors.Text,
         topBar = {},
         floatingActionButton = {}
     ) { paddingValues ->
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .background(AppColors.Bg)
                 .padding(paddingValues)
         ) {
 
@@ -1554,7 +1714,7 @@ fun HomeScreen(
                                 .padding(horizontal = 12.dp, vertical = 8.dp),
                             shape = RoundedCornerShape(16.dp),
                             colors = CardDefaults.cardColors(
-                                containerColor = Color(0xFFFFEBEE)
+                                containerColor = AppColors.DangerSurface
                             ),
                             border = BorderStroke(
                                 2.dp,
@@ -1572,7 +1732,7 @@ fun HomeScreen(
                                 Icon(
                                     imageVector = Icons.Default.Warning,
                                     contentDescription = "Critical warning",
-                                    tint = Color(0xFFD32F2F),
+                                    tint = AppColors.DangerText,
                                     modifier = Modifier.size(24.dp)
                                 )
 
@@ -1583,13 +1743,13 @@ fun HomeScreen(
                                         "⚠️ GPS Location Disabled",
                                         fontWeight = FontWeight.ExtraBold,
                                         fontSize = 13.sp,
-                                        color = Color(0xFFD32F2F)
+                                        color = AppColors.DangerText
                                     )
 
                                     Text(
                                         "Turn ON location in device settings. GPS is required for emergency response.",
                                         fontSize = 11.sp,
-                                        color = Color(0xFFC62828),
+                                        color = AppColors.DangerText,
                                         lineHeight = 14.sp
                                     )
                                 }
@@ -1621,10 +1781,13 @@ fun HomeScreen(
                         prefs.edit().putBoolean("location_permission_prompted", true).apply()
                     },
                     shape = RoundedCornerShape(20.dp),
+                    containerColor = AppColors.CardBg,
+                    titleContentColor = AppColors.Text,
+                    textContentColor = AppColors.Text,
                     icon = {
                         Icon(Icons.Default.LocationOn, contentDescription = null, tint = AppColors.Primary)
                     },
-                    title = { Text("GPS Location Required", fontWeight = FontWeight.Bold, color = Color(0xFFD32F2F)) },
+                    title = { Text("GPS Location Required", fontWeight = FontWeight.Bold, color = AppColors.DangerText) },
                     text = {
                         Text(
                             "🚨 CRITICAL FOR RESPONDERS\n\n" +
@@ -1800,11 +1963,21 @@ fun HomeScreen(
             }
 
 
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .windowInsetsPadding(WindowInsets.navigationBars),
+            AppPullToRefresh(
+                isRefreshing = isRefreshing,
+                onRefresh = ::refreshHomeData,
+                modifier = Modifier.fillMaxSize(),
+                indicatorTopPadding = when {
+                    showCriticalGpsWarning -> 112.dp
+                    showNewIncidentNotification -> 120.dp
+                    else -> 8.dp
+                }
+            ) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .windowInsetsPadding(WindowInsets.navigationBars),
                 contentPadding = PaddingValues(
                     top = when {
                         showCriticalGpsWarning -> 110.dp
@@ -1886,32 +2059,13 @@ fun HomeScreen(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(42.dp)
-                                            .clip(CircleShape)
-                                            .background(Color.White.copy(alpha = 0.15f))
-                                            .clickable {
-                                                showNotificationsDialog = true
-                                                notificationCount = 0
-                                            },
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Notifications,
-                                            contentDescription = "Notifications",
-                                            tint = Color.White
-                                        )
-                                        if (notificationCount > 0) {
-                                            Badge(
-                                                modifier = Modifier.align(Alignment.TopEnd).offset(x = 4.dp, y = (-2).dp),
-                                                containerColor = Color(0xFFD32F2F),
-                                                contentColor = Color.White
-                                            ) {
-                                                Text(if (notificationCount > 9) "9+" else notificationCount.toString())
-                                            }
+                                    HeaderNotificationButton(
+                                        count = notificationCount + unreadBroadcastCount,
+                                        onClick = {
+                                            showNotificationsDialog = true
+                                            notificationCount = 0
                                         }
-                                    }
+                                    )
 
                                     Box(
                                         modifier = Modifier.size(70.dp),
@@ -1972,15 +2126,53 @@ fun HomeScreen(
 
                 // ASSIGNED INCIDENTS
                 item {
-                    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("Assigned Incidents", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Assigned Incidents",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = AppColors.Text,
+                                modifier = Modifier.weight(1f)
+                            )
+
+                            if (assignedListForRole.isNotEmpty()) {
+                                Surface(
+                                    color = AppColors.Primary.copy(
+                                        alpha = if (ThemeController.isDarkMode.value) 0.22f else 0.10f
+                                    ),
+                                    shape = RoundedCornerShape(999.dp)
+                                ) {
+                                    Text(
+                                        text = assignedListForRole.size.toString(),
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                        color = if (ThemeController.isDarkMode.value) {
+                                            Color(0xFF9AD2D0)
+                                        } else {
+                                            AppColors.Primary
+                                        },
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+
                         if (assignedListForRole.isEmpty()) {
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(24.dp),
-                                colors = CardDefaults.cardColors(containerColor = AppColors.Bg),
-                                elevation = CardDefaults.cardElevation(3.dp),
-                                border = BorderStroke(1.dp, AppColors.Primary.copy(alpha = 0.14f))
+                                shape = RoundedCornerShape(22.dp),
+                                colors = CardDefaults.cardColors(containerColor = AppColors.CardBg),
+                                elevation = CardDefaults.cardElevation(1.dp),
+                                border = BorderStroke(1.dp, AppColors.Border)
                             ) {
                                 Column(
                                     modifier = Modifier
@@ -1991,16 +2183,16 @@ fun HomeScreen(
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Box(
                                             modifier = Modifier
-                                                .size(54.dp)
-                                                .clip(RoundedCornerShape(18.dp))
-                                                .background(Color(0xFFFFF3E0)),
+                                                .size(52.dp)
+                                                .clip(RoundedCornerShape(16.dp))
+                                                .background(AppColors.DispatchSurface),
                                             contentAlignment = Alignment.Center
                                         ) {
                                             Icon(
-                                                imageVector = Icons.Default.LocalFireDepartment,
+                                                imageVector = Icons.Default.Done,
                                                 contentDescription = null,
-                                                tint = Color(0xFFEF6C00),
-                                                modifier = Modifier.size(30.dp)
+                                                tint = AppColors.DispatchText,
+                                                modifier = Modifier.size(28.dp)
                                             )
                                         }
 
@@ -2008,146 +2200,400 @@ fun HomeScreen(
 
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(
-                                                text = unitCode.ifBlank { "Unit not assigned" },
+                                                text = "Ready for dispatch",
                                                 fontWeight = FontWeight.Bold,
-                                                fontSize = 22.sp,
+                                                fontSize = 18.sp,
                                                 color = AppColors.Text
                                             )
 
+                                            Spacer(Modifier.height(3.dp))
+
                                             Text(
-                                                text = unitType.ifBlank { "Responder unit" },
+                                                text = "No incident is currently assigned.",
                                                 color = AppColors.TextSecondary,
-                                                fontSize = 14.sp
+                                                fontSize = 13.sp
                                             )
                                         }
                                     }
 
                                     Surface(
-                                        color = Color(0xFFE8F5E9),
+                                        color = AppColors.SuccessSurface,
                                         shape = RoundedCornerShape(999.dp)
                                     ) {
                                         Row(
-                                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                            modifier = Modifier.padding(horizontal = 13.dp, vertical = 7.dp),
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             Box(
                                                 modifier = Modifier
-                                                    .size(10.dp)
+                                                    .size(8.dp)
                                                     .clip(CircleShape)
-                                                    .background(Color(0xFF43A047))
+                                                    .background(AppColors.SuccessText)
                                             )
 
                                             Spacer(Modifier.width(8.dp))
 
                                             Text(
                                                 text = "Available for Dispatch",
-                                                color = Color(0xFF2E7D32),
+                                                color = AppColors.SuccessText,
                                                 fontWeight = FontWeight.SemiBold,
-                                                fontSize = 14.sp
+                                                fontSize = 13.sp
                                             )
                                         }
                                     }
 
                                     Text(
-                                        text = "No assigned incident yet. You’ll be notified once the dispatch center assigns an incident.",
+                                        text = "You’ll be notified as soon as the dispatch center assigns an incident.",
                                         color = AppColors.TextSecondary,
                                         fontSize = 13.sp,
                                         lineHeight = 18.sp
                                     )
+
+                                    HorizontalDivider(color = AppColors.Border)
+
+                                    Text(
+                                        text = "Current unit: ${unitCode.ifBlank { "Unit not assigned" }} • " +
+                                                unitType.ifBlank { "Responder unit" },
+                                        color = AppColors.TextSecondary,
+                                        fontSize = 11.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
                                 }
                             }
-                        }
-                        else {
+                        } else {
                             assignedListForRole.forEach { inc ->
-                                val diffMin   = ((System.currentTimeMillis() - inc.timeReported.time) / 60000).toInt()
-                                val timeLabel = when { diffMin < 1 -> "just now"; diffMin < 60 -> "${diffMin}m ago"; diffMin < 1440 -> "${diffMin / 60}h ago"; else -> java.text.SimpleDateFormat("h:mm a", Locale.getDefault()).format(inc.timeReported) }
-                                val priorityColor = when (inc.priority) { IncidentPriority.HIGH -> Color(0xFFD32F2F); IncidentPriority.MEDIUM -> Color(0xFFFFA000); IncidentPriority.LOW -> Color(0xFFFFEB3B) }
+                                val timeLabel = timeAgoLabel(inc.timeReported)
+
+                                val isDarkTheme = ThemeController.isDarkMode.value
+                                val priorityColor = when (inc.priority) {
+                                    IncidentPriority.HIGH -> if (isDarkTheme) {
+                                        Color(0xFFFF8A80)
+                                    } else {
+                                        Color(0xFFD32F2F)
+                                    }
+                                    IncidentPriority.MEDIUM -> if (isDarkTheme) {
+                                        Color(0xFFFFCC80)
+                                    } else {
+                                        Color(0xFFEF6C00)
+                                    }
+                                    IncidentPriority.LOW -> if (isDarkTheme) {
+                                        Color(0xFF81C784)
+                                    } else {
+                                        Color(0xFF2E7D32)
+                                    }
+                                    IncidentPriority.UNKNOWN -> AppColors.TextSecondary
+                                }
+                                val incidentAccent = when (inc.type) {
+                                    IncidentType.FIRE -> if (isDarkTheme) Color(0xFFEF5350) else Color(0xFFE53935)
+                                    IncidentType.MEDICAL -> if (isDarkTheme) Color(0xFF64B5F6) else Color(0xFF1E88E5)
+                                    IncidentType.CRIME -> if (isDarkTheme) Color(0xFFBCAAA4) else Color(0xFF6D4C41)
+                                    IncidentType.DISASTER -> if (isDarkTheme) Color(0xFFCE93D8) else Color(0xFF8E24AA)
+                                    IncidentType.GENERAL -> AppColors.Primary
+                                }
+                                val incidentIcon = when (inc.type) {
+                                    IncidentType.FIRE -> Icons.Default.LocalFireDepartment
+                                    IncidentType.MEDICAL -> Icons.Default.LocalHospital
+                                    IncidentType.CRIME -> Icons.Default.Security
+                                    IncidentType.DISASTER -> Icons.Default.Warning
+                                    IncidentType.GENERAL -> Icons.Default.Info
+                                }
+                                val statusLabel = when (inc.status.name.lowercase()) {
+                                    "reported" -> "Received"
+                                    "assigned" -> "Assigned"
+                                    "received" -> "Received"
+                                    "en_route" -> "En Route"
+                                    "on_scene" -> "On Scene"
+                                    "completed" -> "Completed"
+                                    else -> inc.status.displayName
+                                }
+                                val statusColor = when (inc.status.name.lowercase()) {
+                                    "en_route" -> if (isDarkTheme) Color(0xFF90CAF9) else Color(0xFF1565C0)
+                                    "on_scene" -> if (isDarkTheme) Color(0xFF81C784) else Color(0xFF2E7D32)
+                                    "completed" -> AppColors.TextSecondary
+                                    else -> if (isDarkTheme) Color(0xFF80CBC4) else AppColors.Primary
+                                }
+
                                 Card(
                                     modifier = Modifier.fillMaxWidth(),
-                                    shape = RoundedCornerShape(16.dp),colors = CardDefaults.cardColors(containerColor = AppColors.Bg),
-                                    elevation = CardDefaults.cardElevation(0.dp),
-                                    border = androidx.compose.foundation.BorderStroke(1.dp, AppColors.Border)
+                                    shape = RoundedCornerShape(22.dp),
+                                    colors = CardDefaults.cardColors(containerColor = AppColors.CardBg),
+                                    elevation = CardDefaults.cardElevation(1.dp),
+                                    border = BorderStroke(
+                                        1.dp,
+                                        priorityColor.copy(alpha = if (isDarkTheme) 0.42f else 0.28f)
+                                    )
                                 ) {
                                     Column(
-                                        // FIX 2: Use stable top-level AssignedCardBrush constant
-                                        modifier = Modifier.fillMaxWidth().background(assignedCardBrush()).padding(14.dp),
-                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .background(assignedCardBrush())
+                                            .padding(16.dp),
+                                        verticalArrangement = Arrangement.spacedBy(12.dp)
                                     ) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            // FIX 2: Use stable top-level AssignedBarBrush constant
-                                            Box(modifier = Modifier.width(7.dp).height(54.dp).clip(RoundedCornerShape(99.dp)).background(assignedBarBrush()))
-                                            Spacer(Modifier.width(12.dp))
-                                            Column(modifier = Modifier.weight(1f)) {
-                                                Text(inc.type.displayName, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = AppColors.Text)
-                                                Spacer(Modifier.height(4.dp))
-                                                Text(inc.location.ifBlank { "Unknown location" }, fontSize = 13.sp, color = AppColors.TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                            }
-                                            Box(modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(priorityColor.copy(0.12f)).border(1.dp, priorityColor.copy(0.6f), RoundedCornerShape(999.dp)).padding(horizontal = 12.dp, vertical = 6.dp)) {
-                                                Text(inc.priority.name.uppercase(), color = priorityColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                            }
-                                        }
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text(timeLabel, fontSize = 12.sp, color = AppColors.TextSecondary)
-                                            Spacer(Modifier.width(10.dp))
-                                            Box(modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(AppColors.Secondary.copy(0.10f)).padding(horizontal = 10.dp, vertical = 5.dp)) {
-                                                Text(
-                                                    text = when (inc.status.name.lowercase()) {
-                                                        "reported" -> "Received"
-                                                        "assigned" -> "Assigned"
-                                                        "received" -> "Received"
-                                                        "en_route" -> "En Route"
-                                                        "on_scene" -> "On Scene"
-                                                        "completed" -> "Completed"
-                                                        else -> inc.status.displayName
-                                                    },
-                                                    fontSize = 12.sp,
-                                                    color = AppColors.Secondary,
-                                                    fontWeight = FontWeight.SemiBold
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(46.dp)
+                                                    .clip(RoundedCornerShape(14.dp))
+                                                    .background(
+                                                        incidentAccent.copy(
+                                                            alpha = if (isDarkTheme) 0.20f else 0.11f
+                                                        )
+                                                    ),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Icon(
+                                                    imageVector = incidentIcon,
+                                                    contentDescription = inc.type.displayName,
+                                                    tint = incidentAccent,
+                                                    modifier = Modifier.size(24.dp)
                                                 )
                                             }
-                                        }
-                                        inc.description.takeIf { it.isNotBlank() }?.let { Text(it, fontSize = 13.sp, color = AppColors.Text.copy(0.9f), maxLines = 2, overflow = TextOverflow.Ellipsis) }
 
-                                        Surface(
-                                            color = Color(0xFFEFF5F5),
-                                            shape = RoundedCornerShape(14.dp)
-                                        ) {
-                                            Column(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .padding(10.dp)
-                                            ) {
+                                            Spacer(Modifier.width(12.dp))
+
+                                            Column(modifier = Modifier.weight(1f)) {
                                                 Text(
-                                                    "Assigned Unit",
-                                                    fontSize = 11.sp,
+                                                    text = "${inc.type.displayName} Incident",
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 18.sp,
+                                                    color = AppColors.Text,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+
+                                                Spacer(Modifier.height(3.dp))
+
+                                                Text(
+                                                    text = "Reported $timeLabel",
+                                                    fontSize = 12.sp,
                                                     color = AppColors.TextSecondary
                                                 )
+                                            }
 
+                                            Box(
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(999.dp))
+                                                    .background(
+                                                        priorityColor.copy(
+                                                            alpha = if (isDarkTheme) 0.20f else 0.11f
+                                                        )
+                                                    )
+                                                    .border(
+                                                        1.dp,
+                                                        priorityColor.copy(alpha = 0.62f),
+                                                        RoundedCornerShape(999.dp)
+                                                    )
+                                                    .padding(horizontal = 11.dp, vertical = 6.dp)
+                                            ) {
                                                 Text(
-                                                    "${unitCode.ifBlank { "Unit" }} • ${unitType.ifBlank { "Responder Unit" }}",
-                                                    fontWeight = FontWeight.SemiBold,
-                                                    color = AppColors.Text,
-                                                    fontSize = 13.sp
+                                                    text = inc.priority.name.uppercase(),
+                                                    color = priorityColor,
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.ExtraBold
                                                 )
                                             }
+                                        }
+
+                                        Surface(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            color = incidentAccent.copy(
+                                                alpha = if (isDarkTheme) 0.13f else 0.07f
+                                            ),
+                                            shape = RoundedCornerShape(16.dp),
+                                            border = BorderStroke(
+                                                1.dp,
+                                                incidentAccent.copy(
+                                                    alpha = if (isDarkTheme) 0.35f else 0.20f
+                                                )
+                                            )
+                                        ) {
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(horizontal = 13.dp, vertical = 12.dp),
+                                                verticalAlignment = Alignment.Top
+                                            ) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(34.dp)
+                                                        .clip(CircleShape)
+                                                        .background(
+                                                            incidentAccent.copy(
+                                                                alpha = if (isDarkTheme) 0.22f else 0.12f
+                                                            )
+                                                        ),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.LocationOn,
+                                                        contentDescription = null,
+                                                        tint = incidentAccent,
+                                                        modifier = Modifier.size(19.dp)
+                                                    )
+                                                }
+
+                                                Spacer(Modifier.width(10.dp))
+
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(
+                                                        text = "INCIDENT LOCATION",
+                                                        color = incidentAccent,
+                                                        fontSize = 10.sp,
+                                                        fontWeight = FontWeight.ExtraBold,
+                                                        letterSpacing = 0.5.sp
+                                                    )
+
+                                                    Spacer(Modifier.height(3.dp))
+
+                                                    Text(
+                                                        text = inc.location.ifBlank { "Unknown location" },
+                                                        color = AppColors.Text,
+                                                        fontSize = 16.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        lineHeight = 21.sp,
+                                                        maxLines = 2,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+
+                                                    if (inc.latitude == null || inc.longitude == null) {
+                                                        Spacer(Modifier.height(4.dp))
+                                                        Text(
+                                                            text = "Map coordinates are not yet available",
+                                                            color = AppColors.TextSecondary,
+                                                            fontSize = 11.sp
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Surface(
+                                                color = statusColor.copy(
+                                                    alpha = if (isDarkTheme) 0.19f else 0.10f
+                                                ),
+                                                shape = RoundedCornerShape(999.dp),
+                                                border = BorderStroke(
+                                                    1.dp,
+                                                    statusColor.copy(alpha = 0.38f)
+                                                )
+                                            ) {
+                                                Text(
+                                                    text = statusLabel,
+                                                    modifier = Modifier.padding(
+                                                        horizontal = 10.dp,
+                                                        vertical = 5.dp
+                                                    ),
+                                                    color = statusColor,
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+
+                                            Spacer(Modifier.weight(1f))
+
+                                            Text(
+                                                text = "Incident #${inc.id}",
+                                                color = AppColors.TextSecondary,
+                                                fontSize = 11.sp,
+                                                maxLines = 1
+                                            )
+                                        }
+
+                                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            Text(
+                                                text = "INCIDENT DETAILS",
+                                                color = AppColors.TextSecondary,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                letterSpacing = 0.4.sp
+                                            )
+
+                                            Text(
+                                                text = inc.description.ifBlank {
+                                                    "No additional incident details were provided."
+                                                },
+                                                fontSize = 13.sp,
+                                                lineHeight = 18.sp,
+                                                color = AppColors.Text.copy(alpha = 0.92f),
+                                                maxLines = 3,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+
+                                        HorizontalDivider(color = AppColors.Border)
+
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "Assigned unit",
+                                                color = AppColors.TextSecondary,
+                                                fontSize = 11.sp
+                                            )
+
+                                            Spacer(Modifier.width(8.dp))
+
+                                            Text(
+                                                text = "${unitCode.ifBlank { "Unit" }} • " +
+                                                        unitType.ifBlank { "Responder Unit" },
+                                                modifier = Modifier.weight(1f),
+                                                color = AppColors.TextSecondary,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Medium,
+                                                textAlign = TextAlign.End,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
                                         }
 
                                         AssignedActionButtons(
-                                            inc = inc, context = context, navController = navController,
-                                            currentLatitude = currentLatitude, currentLongitude = currentLongitude,
+                                            inc = inc,
+                                            context = context,
+                                            navController = navController,
+                                            currentLatitude = currentLatitude,
+                                            currentLongitude = currentLongitude,
                                             hasLocationPermission = hasLocationPermission,
                                             onSceneEnabled = (onSceneEnabledMap[inc.id] == true),
-                                            setOnSceneEnabled = { e -> onSceneEnabledMap[inc.id] = e },
-                                            setNavTarget = { id, lat, lng -> navDestinationIncidentId = id; navDestinationLat = lat; navDestinationLng = lng },
+                                            setOnSceneEnabled = { enabled ->
+                                                onSceneEnabledMap[inc.id] = enabled
+                                            },
+                                            setNavTarget = { id, lat, lng ->
+                                                navDestinationIncidentId = id
+                                                navDestinationLat = lat
+                                                navDestinationLng = lng
+                                            },
                                             startOnSceneTracking = { startOnSceneTracking() },
-                                            requestOnScenePermission = { onScenePermLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION) },
-                                            // HomeScreen.kt wiring
+                                            requestOnScenePermission = {
+                                                onScenePermLauncher.launch(
+                                                    Manifest.permission.ACCESS_FINE_LOCATION
+                                                )
+                                            },
                                             navigateToLocation = { lat, lng, addr, incId, assignId ->
-                                                navigateToLocation(lat, lng, addr, incidentId = incId, assignmentId = assignId)
+                                                navigateToLocation(
+                                                    lat,
+                                                    lng,
+                                                    addr,
+                                                    incidentId = incId,
+                                                    assignmentId = assignId
+                                                )
                                             },
                                             sendOnSceneReport = { sendOnSceneReport(it) },
-                                            openMarkDone = { markTargetIncidentInc = it; proofNotes = ""; selectedProofUri = null; showMarkCompleteDialog = true },
-                                            // AssignedActionButtons's onNavigateStatusUpdate
+                                            openMarkDone = {
+                                                markTargetIncidentInc = it
+                                                proofNotes = ""
+                                                selectedProofUri = null
+                                                showMarkCompleteDialog = true
+                                            },
                                             onNavigateStatusUpdate = {
                                                 assignedVm.updateStatus(
                                                     assignmentId = it.assignmentId ?: it.id,
@@ -2156,19 +2602,17 @@ fun HomeScreen(
                                                 )
                                             }
                                         )
-
                                     }
                                 }
                             }
                         }
                     }
                 }
-
                 item {
                     Card(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
                         shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = AppColors.Bg),
+                        colors = CardDefaults.cardColors(containerColor = AppColors.CardBg),
                         border = BorderStroke(1.dp, AppColors.Border),
                         elevation = CardDefaults.cardElevation(1.dp)
                     ) {
@@ -2292,8 +2736,7 @@ fun HomeScreen(
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier.clickable {
-                                    assignedVm.loadActive(responderId)
-                                    Toast.makeText(context, "Refreshing incidents...", Toast.LENGTH_SHORT).show()
+                                    refreshHomeData()
                                 }
                             ) {
                                 Icon(
@@ -2364,7 +2807,7 @@ fun HomeScreen(
                                         .height(90.dp),
                                     shape = RoundedCornerShape(18.dp),
                                     colors = CardDefaults.cardColors(
-                                        containerColor = Color(0xFFEAEAEA)
+                                        containerColor = AppColors.Skeleton
                                     )
                                 ) {}
                             }
@@ -2443,7 +2886,7 @@ fun HomeScreen(
                         Card(
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).heightIn(max = 320.dp),
                             shape = RoundedCornerShape(18.dp), elevation = CardDefaults.cardElevation(0.dp),
-                            colors = CardDefaults.cardColors(containerColor = AppColors.Bg),
+                            colors = CardDefaults.cardColors(containerColor = AppColors.CardBg),
                             border = androidx.compose.foundation.BorderStroke(1.dp, AppColors.Border)
                         ) {
                             LazyColumn(
@@ -2455,14 +2898,26 @@ fun HomeScreen(
                                     items = activeListVisible,
                                     key = { it.id }  // FIX 11: stable item keys eliminate full re-layout on list changes
                                 ) { inc ->
-                                    val priorityColor = when (inc.priority) { IncidentPriority.HIGH -> Color(0xFFD32F2F); IncidentPriority.MEDIUM -> Color(0xFFFFA000); IncidentPriority.LOW -> Color(0xFF388E3C) }
-                                    val accent        = when (inc.type)     { IncidentType.FIRE -> Color(0xFFE53935); IncidentType.MEDICAL -> Color(0xFF1E88E5); IncidentType.CRIME -> Color(0xFF6D4C41); IncidentType.DISASTER -> Color(0xFF8E24AA) }
+                                    val isDarkTheme = ThemeController.isDarkMode.value
+                                    val priorityColor = when (inc.priority) {
+                                        IncidentPriority.HIGH -> if (isDarkTheme) Color(0xFFFF8A80) else Color(0xFFD32F2F)
+                                        IncidentPriority.MEDIUM -> if (isDarkTheme) Color(0xFFFFCC80) else Color(0xFFEF6C00)
+                                        IncidentPriority.LOW -> if (isDarkTheme) Color(0xFF81C784) else Color(0xFF2E7D32)
+                                        IncidentPriority.UNKNOWN -> AppColors.TextSecondary
+                                    }
+                                    val accent = when (inc.type) {
+                                        IncidentType.FIRE -> if (isDarkTheme) Color(0xFFEF5350) else Color(0xFFE53935)
+                                        IncidentType.MEDICAL -> if (isDarkTheme) Color(0xFF64B5F6) else Color(0xFF1E88E5)
+                                        IncidentType.CRIME -> if (isDarkTheme) Color(0xFFBCAAA4) else Color(0xFF6D4C41)
+                                        IncidentType.DISASTER -> if (isDarkTheme) Color(0xFFCE93D8) else Color(0xFF8E24AA)
+                                        IncidentType.GENERAL -> AppColors.Primary
+                                    }
                                     Card(
                                         modifier = Modifier.fillMaxWidth().combinedClickable(
                                             onClick = { selectedActiveIncident = inc; showActiveDetailsSheet = true },
                                             onLongClick = { selectedActiveIncident = inc; showActiveDetailsSheet = true }
                                         ),
-                                        shape = RoundedCornerShape(18.dp), elevation = CardDefaults.cardElevation(0.dp),colors = CardDefaults.cardColors(containerColor = AppColors.Bg), border = androidx.compose.foundation.BorderStroke(1.dp, AppColors.Border)
+                                        shape = RoundedCornerShape(18.dp), elevation = CardDefaults.cardElevation(0.dp),colors = CardDefaults.cardColors(containerColor = AppColors.CardBg), border = androidx.compose.foundation.BorderStroke(1.dp, AppColors.Border)
                                     ) {
                                         Column(modifier = Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2477,6 +2932,7 @@ fun HomeScreen(
                                                             IncidentType.MEDICAL -> Icons.Default.LocalHospital
                                                             IncidentType.CRIME -> Icons.Default.Security
                                                             IncidentType.DISASTER -> Icons.Default.Warning
+                                                            IncidentType.GENERAL -> Icons.Default.Info
                                                         }
 
                                                         Icon(
@@ -2504,7 +2960,8 @@ fun HomeScreen(
                                                 ) {
 
                                                     val isNewIncident =
-                                                        (System.currentTimeMillis() - inc.timeReported.time) < 300000
+                                                        inc.timeReported.time > 0L &&
+                                                                (System.currentTimeMillis() - inc.timeReported.time) < 300000
 
                                                     if (isNewIncident) {
 
@@ -2568,12 +3025,21 @@ fun HomeScreen(
                     // FIX 3: Use stable top-level brush lists instead of inline Brush.* calls.
                     // FIX 9: Static label/icon/accent lists moved to remember{} so they are not
                     // re-allocated on every recomposition of this item.
-                    val typeLabels  = remember { listOf("Fire", "Medical", "Crime") }
-                    val typeAccents = remember { listOf(Color(0xFFE53935), Color(0xFF1E88E5), Color(0xFF6D4C41)) }
-                    val typeIcons   = remember { listOf(Icons.Default.LocalFireDepartment, Icons.Default.LocalHospital, Icons.Default.Security) }
-                    // typeCounts references derivedStateOf vars — no extra remember needed
-                    val typeCounts  = listOf(fireCount, medicalCount, crimeCount)
-                    val cardBrushes = cardBrushesStable()
+                    val isDarkTheme = ThemeController.isDarkMode.value
+                    val typeLabels = remember { listOf("Fire", "Medical", "Crime") }
+                    val typeAccents = remember(isDarkTheme) {
+                        if (isDarkTheme) {
+                            listOf(Color(0xFFEF5350), Color(0xFF64B5F6), Color(0xFFBCAAA4))
+                        } else {
+                            listOf(Color(0xFFE53935), Color(0xFF1E88E5), Color(0xFF6D4C41))
+                        }
+                    }
+                    val typeIcons = remember {
+                        listOf(Icons.Default.LocalFireDepartment, Icons.Default.LocalHospital, Icons.Default.Security)
+                    }
+                    // typeCounts references derived state; no extra remember is needed.
+                    val typeCounts = listOf(fireCount, medicalCount, crimeCount)
+                    val cardBrushes = remember(isDarkTheme) { cardBrushesStable() }
 
                     Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         typeAccents.forEachIndexed { i, accent ->
@@ -2581,7 +3047,7 @@ fun HomeScreen(
                                 modifier = Modifier.weight(1f),
                                 shape = RoundedCornerShape(22.dp),
                                 elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-                                colors = CardDefaults.cardColors(containerColor = AppColors.Bg),
+                                colors = CardDefaults.cardColors(containerColor = AppColors.CardBg),
                                 border = androidx.compose.foundation.BorderStroke(1.dp, accent.copy(0.13f))
                             ) {
                                 Row(
@@ -2629,37 +3095,47 @@ fun HomeScreen(
                         }
                     }
                 }
-            } // end LazyColumn
+                } // end LazyColumn
+            }
 
 
             // ── ALL ACTIVE DIALOG ──
             if (showAllActiveDialog) {
                 AlertDialog(
                     onDismissRequest = { showAllActiveDialog = false },
-                    title = { Text("All Active Incidents") },
+                    containerColor = AppColors.CardBg,
+                    titleContentColor = AppColors.Text,
+                    textContentColor = AppColors.Text,
+                    title = { Text("All Active Incidents", color = AppColors.Text) },
                     text = {
                         LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             items(
                                 items = activeIncidents.filter { it.type != IncidentType.DISASTER },
                                 key = { it.id }  // FIX 11: stable keys
                             ) { inc ->
-                                val priorityColor = when (inc.priority) { IncidentPriority.HIGH -> Color(0xFFD32F2F); IncidentPriority.MEDIUM -> Color(0xFFFFA000); IncidentPriority.LOW -> Color(0xFF388E3C) }
+                                val isDarkTheme = ThemeController.isDarkMode.value
+                                val priorityColor = when (inc.priority) {
+                                    IncidentPriority.HIGH -> if (isDarkTheme) Color(0xFFFF8A80) else Color(0xFFD32F2F)
+                                    IncidentPriority.MEDIUM -> if (isDarkTheme) Color(0xFFFFCC80) else Color(0xFFEF6C00)
+                                    IncidentPriority.LOW -> if (isDarkTheme) Color(0xFF81C784) else Color(0xFF2E7D32)
+                                    IncidentPriority.UNKNOWN -> AppColors.TextSecondary
+                                }
                                 Card(
                                     modifier = Modifier.fillMaxWidth().combinedClickable(
                                         onClick = { selectedActiveIncident = inc; showActiveDetailsSheet = true; showAllActiveDialog = false },
                                         onLongClick = { selectedActiveIncident = inc; showActiveDetailsSheet = true; showAllActiveDialog = false }
                                     ),
-                                    shape = RoundedCornerShape(14.dp), elevation = CardDefaults.cardElevation(1.dp),colors = CardDefaults.cardColors(containerColor = AppColors.Bg)
+                                    shape = RoundedCornerShape(14.dp), elevation = CardDefaults.cardElevation(1.dp),colors = CardDefaults.cardColors(containerColor = AppColors.CardBg)
                                 ) {
                                     Column(modifier = Modifier.padding(12.dp)) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text(inc.type.displayName, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                                            Text(inc.type.displayName, fontWeight = FontWeight.SemiBold, color = AppColors.Text, modifier = Modifier.weight(1f))
                                             Box(modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(priorityColor.copy(0.12f)).padding(horizontal = 10.dp, vertical = 6.dp)) {
                                                 Text(inc.priority.name, color = priorityColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                             }
                                         }
-                                        Spacer(Modifier.height(4.dp)); Text(inc.location.ifBlank { "Unknown location" })
-                                        Spacer(Modifier.height(6.dp)); Text(inc.description, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                        Spacer(Modifier.height(4.dp)); Text(inc.location.ifBlank { "Unknown location" }, color = AppColors.Text)
+                                        Spacer(Modifier.height(6.dp)); Text(inc.description, color = AppColors.Text.copy(alpha = 0.90f), maxLines = 2, overflow = TextOverflow.Ellipsis)
                                         Spacer(Modifier.height(6.dp)); Text(timeAgoLabel(inc.timeReported), fontSize = 12.sp, color = AppColors.TextSecondary)
                                     }
                                 }
@@ -2678,7 +3154,8 @@ fun HomeScreen(
                 ) {
                     Surface(
                         modifier = Modifier.fillMaxSize(),
-                        color = Color(0xFFF5F7F7)
+                        color = AppColors.Bg,
+                        contentColor = AppColors.Text
                     ) {
                         Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
                             Row(
@@ -2691,7 +3168,7 @@ fun HomeScreen(
                                     Text("${visibleBackupRequests.size} total requests", fontSize = 13.sp, color = AppColors.TextSecondary)
                                 }
                                 IconButton(onClick = { showAllBackupRequestsDialog = false }) {
-                                    Icon(Icons.Default.Close, contentDescription = "Close")
+                                    Icon(Icons.Default.Close, contentDescription = "Close", tint = AppColors.Text)
                                 }
                             }
 
@@ -2700,11 +3177,23 @@ fun HomeScreen(
                             OutlinedTextField(
                                 value = backupSearchQuery,
                                 onValueChange = { backupSearchQuery = it },
-                                placeholder = { Text("Search department or resource") },
-                                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                                placeholder = {
+                                    Text(
+                                        "Search department or resource",
+                                        color = AppColors.TextSecondary
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Search,
+                                        contentDescription = null,
+                                        tint = AppColors.TextSecondary
+                                    )
+                                },
                                 modifier = Modifier.fillMaxWidth(),
                                 singleLine = true,
-                                shape = RoundedCornerShape(14.dp)
+                                shape = RoundedCornerShape(14.dp),
+                                colors = dialogTextFieldColors
                             )
 
                             Spacer(Modifier.height(12.dp))
@@ -2741,8 +3230,11 @@ fun HomeScreen(
                         pendingCancelBackupId = null
                     },
                     shape = RoundedCornerShape(20.dp),
-                    icon = { Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFD32F2F)) },
-                    title = { Text("Cancel Backup Request?", fontWeight = FontWeight.Bold) },
+                    containerColor = AppColors.CardBg,
+                    titleContentColor = AppColors.Text,
+                    textContentColor = AppColors.Text,
+                    icon = { Icon(Icons.Default.Warning, contentDescription = null, tint = AppColors.DangerText) },
+                    title = { Text("Cancel Backup Request?", fontWeight = FontWeight.Bold, color = AppColors.Text) },
                     text = {
                         Text(
                             "This will cancel your backup request. This action cannot be undone.",
@@ -2783,6 +3275,9 @@ fun HomeScreen(
                         showMarkCompleteDialog = false
                         markTargetIncidentInc = null
                     },
+                    containerColor = AppColors.CardBg,
+                    titleContentColor = AppColors.Text,
+                    textContentColor = AppColors.Text,
                     title = {
                         Text(
                             "Complete Incident",
@@ -2806,7 +3301,8 @@ fun HomeScreen(
                                 onValueChange = { proofNotes = it },
                                 label = { Text("Completion notes (optional)") },
                                 modifier = Modifier.fillMaxWidth(),
-                                minLines = 3
+                                minLines = 3,
+                                colors = dialogTextFieldColors
                             )
 
                             Button(
@@ -2834,7 +3330,7 @@ fun HomeScreen(
                             if (!hasProof) {
                                 Text(
                                     "Required before submitting",
-                                    color = Color(0xFFD32F2F),
+                                    color = AppColors.DangerText,
                                     fontSize = 12.sp
                                 )
                             }
@@ -2876,7 +3372,7 @@ fun HomeScreen(
                                 } else {
                                     Text(
                                         "Photo captured ✓",
-                                        color = Color(0xFF2E7D32),
+                                        color = AppColors.SuccessText,
                                         fontWeight = FontWeight.SemiBold
                                     )
                                 }
@@ -2922,17 +3418,14 @@ fun HomeScreen(
             }
 
             if (showNotificationsDialog) {
-
                 val notificationItems = buildList {
                     assignedListForRole.firstOrNull()?.let { inc ->
-                        add("New assigned ${inc.type.displayName} incident at ${inc.location}")
-                        add("Assigned unit: ${unitCode.ifBlank { "Unit" }} • ${unitType.ifBlank { "Responder Unit" }}")
+                        add("${inc.type.displayName} incident assigned • ${inc.location.ifBlank { "Unknown location" }}")
+                        inc.description.takeIf { it.isNotBlank() }?.let(::add)
                     }
-
                     if (activeIncidents.isNotEmpty()) {
                         add("${activeIncidents.size} active incident${if (activeIncidents.size > 1) "s" else ""} being monitored")
                     }
-
                     if (!gpsEnabled) {
                         add("GPS is disabled. Enable GPS for safer responder tracking.")
                     } else if (!isLocationMonitoringEnabled) {
@@ -2940,71 +3433,187 @@ fun HomeScreen(
                     }
                 }
 
+                val orderedBroadcasts = remember(broadcastNotices, selectedBroadcastId) {
+                    broadcastNotices.sortedWith(
+                        compareByDescending<BroadcastNotice> { it.id == selectedBroadcastId }
+                            .thenBy { it.acknowledged }
+                            .thenByDescending { it.createdAtMillis }
+                            .thenByDescending { it.id }
+                    )
+                }
 
-                AlertDialog(
-                    onDismissRequest = { showNotificationsDialog = false },
-                    shape = RoundedCornerShape(24.dp),
-                    title = {
-                        Text(
-                            "Notifications",
-                            fontWeight = FontWeight.Bold
-                        )
+                Dialog(
+                    onDismissRequest = {
+                        showNotificationsDialog = false
+                        selectedBroadcastId = null
                     },
-                    text = {
-                        Column(
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            if (notificationItems.isEmpty()) {
-                                Text(
-                                    "No new notifications.",
-                                    color = AppColors.TextSecondary
-                                )
-                            } else {
-                                notificationItems.forEach { item ->
-                                    Row(
-                                        verticalAlignment = Alignment.Top
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Notifications,
-                                            contentDescription = null,
-                                            tint = AppColors.Primary,
-                                            modifier = Modifier.size(18.dp)
-                                        )
+                    properties = DialogProperties(usePlatformDefaultWidth = false)
+                ) {
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .fillMaxHeight(0.88f)
+                            .padding(horizontal = 14.dp, vertical = 18.dp),
+                        color = AppColors.CardBg,
+                        contentColor = AppColors.Text,
+                        shape = RoundedCornerShape(24.dp),
+                        border = BorderStroke(1.dp, AppColors.Border),
+                        shadowElevation = 14.dp
+                    ) {
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 18.dp, end = 8.dp, top = 10.dp, bottom = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Notifications", fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                                    Text(
+                                        "$unreadBroadcastCount unacknowledged broadcast${if (unreadBroadcastCount == 1) "" else "s"}",
+                                        color = AppColors.TextSecondary,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                                IconButton(onClick = {
+                                    showNotificationsDialog = false
+                                    selectedBroadcastId = null
+                                }) {
+                                    Icon(Icons.Default.Close, contentDescription = "Close")
+                                }
+                            }
 
-                                        Spacer(Modifier.width(8.dp))
+                            HorizontalDivider(color = AppColors.Border)
 
+                            LazyColumn(
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                if (orderedBroadcasts.isNotEmpty()) {
+                                    item(key = "broadcast_header") {
                                         Text(
-                                            text = item,
-                                            color = AppColors.Text,
-                                            fontSize = 14.sp
+                                            "EMERGENCY BROADCASTS",
+                                            color = AppColors.DispatchText,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            letterSpacing = 0.5.sp
+                                        )
+                                    }
+                                    items(orderedBroadcasts, key = { "broadcast_${it.id}" }) { broadcast ->
+                                        BroadcastNoticeCard(
+                                            broadcast = broadcast,
+                                            highlighted = broadcast.id == selectedBroadcastId,
+                                            onAcknowledge = {
+                                                if (!broadcast.acknowledged) {
+                                                    scope.launch {
+                                                        notificationRepository
+                                                            .acknowledgeBroadcast(responderId, broadcast.id)
+                                                            .onSuccess {
+                                                                broadcastNotices = broadcastNotices.map { current ->
+                                                                    if (current.id == broadcast.id) {
+                                                                        current.copy(acknowledged = true)
+                                                                    } else current
+                                                                }
+                                                            }
+                                                            .onFailure { error ->
+                                                                Toast.makeText(
+                                                                    context,
+                                                                    error.message ?: "Unable to acknowledge broadcast",
+                                                                    Toast.LENGTH_SHORT
+                                                                ).show()
+                                                            }
+                                                    }
+                                                }
+                                            }
                                         )
                                     }
                                 }
+
+                                if (notificationItems.isNotEmpty()) {
+                                    item(key = "operational_header") {
+                                        Text(
+                                            "OPERATIONAL STATUS",
+                                            color = AppColors.TextSecondary,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            letterSpacing = 0.5.sp,
+                                            modifier = Modifier.padding(top = if (orderedBroadcasts.isEmpty()) 0.dp else 6.dp)
+                                        )
+                                    }
+                                    items(notificationItems, key = { "status_${it.hashCode()}" }) { item ->
+                                        Surface(
+                                            color = AppColors.SubtleSurface,
+                                            shape = RoundedCornerShape(13.dp),
+                                            border = BorderStroke(1.dp, AppColors.Border)
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(11.dp),
+                                                verticalAlignment = Alignment.Top
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.Notifications,
+                                                    contentDescription = null,
+                                                    tint = AppColors.Primary,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                                Spacer(Modifier.width(8.dp))
+                                                Text(item, color = AppColors.Text, fontSize = 13.sp)
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (orderedBroadcasts.isEmpty() && notificationItems.isEmpty()) {
+                                    item(key = "empty_notifications") {
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(vertical = 38.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Notifications,
+                                                contentDescription = null,
+                                                tint = AppColors.TextSecondary,
+                                                modifier = Modifier.size(34.dp)
+                                            )
+                                            Spacer(Modifier.height(8.dp))
+                                            Text("No notifications.", color = AppColors.TextSecondary)
+                                        }
+                                    }
+                                }
                             }
-                        }
-                    },
-                    confirmButton = {
-                        TextButton(
-                            onClick = {
-                                notificationCount = 0
-                                showNotificationsDialog = false
+
+                            HorizontalDivider(color = AppColors.Border)
+                            TextButton(
+                                onClick = {
+                                    notificationCount = 0
+                                    selectedBroadcastId = null
+                                    showNotificationsDialog = false
+                                },
+                                modifier = Modifier
+                                    .align(Alignment.End)
+                                    .padding(horizontal = 10.dp, vertical = 5.dp)
+                            ) {
+                                Text("Close", color = AppColors.Primary, fontWeight = FontWeight.SemiBold)
                             }
-                        ) {
-                            Text("Close")
                         }
                     }
-                )
+                }
             }
 
             // ── ACTIVE DETAILS SHEET ──
             if (showActiveDetailsSheet && selectedActiveIncident != null) {
                 val inc = selectedActiveIncident!!
+                val isDarkTheme = ThemeController.isDarkMode.value
 
                 val accent = when (inc.type) {
-                    IncidentType.FIRE -> Color(0xFFE53935)
-                    IncidentType.MEDICAL -> Color(0xFF1E88E5)
-                    IncidentType.CRIME -> Color(0xFF6D4C41)
-                    IncidentType.DISASTER -> Color(0xFF8E24AA)
+                    IncidentType.FIRE -> if (isDarkTheme) Color(0xFFEF5350) else Color(0xFFE53935)
+                    IncidentType.MEDICAL -> if (isDarkTheme) Color(0xFF64B5F6) else Color(0xFF1E88E5)
+                    IncidentType.CRIME -> if (isDarkTheme) Color(0xFFBCAAA4) else Color(0xFF6D4C41)
+                    IncidentType.DISASTER -> if (isDarkTheme) Color(0xFFCE93D8) else Color(0xFF8E24AA)
+                    IncidentType.GENERAL -> AppColors.Primary
                 }
 
                 val incidentIcon = when (inc.type) {
@@ -3012,12 +3621,14 @@ fun HomeScreen(
                     IncidentType.MEDICAL -> Icons.Default.LocalHospital
                     IncidentType.CRIME -> Icons.Default.Security
                     IncidentType.DISASTER -> Icons.Default.Warning
+                    IncidentType.GENERAL -> Icons.Default.Info
                 }
 
                 val priorityColor = when (inc.priority) {
-                    IncidentPriority.HIGH -> Color(0xFFD32F2F)
-                    IncidentPriority.MEDIUM -> Color(0xFFFFA000)
-                    IncidentPriority.LOW -> Color(0xFF388E3C)
+                    IncidentPriority.HIGH -> if (isDarkTheme) Color(0xFFFF8A80) else Color(0xFFD32F2F)
+                    IncidentPriority.MEDIUM -> if (isDarkTheme) Color(0xFFFFCC80) else Color(0xFFEF6C00)
+                    IncidentPriority.LOW -> if (isDarkTheme) Color(0xFF81C784) else Color(0xFF2E7D32)
+                    IncidentPriority.UNKNOWN -> AppColors.TextSecondary
                 }
 
                 ModalBottomSheet(
@@ -3025,7 +3636,9 @@ fun HomeScreen(
                         showActiveDetailsSheet = false
                         selectedActiveIncident = null
                     },
-                    sheetState = sheetState
+                    sheetState = sheetState,
+                    containerColor = AppColors.CardBg,
+                    contentColor = AppColors.Text
                 ) {
                     Column(
                         modifier = Modifier
@@ -3094,7 +3707,7 @@ fun HomeScreen(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(16.dp),
                             colors = CardDefaults.cardColors(
-                                containerColor = Color(0xFFF7F7F7)
+                                containerColor = AppColors.SubtleSurface
                             )
                         ) {
                             Column(
@@ -3119,7 +3732,12 @@ fun HomeScreen(
 
                                     Text(
                                         inc.location.ifBlank { "Unknown location" },
-                                        color = AppColors.TextSecondary
+                                        color = AppColors.Text,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        lineHeight = 20.sp,
+                                        maxLines = 3,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                 }
                             }
@@ -3129,7 +3747,7 @@ fun HomeScreen(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(16.dp),
                             colors = CardDefaults.cardColors(
-                                containerColor = Color(0xFFF7F7F7)
+                                containerColor = AppColors.SubtleSurface
                             )
                         ) {
                             Column(
@@ -3203,8 +3821,8 @@ fun HomeScreen(
             if (showDepartmentSelection) {
                 DepartmentSelectionDialog(
                     onDismiss = { showDepartmentSelection = false },
-                    onDepartmentSelected = { showDepartmentSelection = false },
-                    onBackupRequestReady = { request ->
+                    onDepartmentSelected = { _: String -> showDepartmentSelection = false },
+                    onBackupRequestReady = { request: BackupRequest ->
                         sendBackupRequest(request)
                         showDepartmentSelection = false
                     }
@@ -3260,6 +3878,136 @@ fun HomeScreen(
 }
 
 
+@Composable
+private fun BroadcastNoticeCard(
+    broadcast: BroadcastNotice,
+    highlighted: Boolean,
+    onAcknowledge: () -> Unit
+) {
+    val dark = ThemeController.isDarkMode.value
+    val priorityColor = when (broadcast.priority.lowercase()) {
+        "critical" -> if (dark) Color(0xFFFF8A80) else Color(0xFFC62828)
+        "urgent" -> if (dark) Color(0xFFFFCC80) else Color(0xFFEF6C00)
+        else -> if (dark) Color(0xFF90CAF9) else Color(0xFF1565C0)
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = priorityColor.copy(alpha = if (dark) 0.16f else 0.07f),
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(
+            if (highlighted) 2.dp else 1.dp,
+            priorityColor.copy(alpha = if (highlighted) 0.82f else 0.36f)
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(13.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(priorityColor.copy(alpha = 0.18f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = priorityColor,
+                        modifier = Modifier.size(19.dp)
+                    )
+                }
+                Spacer(Modifier.width(9.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        broadcast.priority.uppercase(Locale.getDefault()) + " BROADCAST",
+                        color = priorityColor,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = 0.5.sp
+                    )
+                    Text(
+                        listOf(broadcast.incidentType, broadcast.incidentReference)
+                            .filter { it.isNotBlank() }
+                            .joinToString(" • ")
+                            .ifBlank { "Operational broadcast" },
+                        color = AppColors.Text,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (broadcast.acknowledged) {
+                    Surface(
+                        color = AppColors.SuccessSurface,
+                        shape = RoundedCornerShape(999.dp)
+                    ) {
+                        Text(
+                            "ACKNOWLEDGED",
+                            color = AppColors.SuccessText,
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+            }
+
+            Text(
+                broadcast.message,
+                color = AppColors.Text,
+                fontSize = 13.sp,
+                lineHeight = 19.sp
+            )
+
+            if (broadcast.location.isNotBlank()) {
+                Row(verticalAlignment = Alignment.Top) {
+                    Icon(
+                        Icons.Default.LocationOn,
+                        contentDescription = null,
+                        tint = priorityColor,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        broadcast.location,
+                        color = AppColors.TextSecondary,
+                        fontSize = 11.sp,
+                        lineHeight = 16.sp
+                    )
+                }
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    listOf(broadcast.createdByName, broadcast.createdAt)
+                        .filter { it.isNotBlank() }
+                        .joinToString(" • "),
+                    color = AppColors.TextSecondary,
+                    fontSize = 10.sp,
+                    modifier = Modifier.weight(1f)
+                )
+                if (!broadcast.acknowledged) {
+                    Button(
+                        onClick = onAcknowledge,
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = priorityColor,
+                            contentColor = Color.White
+                        ),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 5.dp)
+                    ) {
+                        Text("Acknowledge", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ACCOUNT SETTINGS DIALOG
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3288,7 +4036,7 @@ private fun AccountSettingsDialog(
     AlertDialog(
         onDismissRequest = onBack,
         shape = RoundedCornerShape(20.dp),
-        containerColor = if (ThemeController.isDarkMode.value) Color(0xFF242426) else Color(0xFFF7F5F9),
+        containerColor = AppColors.ElevatedSurface,
         titleContentColor = AppColors.Text,
         textContentColor = AppColors.Text,
         title = { Text("Account Settings", fontWeight = FontWeight.Bold, fontSize = 20.sp) },
@@ -3306,7 +4054,7 @@ private fun AccountSettingsDialog(
                         }
                     }
                 }
-                HorizontalDivider()
+                HorizontalDivider(color = AppColors.Border)
 
                 OutlinedTextField(
                     value = fullName, onValueChange = onFullNameChange,
@@ -3329,7 +4077,16 @@ private fun AccountSettingsDialog(
                 if (showProfilePreview) {
                     AlertDialog(
                         onDismissRequest = { showProfilePreview = false },
-                        title = { Text("Profile Photo", fontWeight = FontWeight.SemiBold) },
+                        containerColor = AppColors.CardBg,
+                        titleContentColor = AppColors.Text,
+                        textContentColor = AppColors.Text,
+                        title = {
+                            Text(
+                                "Profile Photo",
+                                fontWeight = FontWeight.SemiBold,
+                                color = AppColors.Text
+                            )
+                        },
                         text = {
                             Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                                 Box(modifier = Modifier.size(240.dp).clip(CircleShape).border(1.dp, AppColors.Border, CircleShape)) {
@@ -3342,16 +4099,19 @@ private fun AccountSettingsDialog(
                 }
 
 
-                Card(shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = AppColors.Bg), border = androidx.compose.foundation.BorderStroke(1.dp, AppColors.Border)) {
+                Card(shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = AppColors.CardBg), border = androidx.compose.foundation.BorderStroke(1.dp, AppColors.Border)) {
                     Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                         Column { Text("Night mode", fontWeight = FontWeight.SemiBold, color = AppColors.Text); Text("Reduce glare in low light", fontSize = 12.sp, color = AppColors.TextSecondary) }
                         Switch(
                             checked = ThemeController.isDarkMode.value,
-                            onCheckedChange = { enabled -> ThemeController.setDarkMode(context, enabled) }
+                            onCheckedChange = { enabled ->
+                                onDarkModeChange(enabled)
+                                ThemeController.setDarkMode(context, enabled)
+                            }
                         )
                     }
                 }
-                Card(shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = AppColors.Bg), border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(0.35f))) {
+                Card(shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = AppColors.CardBg), border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(0.35f))) {
                     Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                         Column { Text("Logout", fontWeight = FontWeight.SemiBold, color = AppColors.Text); Text("Sign out of this device", fontSize = 12.sp, color = AppColors.TextSecondary) }
                         TextButton(onClick = onLogout) { Text("Logout", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold) }

@@ -42,6 +42,7 @@ class RouteMonitoringService : Service() {
         const val EXTRA_REROUTE_LABEL = "extra_reroute_label"
 
         const val EXTRA_INCIDENT_ID = "extra_incident_id"
+        const val EXTRA_ASSIGNMENT_ID = "extra_assignment_id"
         const val EXTRA_DEST_LAT = "extra_dest_lat"
         const val EXTRA_DEST_LNG = "extra_dest_lng"
         const val EXTRA_DEST_ADDRESS = "extra_dest_address"
@@ -83,7 +84,11 @@ class RouteMonitoringService : Service() {
         }
         // ✅ Extract everything safely BEFORE coroutines
         val incidentId = intent?.getStringExtra(EXTRA_INCIDENT_ID).orEmpty()
-        android.util.Log.d("LiveGPS", "incidentId=$incidentId")
+        val assignmentId = intent?.getStringExtra(EXTRA_ASSIGNMENT_ID).orEmpty()
+        android.util.Log.d(
+            "LiveGPS",
+            "incidentId=$incidentId assignmentId=$assignmentId"
+        )
 
         if (incidentId.isBlank()) {
             android.util.Log.e("LiveGPS", "incidentId is blank. Stopping service.")
@@ -102,7 +107,7 @@ class RouteMonitoringService : Service() {
             serviceScope.launch {
                 android.os.Handler(mainLooper).post {
                     android.util.Log.d("LiveGPS", "Starting live tracking for incident=$incidentId")
-                    startLiveLocationTracking(incidentId)
+                    startLiveLocationTracking(incidentId, assignmentId)
                 }
 
                 while (running.get()) {
@@ -111,11 +116,14 @@ class RouteMonitoringService : Service() {
             }
         }
 
-        return START_STICKY
+        return START_REDELIVER_INTENT
     }
 
 
-    private fun startLiveLocationTracking(incidentId: String) {
+    private fun startLiveLocationTracking(
+        incidentId: String,
+        assignmentId: String
+    ) {
         val fineGranted = ContextCompat.checkSelfPermission(
             this,
             Manifest.permission.ACCESS_FINE_LOCATION
@@ -190,6 +198,7 @@ class RouteMonitoringService : Service() {
                     "unitCode" to unitCode,
                     "unitType" to unitType,
                     "incidentId" to incidentId,
+                    "assignmentId" to assignmentId,
                     "lat" to location.latitude,
                     "lng" to location.longitude,
                     "speed" to location.speed,
@@ -216,6 +225,7 @@ class RouteMonitoringService : Service() {
                         val response = RetrofitProvider.incidentApi.saveRoutePoint(
                             SaveRoutePointRequest(
                                 incident_id = incidentId.toIntOrNull() ?: 0,
+                                assignment_id = assignmentId.toIntOrNull(),
                                 responder_id = responderId.toIntOrNull() ?: 0,
                                 latitude = location.latitude,
                                 longitude = location.longitude,

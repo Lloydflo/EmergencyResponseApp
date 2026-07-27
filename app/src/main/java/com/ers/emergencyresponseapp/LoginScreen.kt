@@ -196,13 +196,18 @@ fun LoginScreen(
                                     val rawPhotoPath = user?.profileImagePath?.takeIf { it.isNotBlank() }
                                     val fullPhotoUrl = rawPhotoPath?.let { path ->
                                         if (path.startsWith("http", ignoreCase = true)) path
-                                        else "https://emergency-response.alertaraqc.com/$path"
+                                        else BuildConfig.BASE_URL.trimEnd('/') + "/" + path.trimStart('/')
                                     }
 
                                     context.getSharedPreferences("ers_prefs", Context.MODE_PRIVATE)
                                         .edit()
                                         .putString("account_full_name", user?.name.orEmpty())
-                                        .putString("account_username", user?.name.orEmpty())
+
+                                        .putString(
+                                            "account_username",
+                                            user?.username?.takeIf { it.isNotBlank() }
+                                                ?: user?.name.orEmpty()
+                                        )
                                         .putString("account_email", user?.email.orEmpty())
                                         .apply {
                                             if (fullPhotoUrl != null) {

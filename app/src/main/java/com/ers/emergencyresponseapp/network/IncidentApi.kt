@@ -5,16 +5,11 @@ import retrofit2.Response
 import retrofit2.http.*
 import okhttp3.MultipartBody
 import okhttp3.RequestBody
-import retrofit2.http.Field
-import retrofit2.http.FormUrlEncoded
-import retrofit2.http.GET
-import retrofit2.http.POST
-import retrofit2.http.Query
-import retrofit2.http.Body
 
 
 data class SaveRoutePointRequest(
     val incident_id: Int,
+    val assignment_id: Int? = null,
     val responder_id: Int,
     val latitude: Double,
     val longitude: Double,
@@ -30,12 +25,20 @@ data class SaveRoutePointResponse(
 
 data class MarkRouteArrivedRequest(
     val incident_id: Int,
+    val assignment_id: Int? = null,
     val responder_id: Int
 )
 
 data class MarkRouteArrivedResponse(
     val success: Boolean,
-    val message: String?
+    val message: String?,
+    val incident_id: Int? = null,
+    val already_recorded: Boolean? = null,
+    val duration_seconds: Long? = null,
+    val total_points: Int? = null,
+    val total_distance_meters: Double? = null,
+    val average_speed_kmh: Double? = null,
+    val max_speed_kmh: Double? = null
 )
 
 data class MarkIncidentCompleteResponse(
@@ -164,6 +167,18 @@ data class SubmitIncidentReviewResponse(
     val message: String? = null
 )
 
+
+
+data class AssignmentActionResponse(
+    val success: Boolean,
+    val message: String? = null,
+    val assignment_status: String? = null,
+    val unit_status: String? = null,
+    val affected_rows: Int? = null,
+    val incident_resolved: Boolean? = null,
+    val incident_id: Int? = null
+)
+
 data class SetUnitPresenceResponse(
     val success: Boolean,
     val message: String? = null,
@@ -184,20 +199,22 @@ interface IncidentApi {
         @Field("assignment_id") assignmentId: String,
         @Field("responder_id") responderId: Int,
         @Field("status") status: String
-    ): Response<Unit>
+    ): AssignmentActionResponse
 
     @FormUrlEncoded
     @POST("api/api_app/mark-assignment-received.php")
     suspend fun markAssignmentReceived(
-        @Field("incident_id") incidentId: String,
+        // The live endpoint still names this legacy field incident_id, but the
+        // value is the dispatch_operator_records assignment ID.
+        @Field("incident_id") assignmentId: String,
         @Field("responder_id") responderId: Int
-    ): Response<Unit>
+    ): AssignmentActionResponse
 
     @FormUrlEncoded
     @POST("api/api_app/sync-unit-status.php")
     suspend fun syncUnitStatus(
         @Field("responder_id") responderId: Int
-    ): Response<Unit>
+    ): AssignmentActionResponse
 
     @FormUrlEncoded
     @POST("api/api_app/send-backup-request.php")
@@ -257,7 +274,8 @@ interface IncidentApi {
 
     @GET("api/api_app/get-resource-request-status.php")
     suspend fun getResourceRequestStatus(
-        @Query("request_id") requestId: Int
+        @Query("request_id") requestId: Int,
+        @Query("responder_id") responderId: Int
     ): ResourceRequestStatusResponse
 
     @GET("api/api_app/get-my-resource-requests.php")
