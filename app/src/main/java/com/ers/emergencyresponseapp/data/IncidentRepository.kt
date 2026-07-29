@@ -162,12 +162,12 @@ class IncidentRepository {
     }
 
     suspend fun getMyBackupRequests(responderId: Int): List<MyBackupRequestDto> {
-        return try {
-            val response = api.getMyBackupRequests(responderId)
-            if (response.success) response.requests ?: emptyList() else emptyList()
-        } catch (e: Exception) {
-            emptyList()
+        val response = api.getMyBackupRequests(responderId)
+        if (response.success) {
+            return response.requests ?: emptyList()
         }
+
+        throw Exception(response.message ?: "Unable to load backup requests")
     }
 
     suspend fun cancelBackupRequest(requestId: Int, responderId: Int): Result<String> {

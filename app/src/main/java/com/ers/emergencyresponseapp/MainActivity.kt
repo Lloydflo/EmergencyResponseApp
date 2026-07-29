@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -36,6 +37,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -57,15 +59,19 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.ers.emergencyresponseapp.data.HomeDataCache
 import com.ers.emergencyresponseapp.data.IncidentRepository
 import com.ers.emergencyresponseapp.firebase.repository.FirebaseChatRepository
 import com.ers.emergencyresponseapp.map.LiveRouteMapScreen
+import com.ers.emergencyresponseapp.network.ConnectivityObserver
+import com.ers.emergencyresponseapp.network.ConnectivityStatus
 import com.ers.emergencyresponseapp.network.RetrofitProvider
 import com.ers.emergencyresponseapp.notification.AppNotificationManager
 import com.ers.emergencyresponseapp.notification.NotificationDestination
 import com.ers.emergencyresponseapp.notification.NotificationNavigation
 import com.ers.emergencyresponseapp.notification.PushTokenManager
 import com.ers.emergencyresponseapp.routing.RouteMonitoringService
+import com.ers.emergencyresponseapp.ui.components.ConnectivityStatusBanner
 import com.ers.emergencyresponseapp.ui.theme.EmergencyResponseAppTheme
 import com.ers.emergencyresponseapp.ui.theme.ThemeController
 import kotlinx.coroutines.CoroutineScope
@@ -116,13 +122,49 @@ class MainActivity : ComponentActivity() {
                 val navController = rememberNavController()
                 val uiScope = rememberCoroutineScope()
                 val notificationDestination by NotificationNavigation.destination.collectAsState()
+                val connectivityObserver = remember { ConnectivityObserver(context) }
+                val connectivityStatus by connectivityObserver.status.collectAsState()
                 var isCoordinationChatOpen by remember { mutableStateOf(false) }
+
+                DisposableEffect(connectivityObserver) {
+                    onDispose { connectivityObserver.close() }
+                }
 
                 val storedResponderId = userPrefs.getString("user_id", "")
                     ?.toIntOrNull()
                     ?: 0
                 val hasValidSession = authPrefs.getBoolean("user_verified", false) &&
                         storedResponderId > 0
+
+                LaunchedEffect(connectivityStatus, storedResponderId) {
+                    if (
+                        connectivityStatus == ConnectivityStatus.Online &&
+                        storedResponderId > 0
+                    ) {
+                        runCatching {
+                            PushTokenManager.registerCurrentToken(
+                                context.applicationContext,
+                                storedResponderId
+                            )
+                        }.onFailure { error ->
+                            Log.w("CONNECTIVITY", "Push-token sync after reconnect failed", error)
+                        }
+                        runCatching {
+                            firebaseChatRepository.setOnlineStatus(
+                                storedResponderId.toString(),
+                                true
+                            )
+                        }.onFailure { error ->
+                            Log.w("CONNECTIVITY", "Chat presence sync after reconnect failed", error)
+                        }
+                        runCatching {
+                            IncidentRepository().setUnitPresence(storedResponderId, "online")
+                        }.onFailure { error ->
+                            Log.w("CONNECTIVITY", "Unit presence sync after reconnect failed", error)
+                        }
+                    }
+                }
+
                 val openCoordination = intent?.getBooleanExtra("open_coordination", false) == true
                 val initialDepartment = userPrefs.getString("department", "")
                     .orEmpty()
@@ -140,6 +182,12 @@ class MainActivity : ComponentActivity() {
                 }
 
                 fun clearLocalSession() {
+                    val responderIdToClear = userPrefs.getString("user_id", "")
+                        ?.toIntOrNull()
+                        ?: 0
+                    if (responderIdToClear > 0) {
+                        HomeDataCache(context).clearForResponder(responderIdToClear)
+                    }
                     authPrefs.edit().clear().apply()
                     userPrefs.edit().clear().apply()
                     context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
@@ -167,7 +215,9 @@ class MainActivity : ComponentActivity() {
 
                 // A responder stays signed in during an active route. Outside an
                 // active response, one hour without interaction closes the session.
-                LaunchedEffect(navController) {
+                // Never force an offline responder back to OTP login, because OTP
+                // cannot be completed without a validated internet connection.
+                LaunchedEffect(navController, connectivityStatus) {
                     while (true) {
                         delay(10_000L)
                         val routeActive = context
@@ -176,7 +226,13 @@ class MainActivity : ComponentActivity() {
                         val sessionActive = authPrefs.getBoolean("user_verified", false)
                         val timedOut = System.currentTimeMillis() - lastTouchTime >= 60L * 60L * 1_000L
 
-                        if (sessionActive && !routeActive && !RouteMonitoringService.isRunning && timedOut) {
+                        if (
+                            sessionActive &&
+                            !routeActive &&
+                            !RouteMonitoringService.isRunning &&
+                            timedOut &&
+                            connectivityStatus == ConnectivityStatus.Online
+                        ) {
                             logoutAndNavigate("login")
                             break
                         }
@@ -212,7 +268,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 val showBottomBar = currentRoute != null &&
-                        currentRoute !in setOf("entry", "login") &&
+                        currentRoute !in setOf("entry", "login", "how_to_use") &&
                         !currentRoute.startsWith("live_map/") &&
                         !(currentRoute == "coordination_portal" && isCoordinationChatOpen)
 
@@ -275,12 +331,24 @@ class MainActivity : ComponentActivity() {
                                             popUpTo("entry") { inclusive = true }
                                             launchSingleTop = true
                                         }
+                                    },
+                                    onHowToUse = {
+                                        navController.navigate("how_to_use") {
+                                            launchSingleTop = true
+                                        }
                                     }
+                                )
+                            }
+
+                            composable("how_to_use") {
+                                HowToUseScreen(
+                                    onBack = { navController.popBackStack() }
                                 )
                             }
 
                             composable("login") {
                                 LoginScreen(
+                                    networkAvailable = connectivityStatus == ConnectivityStatus.Online,
                                     onLoggedIn = {
                                         val department = userPrefs
                                             .getString("department", "")
@@ -306,6 +374,7 @@ class MainActivity : ComponentActivity() {
                                 HomeScreen(
                                     navController = navController,
                                     responderRole = null,
+                                    networkStatus = connectivityStatus,
                                     onLogout = { logoutAndNavigate("entry") }
                                 )
                             }
@@ -322,6 +391,7 @@ class MainActivity : ComponentActivity() {
                                 HomeScreen(
                                     navController = navController,
                                     responderRole = role,
+                                    networkStatus = connectivityStatus,
                                     onLogout = { logoutAndNavigate("login") }
                                 )
 
@@ -438,6 +508,18 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
                         }
+
+                        val bannerEligibleRoute = currentRoute != null &&
+                                currentRoute !in setOf("entry", "how_to_use")
+                        if (bannerEligibleRoute) {
+                            ConnectivityStatusBanner(
+                                status = connectivityStatus,
+                                modifier = Modifier
+                                    .align(Alignment.TopCenter)
+                                    .statusBarsPadding()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -461,12 +543,20 @@ class MainActivity : ComponentActivity() {
 
         if (responderId > 0) {
             lifecycleScope.launch {
-                PushTokenManager.registerCurrentToken(applicationContext, responderId)
+                runCatching {
+                    PushTokenManager.registerCurrentToken(applicationContext, responderId)
+                }.onFailure { error ->
+                    Log.w("PUSH_TOKEN", "Unable to register push token", error)
+                }
                 runCatching {
                     firebaseChatRepository.setOnlineStatus(responderId.toString(), true)
+                }.onFailure { error ->
+                    Log.w("CHAT_PRESENCE", "Unable to mark chat presence online", error)
+                }
+                runCatching {
                     IncidentRepository().setUnitPresence(responderId, "online")
                 }.onFailure { error ->
-                    Log.e("UNIT_PRESENCE", "Unable to mark responder online", error)
+                    Log.w("UNIT_PRESENCE", "Unable to mark responder online", error)
                 }
             }
         }
@@ -484,9 +574,13 @@ class MainActivity : ComponentActivity() {
             presenceScope.launch {
                 runCatching {
                     firebaseChatRepository.setOnlineStatus(responderId.toString(), false)
+                }.onFailure { error ->
+                    Log.w("CHAT_PRESENCE", "Unable to mark chat presence offline", error)
+                }
+                runCatching {
                     IncidentRepository().setUnitPresence(responderId, "offline")
                 }.onFailure { error ->
-                    Log.e("UNIT_PRESENCE", "Unable to mark responder offline", error)
+                    Log.w("UNIT_PRESENCE", "Unable to mark responder offline", error)
                 }
             }
         }
@@ -495,7 +589,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private suspend fun markResponderOffline(responderId: Int) {
-        PushTokenManager.unregisterCurrentToken(applicationContext, responderId)
+        // Every remote cleanup is best-effort. Local logout must always continue,
+        // including when the responder is currently offline.
+        runCatching {
+            PushTokenManager.unregisterCurrentToken(applicationContext, responderId)
+        }.onFailure { error ->
+            Log.w("LOGOUT", "Push-token unregister failed", error)
+        }
 
         runCatching {
             RetrofitProvider.authApi.logout(responderId)
@@ -528,72 +628,5 @@ class MainActivity : ComponentActivity() {
 
         getSystemService(NotificationManager::class.java)
             .createNotificationChannel(channel)
-    }
-}
-
-@Composable
-fun EmergencyResponseScreen(
-    modifier: Modifier = Modifier,
-    onProceed: () -> Unit
-) {
-    val quotes = listOf(
-        "Every call you answer makes a community safer.",
-        "Courage is contagious — thank you for showing up.",
-        "Small acts of care create huge impacts.",
-        "You're the calm in someone else's storm.",
-        "Your quick response saves lives and builds trust."
-    )
-    var currentIndex by remember { mutableStateOf(0) }
-
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(5_000L)
-            currentIndex = (currentIndex + 1) % quotes.size
-        }
-    }
-
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text(
-            text = "Emergency Response",
-            style = MaterialTheme.typography.headlineSmall,
-            color = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.fillMaxWidth(),
-            textAlign = TextAlign.Center
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-        Crossfade(
-            targetState = currentIndex,
-            animationSpec = tween(600),
-            label = "response_quote"
-        ) { index ->
-            Text(
-                text = quotes[index],
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.95f),
-                modifier = Modifier.fillMaxWidth(),
-                textAlign = TextAlign.Center
-            )
-        }
-        Spacer(modifier = Modifier.height(32.dp))
-        Button(
-            onClick = onProceed,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("Proceed")
-        }
-    }
-}
-
-@Preview(showBackground = true)
-@Composable
-private fun EmergencyResponsePreview() {
-    EmergencyResponseAppTheme {
-        EmergencyResponseScreen(onProceed = {})
     }
 }

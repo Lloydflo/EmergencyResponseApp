@@ -1,11 +1,15 @@
 package com.ers.emergencyresponseapp
 
 import android.content.Context
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -15,7 +19,9 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -23,13 +29,24 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.compose.foundation.layout.wrapContentHeight
+
+private val LoginBrand = Color(0xFF4C8A89)
+private val LoginBrandDark = Color(0xFF285F5E)
+private val LoginBackground = Color(0xFFF3F8F7)
+private val LoginTextPrimary = Color(0xFF132A2A)
+private val LoginTextSecondary = Color(0xFF637171)
+private val LoginBorder = Color(0xFFD6E2E0)
 
 @Composable
 fun LoginScreen(
     modifier: Modifier = Modifier,
     onLoggedIn: (email: String) -> Unit,
-    viewModel: LoginApiViewModel = viewModel()
+    networkAvailable: Boolean = true,
+    viewModel: LoginApiViewModel = viewModel(),
+    // Uses the app's current launcher foreground by default.
+    // Replace this with R.drawable.<your_logo_file> when your official logo
+    // is stored inside app/src/main/res/drawable.
+    logoResId: Int = R.drawable.ic_launcher_foreground
 ) {
     val context = LocalContext.current
     val uiState by viewModel.uiState.collectAsState()
@@ -37,41 +54,212 @@ fun LoginScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
+            .background(LoginBackground)
             .padding(16.dp),
         contentAlignment = Alignment.Center
     ) {
-
         Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .then(if (uiState.otpSent) Modifier.blur(5.dp).alpha(0.75f) else Modifier),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .imePadding()
+                .then(
+                    if (uiState.otpSent) {
+                        Modifier.blur(5.dp).alpha(0.75f)
+                    } else {
+                        Modifier
+                    }
+                )
+                .padding(horizontal = 8.dp, vertical = 20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
         ) {
-            Text("Email Login", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Surface(
+                modifier = Modifier.size(112.dp),
+                shape = RoundedCornerShape(28.dp),
+                color = Color.White,
+                shadowElevation = 8.dp
+            ) {
+                Image(
+                    painter = painterResource(id = logoResId),
+                    contentDescription = "Emergency Response app logo",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(14.dp),
+                    contentScale = ContentScale.Fit
+                )
+            }
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(18.dp))
 
-            OutlinedTextField(
-                value = uiState.email,
-                onValueChange = viewModel::onEmailChanged,
-                label = { Text("Email") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                modifier = Modifier.fillMaxWidth(0.9f),
-                enabled = !uiState.otpSent && !uiState.loading
+            Text(
+                text = "Emergency Response",
+                fontSize = 27.sp,
+                fontWeight = FontWeight.Bold,
+                color = LoginTextPrimary,
+                textAlign = TextAlign.Center
             )
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(4.dp))
 
-            Button(
-                enabled = !uiState.loading,
-                onClick = viewModel::sendOtp,
+            Text(
+                text = "RESPONDER ACCESS",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = LoginBrandDark,
+                letterSpacing = 2.sp,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(Modifier.height(28.dp))
+
+            Card(
                 modifier = Modifier
-                    .fillMaxWidth(0.9f)
-                    .height(52.dp),
-                shape = RoundedCornerShape(14.dp)
+                    .fillMaxWidth()
+                    .widthIn(max = 480.dp),
+                shape = RoundedCornerShape(28.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                elevation = CardDefaults.cardElevation(defaultElevation = 7.dp)
             ) {
-                Text("Send OTP", fontWeight = FontWeight.Bold)
+                Column(
+                    modifier = Modifier.padding(
+                        horizontal = 24.dp,
+                        vertical = 26.dp
+                    ),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "Email Login",
+                        fontSize = 25.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = LoginTextPrimary
+                    )
+
+                    Spacer(Modifier.height(8.dp))
+
+                    Text(
+                        text = "Enter your registered email to receive a one-time password.",
+                        fontSize = 14.sp,
+                        color = LoginTextSecondary,
+                        textAlign = TextAlign.Center,
+                        lineHeight = 20.sp
+                    )
+
+                    if (!networkAvailable && !uiState.otpSent) {
+                        Spacer(Modifier.height(16.dp))
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(14.dp),
+                            color = MaterialTheme.colorScheme.errorContainer
+                        ) {
+                            Text(
+                                text = "No internet connection. Reconnect before requesting an OTP.",
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                fontSize = 13.sp,
+                                lineHeight = 18.sp,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.height(24.dp))
+
+                    OutlinedTextField(
+                        value = uiState.email,
+                        onValueChange = viewModel::onEmailChanged,
+                        label = { Text("Email address") },
+                        placeholder = { Text("name@example.com") },
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Email
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !uiState.otpSent && !uiState.loading,
+                        singleLine = true,
+                        shape = RoundedCornerShape(16.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = LoginBrand,
+                            unfocusedBorderColor = LoginBorder,
+                            focusedLabelColor = LoginBrandDark,
+                            cursorColor = LoginBrand
+                        )
+                    )
+
+                    Spacer(Modifier.height(18.dp))
+
+                    Button(
+                        enabled = networkAvailable && !uiState.loading,
+                        onClick = viewModel::sendOtp,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(56.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = LoginBrand,
+                            contentColor = Color.White,
+                            disabledContainerColor = LoginBorder,
+                            disabledContentColor = LoginTextSecondary
+                        )
+                    ) {
+                        if (uiState.loading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(22.dp),
+                                color = Color.White,
+                                strokeWidth = 2.5.dp
+                            )
+                        } else {
+                            Text(
+                                text = "Send OTP",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    uiState.message
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { message ->
+                            Spacer(Modifier.height(14.dp))
+                            Text(
+                                text = message,
+                                fontSize = 13.sp,
+                                color = LoginBrandDark,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+
+                    uiState.error
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { error ->
+                            Spacer(Modifier.height(14.dp))
+                            Surface(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.errorContainer
+                            ) {
+                                Text(
+                                    text = error,
+                                    modifier = Modifier.padding(
+                                        horizontal = 14.dp,
+                                        vertical = 10.dp
+                                    ),
+                                    fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                }
             }
+
+            Spacer(Modifier.height(22.dp))
+
+            Text(
+                text = "Secure access for authorized responders",
+                fontSize = 12.sp,
+                color = LoginTextSecondary,
+                textAlign = TextAlign.Center
+            )
         }
 
         if (uiState.otpSent) {
@@ -287,19 +475,6 @@ fun LoginScreen(
                         }
                     }
                 }
-            }
-        }
-
-        if (!uiState.otpSent) {
-            Column(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                if (uiState.loading) CircularProgressIndicator()
-                uiState.message?.let { Text(it) }
-                uiState.error?.let { Text(it, color = Color.Red) }
             }
         }
     }

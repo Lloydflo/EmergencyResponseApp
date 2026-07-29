@@ -26,6 +26,12 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
@@ -60,7 +66,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Done
+import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.LocalHospital
 import androidx.compose.material.icons.filled.LocationOn
@@ -98,6 +106,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -105,6 +114,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -127,6 +137,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import com.ers.emergencyresponseapp.data.BroadcastNotice
+import com.ers.emergencyresponseapp.data.HomeDataCache
 import com.ers.emergencyresponseapp.data.NotificationRepository
 import com.ers.emergencyresponseapp.features.assigned.AssignedIncidentsViewModel
 import com.ers.emergencyresponseapp.notification.AppNotificationManager
@@ -139,6 +150,7 @@ import com.ers.emergencyresponseapp.home.IncidentPriority
 import com.ers.emergencyresponseapp.home.IncidentType
 import com.ers.emergencyresponseapp.home.composables.BackupRequest
 import com.ers.emergencyresponseapp.home.composables.DepartmentSelectionDialog
+import com.ers.emergencyresponseapp.network.ConnectivityStatus
 import com.ers.emergencyresponseapp.network.MarkRouteArrivedRequest
 import com.ers.emergencyresponseapp.network.RetrofitProvider
 import com.ers.emergencyresponseapp.network.stringToRequestBody
@@ -323,6 +335,22 @@ private fun timeAgoLabel(timeReported: java.util.Date): String {
     }
 }
 
+private fun formatLastSyncLabel(lastSyncMillis: Long?): String {
+    if (lastSyncMillis == null || lastSyncMillis <= 0L) return "Not synced yet"
+
+    val elapsedMinutes = ((System.currentTimeMillis() - lastSyncMillis) / 60_000L)
+        .coerceAtLeast(0L)
+    return when {
+        elapsedMinutes < 1L -> "Last synced just now"
+        elapsedMinutes < 60L -> "Last synced ${elapsedMinutes}m ago"
+        elapsedMinutes < 1_440L -> "Last synced ${elapsedMinutes / 60L}h ago"
+        else -> "Last synced " + java.text.SimpleDateFormat(
+            "MMM d, h:mm a",
+            Locale.getDefault()
+        ).format(java.util.Date(lastSyncMillis))
+    }
+}
+
 private fun isOlderThan24Hours(dateString: String?): Boolean {
     if (dateString.isNullOrBlank()) return false
     return try {
@@ -431,6 +459,238 @@ private fun ResponderAvatar(
 }
 
 
+@Composable
+private fun AssignedIncidentEmptyState(
+    networkStatus: ConnectivityStatus,
+    loading: Boolean,
+    requestCompleted: Boolean,
+    serverError: String?,
+    lastSyncMillis: Long?,
+    onRetry: () -> Unit
+) {
+    val isOffline = networkStatus == ConnectivityStatus.Offline
+    val hasServerError = !isOffline && !serverError.isNullOrBlank()
+    val isChecking = !isOffline && !hasServerError && (
+        networkStatus == ConnectivityStatus.Checking ||
+                loading ||
+                !requestCompleted
+        )
+    val isWaitingOnline = !isOffline && !isChecking && !hasServerError
+
+    val waitingAnimation = rememberInfiniteTransition(label = "assigned_incident_waiting")
+    val animatedRingScale by waitingAnimation.animateFloat(
+        initialValue = 0.82f,
+        targetValue = 1.34f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1_900, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "dispatch_ring_scale"
+    )
+    val animatedRingAlpha by waitingAnimation.animateFloat(
+        initialValue = 0.42f,
+        targetValue = 0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1_900, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "dispatch_ring_alpha"
+    )
+
+    val accentColor = when {
+        isOffline -> AppColors.DangerText
+        hasServerError -> AppColors.DispatchText
+        else -> AppColors.Primary
+    }
+    val icon = when {
+        isOffline -> Icons.Default.CloudOff
+        hasServerError -> Icons.Default.Warning
+        else -> Icons.Default.Notifications
+    }
+    val title = when {
+        isOffline -> "You’re offline"
+        hasServerError -> "Dispatch service unavailable"
+        isChecking -> "Checking for incident assignments"
+        else -> "Waiting for an incident assignment"
+    }
+    val message = when {
+        isOffline ->
+            "The app cannot check for new assignments right now. Reconnect to the internet before relying on this list."
+
+        hasServerError ->
+            "Your internet connection is active, but the dispatch server did not respond. Your last known information remains visible."
+
+        isChecking ->
+            "Contacting dispatch and verifying your latest assignment status."
+
+        else ->
+            "No active assignment yet. New incidents will appear here automatically when dispatch assigns your unit."
+    }
+    val statusText = when {
+        isOffline -> "Offline • ${formatLastSyncLabel(lastSyncMillis)}"
+        hasServerError -> "Unable to sync • ${formatLastSyncLabel(lastSyncMillis)}"
+        isChecking -> "Checking dispatch…"
+        else -> "Online • Listening for dispatch"
+    }
+    val statusSurface = when {
+        isOffline -> AppColors.DangerSurface
+        hasServerError -> AppColors.DispatchSurface
+        isChecking -> AppColors.SubtleSurface
+        else -> AppColors.SuccessSurface
+    }
+    val statusTextColor = when {
+        isOffline -> AppColors.DangerText
+        hasServerError -> AppColors.DispatchText
+        isChecking -> AppColors.TextSecondary
+        else -> AppColors.SuccessText
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = AppColors.CardBg),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        border = BorderStroke(1.dp, AppColors.Border)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp, vertical = 26.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Box(
+                modifier = Modifier.size(126.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                if (isWaitingOnline || isChecking) {
+                    Box(
+                        modifier = Modifier
+                            .size(88.dp)
+                            .graphicsLayer {
+                                scaleX = animatedRingScale
+                                scaleY = animatedRingScale
+                                alpha = animatedRingAlpha
+                            }
+                            .border(
+                                width = 2.dp,
+                                color = accentColor,
+                                shape = CircleShape
+                            )
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .size(94.dp)
+                        .clip(CircleShape)
+                        .background(accentColor.copy(alpha = 0.08f))
+                )
+
+                Box(
+                    modifier = Modifier
+                        .size(66.dp)
+                        .clip(CircleShape)
+                        .background(accentColor.copy(alpha = 0.16f))
+                        .border(
+                            width = 1.dp,
+                            color = accentColor.copy(alpha = 0.30f),
+                            shape = CircleShape
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = accentColor,
+                        modifier = Modifier.size(30.dp)
+                    )
+                }
+
+                if (isWaitingOnline) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .offset(x = 25.dp, y = (-24).dp)
+                            .size(16.dp)
+                            .clip(CircleShape)
+                            .background(AppColors.SuccessText)
+                            .border(3.dp, AppColors.CardBg, CircleShape)
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(4.dp))
+
+            Text(
+                text = title,
+                color = AppColors.Text,
+                fontSize = 18.sp,
+                lineHeight = 23.sp,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(Modifier.height(7.dp))
+
+            Text(
+                text = message,
+                color = AppColors.TextSecondary,
+                fontSize = 13.sp,
+                lineHeight = 19.sp,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(Modifier.height(16.dp))
+
+            Surface(
+                color = statusSurface,
+                shape = RoundedCornerShape(999.dp),
+                border = BorderStroke(
+                    width = 1.dp,
+                    color = statusTextColor.copy(alpha = 0.22f)
+                )
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 13.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(7.dp)
+                            .clip(CircleShape)
+                            .background(statusTextColor)
+                    )
+                    Spacer(Modifier.width(7.dp))
+                    Text(
+                        text = statusText,
+                        color = statusTextColor,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+
+            if (hasServerError) {
+                Spacer(Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = onRetry,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, AppColors.Primary.copy(alpha = 0.55f))
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(7.dp))
+                    Text("Retry now", fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+    }
+}
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ASSIGNED ACTION BUTTONS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -451,6 +711,7 @@ private fun AssignedActionButtons(
     navigateToLocation: (Double?, Double?, String?, String?, String?) -> Unit,
     sendOnSceneReport: (Incident) -> Unit,
     hasLocationPermission: Boolean,
+    networkAvailable: Boolean,
     openMarkDone: (Incident) -> Unit,
     onNavigateStatusUpdate: (Incident) -> Unit
 ) {
@@ -461,6 +722,7 @@ private fun AssignedActionButtons(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Button(
+            enabled = networkAvailable,
             onClick = {
                 context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
                     .edit()
@@ -508,6 +770,7 @@ private fun AssignedActionButtons(
         }
 
         OutlinedButton(
+            enabled = networkAvailable,
             onClick = { openMarkDone(inc) },
             modifier = Modifier
                 .fillMaxWidth()
@@ -521,6 +784,17 @@ private fun AssignedActionButtons(
             Icon(Icons.Default.Done, contentDescription = null)
             Spacer(Modifier.width(6.dp))
             Text("Complete Incident", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        }
+
+        if (!networkAvailable) {
+            Text(
+                text = "Reconnect to update the assignment, navigate, or complete this incident.",
+                modifier = Modifier.fillMaxWidth(),
+                color = AppColors.DangerText,
+                fontSize = 11.sp,
+                lineHeight = 15.sp,
+                textAlign = TextAlign.Center
+            )
         }
     }
 }
@@ -615,7 +889,8 @@ private fun BackupRequestStatusCard(
     resources: String,
     status: String,
     onCancelClick: () -> Unit,
-    onRefreshClick: (() -> Unit)? = null
+    onRefreshClick: (() -> Unit)? = null,
+    actionsEnabled: Boolean = true
 ) {
     val steps = listOf("Sent", "Review", "Approved")
     val currentStepIndex = when (status) {
@@ -659,8 +934,17 @@ private fun BackupRequestStatusCard(
                     Text(resources, fontSize = 11.sp, color = AppColors.TextSecondary)
                 }
                 if (onRefreshClick != null) {
-                    IconButton(onClick = onRefreshClick, modifier = Modifier.size(24.dp)) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refresh status", tint = AppColors.TextSecondary, modifier = Modifier.size(14.dp))
+                    IconButton(
+                        enabled = actionsEnabled,
+                        onClick = onRefreshClick,
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Refresh,
+                            contentDescription = "Refresh status",
+                            tint = if (actionsEnabled) AppColors.TextSecondary else AppColors.TextSecondary.copy(alpha = 0.45f),
+                            modifier = Modifier.size(14.dp)
+                        )
                     }
                     Spacer(Modifier.width(4.dp))
                 }
@@ -728,10 +1012,13 @@ private fun BackupRequestStatusCard(
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     Text(
                         "Cancel",
-                        color = Color(0xFFD32F2F),
+                        color = if (actionsEnabled) Color(0xFFD32F2F) else AppColors.TextSecondary.copy(alpha = 0.55f),
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 12.sp,
-                        modifier = Modifier.clickable { onCancelClick() }
+                        modifier = Modifier.clickable(
+                            enabled = actionsEnabled,
+                            onClick = onCancelClick
+                        )
                     )
                 }
             }
@@ -751,6 +1038,7 @@ private fun BackupRequestStatusCard(
 fun HomeScreen(
     navController: NavHostController,
     responderRole: String? = null,
+    networkStatus: ConnectivityStatus = ConnectivityStatus.Online,
     onLogout: () -> Unit,
     assignedVm: AssignedIncidentsViewModel = viewModel()
 ) {
@@ -768,14 +1056,30 @@ fun HomeScreen(
     val storedPrefs      = context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
     val storedDepartment = storedPrefs.getString("department", null)
     val responderId = storedPrefs.getString("user_id", "")?.toIntOrNull() ?: 0
+    val isNetworkAvailable = networkStatus == ConnectivityStatus.Online
+    val homeDataCache = remember(context.applicationContext) {
+        HomeDataCache(context.applicationContext)
+    }
+    var cachedAssignedSnapshot by remember(responderId) {
+        mutableStateOf(homeDataCache.readAssigned(responderId))
+    }
+    var cachedActiveSnapshot by remember(responderId) {
+        mutableStateOf(homeDataCache.readActive(responderId))
+    }
+    var cachedBackupSnapshot by remember(responderId) {
+        mutableStateOf(homeDataCache.readBackupRequests(responderId))
+    }
+    var assignedEmptySuccessStreak by remember(responderId) { mutableStateOf(0) }
+    var activeEmptySuccessStreak by remember(responderId) { mutableStateOf(0) }
+    var backupEmptySuccessStreak by remember(responderId) { mutableStateOf(0) }
     val unitCode = storedPrefs.getString("unit_code", "") ?: ""
     val unitType = storedPrefs.getString("unit_type", "") ?: ""
     var unitStatus by remember {
         mutableStateOf(storedPrefs.getString("unit_status", "available") ?: "available")
     }
 
-    LaunchedEffect(responderId) {
-        if (responderId <= 0) {
+    LaunchedEffect(responderId, networkStatus) {
+        if (responderId <= 0 || !isNetworkAvailable) {
             return@LaunchedEffect
         }
 
@@ -798,7 +1102,8 @@ fun HomeScreen(
 
 
     val assignedUi by assignedVm.ui.collectAsState()
-    LaunchedEffect(assignedUi.incidents) {
+
+    LaunchedEffect(assignedUi.incidents, assignedUi.assignedLastSuccessMillis) {
         AppScreenTracker.currentScreen = "HOME"
         val latestStatus = assignedUi.incidents.firstOrNull()?.unit_status
 
@@ -809,9 +1114,62 @@ fun HomeScreen(
                 .putString("unit_status", latestStatus)
                 .apply()
         }
+
+        assignedUi.assignedLastSuccessMillis?.let { savedAt ->
+            if (assignedUi.incidents.isNotEmpty()) {
+                assignedEmptySuccessStreak = 0
+                homeDataCache.saveAssigned(responderId, assignedUi.incidents, savedAt)
+                cachedAssignedSnapshot = homeDataCache.readAssigned(responderId)
+            } else {
+                assignedEmptySuccessStreak += 1
+                val hasPreviousAssignment =
+                    cachedAssignedSnapshot?.items?.isNotEmpty() == true
+                if (!hasPreviousAssignment || assignedEmptySuccessStreak >= 2) {
+                    homeDataCache.saveAssigned(responderId, emptyList(), savedAt)
+                    cachedAssignedSnapshot = homeDataCache.readAssigned(responderId)
+                }
+            }
+        }
     }
-    LaunchedEffect(responderId) {
-        if (responderId <= 0) return@LaunchedEffect
+
+    LaunchedEffect(assignedUi.assignedError) {
+        if (!assignedUi.assignedError.isNullOrBlank()) {
+            assignedEmptySuccessStreak = 0
+        }
+    }
+
+    LaunchedEffect(assignedUi.activeIncidents, assignedUi.activeLastSuccessMillis) {
+        assignedUi.activeLastSuccessMillis?.let { savedAt ->
+            if (assignedUi.activeIncidents.isNotEmpty()) {
+                activeEmptySuccessStreak = 0
+                homeDataCache.saveActive(responderId, assignedUi.activeIncidents, savedAt)
+                cachedActiveSnapshot = homeDataCache.readActive(responderId)
+            } else {
+                activeEmptySuccessStreak += 1
+                val hasPreviousActiveIncidents =
+                    cachedActiveSnapshot?.items?.isNotEmpty() == true
+                if (!hasPreviousActiveIncidents || activeEmptySuccessStreak >= 2) {
+                    homeDataCache.saveActive(responderId, emptyList(), savedAt)
+                    cachedActiveSnapshot = homeDataCache.readActive(responderId)
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(assignedUi.activeError) {
+        if (!assignedUi.activeError.isNullOrBlank()) {
+            activeEmptySuccessStreak = 0
+        }
+    }
+
+    LaunchedEffect(assignedUi.actionError) {
+        val actionError = assignedUi.actionError ?: return@LaunchedEffect
+        Toast.makeText(context, actionError, Toast.LENGTH_LONG).show()
+        assignedVm.clearActionError()
+    }
+
+    LaunchedEffect(responderId, networkStatus) {
+        if (responderId <= 0 || !isNetworkAvailable) return@LaunchedEffect
 
         while (true) {
             assignedVm.load(responderId)
@@ -854,7 +1212,7 @@ fun HomeScreen(
     var showActiveDetailsSheet by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    var onlineStatus     by remember { mutableStateOf(ResponderOnlineStatus.Online) }
+    val onlineStatus = if (isNetworkAvailable) ResponderOnlineStatus.Online else ResponderOnlineStatus.Offline
 
     var showNewIncidentNotification by remember { mutableStateOf(false) }
     var newIncidentMessage by remember { mutableStateOf("") }
@@ -877,9 +1235,16 @@ fun HomeScreen(
     var showCancelBackupConfirm by remember { mutableStateOf(false) }
     var pendingCancelBackupId by remember { mutableStateOf<Int?>(null) }
     var backupSearchQuery by remember { mutableStateOf("") }
-    var lastBackupUpdateTime by remember { mutableStateOf(java.util.Date()) }
+    var lastBackupSyncMillis by remember(responderId) {
+        mutableStateOf(cachedBackupSnapshot?.savedAtMillis)
+    }
+    var backupLoadError by remember(responderId) { mutableStateOf<String?>(null) }
+    var backupLoading by remember(responderId) { mutableStateOf(false) }
+    var hasCompletedBackupRequest by remember(responderId) { mutableStateOf(false) }
     var activeFilter            by remember { mutableStateOf(ActivePriorityFilter.ALL) }
-    var backupRequestsList by remember { mutableStateOf<List<com.ers.emergencyresponseapp.network.MyBackupRequestDto>>(emptyList()) }
+    var backupRequestsList by remember(responderId) {
+        mutableStateOf(cachedBackupSnapshot?.items.orEmpty())
+    }
     var dismissedBackupIds by remember {
         mutableStateOf(
             (prefs.getStringSet("dismissed_backup_request_ids", emptySet()) ?: emptySet())
@@ -888,13 +1253,59 @@ fun HomeScreen(
         )
     }
 
-    LaunchedEffect(responderId) {
-        if (responderId <= 0) return@LaunchedEffect
-        val repo = com.ers.emergencyresponseapp.data.IncidentRepository()
+    suspend fun loadBackupRequests(showError: Boolean = false): Boolean {
+        if (responderId <= 0 || !isNetworkAvailable) return false
+
+        backupLoading = true
+        return try {
+            val requests = com.ers.emergencyresponseapp.data.IncidentRepository()
+                .getMyBackupRequests(responderId)
+            val savedAt = System.currentTimeMillis()
+            val hasPreviousRequests =
+                backupRequestsList.isNotEmpty() ||
+                        cachedBackupSnapshot?.items?.isNotEmpty() == true
+
+            if (requests.isNotEmpty()) {
+                backupEmptySuccessStreak = 0
+                backupRequestsList = requests
+                lastBackupSyncMillis = savedAt
+                homeDataCache.saveBackupRequests(responderId, requests, savedAt)
+                cachedBackupSnapshot = homeDataCache.readBackupRequests(responderId)
+            } else {
+                backupEmptySuccessStreak += 1
+                if (!hasPreviousRequests || backupEmptySuccessStreak >= 2) {
+                    backupRequestsList = emptyList()
+                    lastBackupSyncMillis = savedAt
+                    homeDataCache.saveBackupRequests(responderId, emptyList(), savedAt)
+                    cachedBackupSnapshot = homeDataCache.readBackupRequests(responderId)
+                }
+            }
+
+            backupLoadError = null
+            hasCompletedBackupRequest = true
+            true
+        } catch (error: Exception) {
+            backupEmptySuccessStreak = 0
+            backupLoadError = error.message ?: "Unable to load backup requests"
+            hasCompletedBackupRequest = true
+            if (showError) {
+                Toast.makeText(
+                    context,
+                    "Unable to refresh backup requests",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+            false
+        } finally {
+            backupLoading = false
+        }
+    }
+
+    LaunchedEffect(responderId, networkStatus) {
+        if (responderId <= 0 || !isNetworkAvailable) return@LaunchedEffect
         while (true) {
-            backupRequestsList = repo.getMyBackupRequests(responderId)
-            lastBackupUpdateTime = java.util.Date()
-            delay(5000)
+            loadBackupRequests()
+            delay(5000L)
         }
     }
 
@@ -1014,26 +1425,65 @@ fun HomeScreen(
         }
     }
 
-    val rawActiveIncidents = assignedUi.activeIncidents.map { it.toDomain() }
-    var stableActiveIncidents by remember { mutableStateOf<List<Incident>>(emptyList()) }
-    var activeEmptyStreak by remember { mutableStateOf(0) }
+    val confirmingAssignedEmpty =
+        assignedUi.assignedLastSuccessMillis != null &&
+                assignedUi.incidents.isEmpty() &&
+                cachedAssignedSnapshot?.items?.isNotEmpty() == true &&
+                assignedEmptySuccessStreak < 2
+    val confirmingActiveEmpty =
+        assignedUi.activeLastSuccessMillis != null &&
+                assignedUi.activeIncidents.isEmpty() &&
+                cachedActiveSnapshot?.items?.isNotEmpty() == true &&
+                activeEmptySuccessStreak < 2
 
-    LaunchedEffect(rawActiveIncidents) {
-        if (rawActiveIncidents.isNotEmpty()) {
-            activeEmptyStreak = 0
-            stableActiveIncidents = rawActiveIncidents
-        } else {
-            activeEmptyStreak++
-            // Only treat as "truly empty" after 2 consecutive empty polls (~10s),
-            // so a single transient/glitchy empty response doesn't flicker the UI.
-            if (activeEmptyStreak >= 2) {
-                stableActiveIncidents = emptyList()
-            }
-        }
+    val displayedAssignedDtos = if (
+        assignedUi.assignedLastSuccessMillis == null || confirmingAssignedEmpty
+    ) {
+        cachedAssignedSnapshot?.items ?: assignedUi.incidents
+    } else {
+        assignedUi.incidents
     }
+    val displayedActiveDtos = if (
+        assignedUi.activeLastSuccessMillis == null || confirmingActiveEmpty
+    ) {
+        cachedActiveSnapshot?.items ?: assignedUi.activeIncidents
+    } else {
+        assignedUi.activeIncidents
+    }
+    val assignedLastSyncMillis = if (confirmingAssignedEmpty) {
+        cachedAssignedSnapshot?.savedAtMillis
+    } else {
+        assignedUi.assignedLastSuccessMillis ?: cachedAssignedSnapshot?.savedAtMillis
+    }
+    val activeLastSyncMillis = if (confirmingActiveEmpty) {
+        cachedActiveSnapshot?.savedAtMillis
+    } else {
+        assignedUi.activeLastSuccessMillis ?: cachedActiveSnapshot?.savedAtMillis
+    }
+    val isUsingCachedAssigned =
+        (assignedUi.assignedLastSuccessMillis == null && cachedAssignedSnapshot != null) ||
+                confirmingAssignedEmpty
+    val isUsingCachedActive =
+        (assignedUi.activeLastSuccessMillis == null && cachedActiveSnapshot != null) ||
+                confirmingActiveEmpty
+    val activeRequestPending =
+        networkStatus != ConnectivityStatus.Offline &&
+                assignedUi.activeError.isNullOrBlank() &&
+                (
+                    networkStatus == ConnectivityStatus.Checking ||
+                            assignedUi.loadingActive ||
+                            !assignedUi.hasCompletedActiveRequest
+                    )
+    val backupRequestPending =
+        networkStatus != ConnectivityStatus.Offline &&
+                backupLoadError.isNullOrBlank() &&
+                (
+                    networkStatus == ConnectivityStatus.Checking ||
+                            backupLoading ||
+                            !hasCompletedBackupRequest
+                    )
 
-    val activeIncidents = stableActiveIncidents
-    var isLoading by remember { mutableStateOf(false) }
+    val activeIncidents = displayedActiveDtos.map { it.toDomain() }
     var isRefreshing by remember { mutableStateOf(false) }
     var showNotificationsDialog by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -1048,21 +1498,42 @@ fun HomeScreen(
     )
 
     fun cancelBackupRequest(id: Int) {
+        if (!isNetworkAvailable) {
+            Toast.makeText(
+                context,
+                "You’re offline. Reconnect before cancelling a backup request.",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
         scope.launch {
             val repo = com.ers.emergencyresponseapp.data.IncidentRepository()
             val result = repo.cancelBackupRequest(requestId = id, responderId = responderId)
 
-            result.onSuccess {
-                backupRequestsList = repo.getMyBackupRequests(responderId)
-                lastBackupUpdateTime = java.util.Date()
+            if (result.isSuccess) {
+                loadBackupRequests(showError = true)
                 Toast.makeText(context, "Backup request cancelled", Toast.LENGTH_SHORT).show()
-            }.onFailure { error ->
-                Toast.makeText(context, "Failed to cancel: ${error.message}", Toast.LENGTH_LONG).show()
+            } else {
+                Toast.makeText(
+                    context,
+                    "Failed to cancel: ${result.exceptionOrNull()?.message}",
+                    Toast.LENGTH_LONG
+                ).show()
             }
         }
     }
 
     fun refreshSingleBackupRequest(requestId: Int) {
+        if (!isNetworkAvailable) {
+            Toast.makeText(
+                context,
+                "You’re offline. Showing the last synced request status.",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
         scope.launch {
             val repo = com.ers.emergencyresponseapp.data.IncidentRepository()
             val updated = repo.getBackupRequestStatus(requestId, responderId)
@@ -1079,7 +1550,11 @@ fun HomeScreen(
                         )
                     } else existing
                 }
-                lastBackupUpdateTime = java.util.Date()
+                val savedAt = System.currentTimeMillis()
+                lastBackupSyncMillis = savedAt
+                backupLoadError = null
+                homeDataCache.saveBackupRequests(responderId, backupRequestsList, savedAt)
+                cachedBackupSnapshot = homeDataCache.readBackupRequests(responderId)
             } else {
                 Toast.makeText(context, "Unable to refresh this request", Toast.LENGTH_SHORT).show()
             }
@@ -1091,8 +1566,9 @@ fun HomeScreen(
             accountPhotoUri = stored
             try { prefs.edit().putString("account_photo", accountPhotoUri).apply() } catch (_: Exception) {}
 
-            // Upload to server so profile_image_path gets updated in the DB
-            if (responderId > 0) {
+            // Upload to server so profile_image_path gets updated in the DB.
+            // The local image remains available even when the device is offline.
+            if (responderId > 0 && isNetworkAvailable) {
                 scope.launch {
                     try {
                         val userIdBody = userIdToRequestBody(responderId)
@@ -1110,13 +1586,19 @@ fun HomeScreen(
                         Toast.makeText(context, "Failed to upload profile photo", Toast.LENGTH_SHORT).show()
                     }
                 }
+            } else if (responderId > 0) {
+                Toast.makeText(
+                    context,
+                    "Photo saved on this device, but it was not uploaded because you’re offline.",
+                    Toast.LENGTH_LONG
+                ).show()
             }
         }
     }
 
 
     suspend fun loadBroadcasts(showError: Boolean = false) {
-        if (responderId <= 0) return
+        if (responderId <= 0 || !isNetworkAvailable) return
         notificationRepository.getBroadcasts(responderId)
             .onSuccess { latest ->
                 val ordered = latest.sortedWith(
@@ -1170,15 +1652,21 @@ fun HomeScreen(
 
     fun refreshHomeData() {
         if (isRefreshing || responderId <= 0) return
+        if (!isNetworkAvailable) {
+            Toast.makeText(
+                context,
+                "You’re offline. The app is showing last synced information.",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
 
         scope.launch {
             isRefreshing = true
             try {
-                val repository = com.ers.emergencyresponseapp.data.IncidentRepository()
                 assignedVm.load(responderId)
                 assignedVm.loadActive(responderId)
-                backupRequestsList = repository.getMyBackupRequests(responderId)
-                lastBackupUpdateTime = java.util.Date()
+                loadBackupRequests(showError = true)
                 loadBroadcasts(showError = true)
             } finally {
                 isRefreshing = false
@@ -1186,13 +1674,12 @@ fun HomeScreen(
         }
     }
 
-    LaunchedEffect(responderId) {
-        if (responderId <= 0) return@LaunchedEffect
-        isLoading = true
-        assignedVm.load(responderId)
-        assignedVm.loadActive(responderId)
+    LaunchedEffect(responderId, networkStatus) {
+        if (responderId <= 0 || !isNetworkAvailable) {
+            return@LaunchedEffect
+        }
+
         loadBroadcasts()
-        isLoading = false
 
         while (true) {
             delay(30_000L)
@@ -1234,6 +1721,7 @@ fun HomeScreen(
     var currentLatitude  by remember { mutableStateOf<Double?>(null) }
     var currentLongitude by remember { mutableStateOf<Double?>(null) }
     val fusedClient       = remember { LocationServices.getFusedLocationProviderClient(context) }
+    val latestNetworkAvailable by rememberUpdatedState(isNetworkAvailable)
 
     val locationCallback = remember {
         object : LocationCallback() {
@@ -1244,7 +1732,11 @@ fun HomeScreen(
 
                     // Only push idle presence when NOT actively en route —
                     // RouteMonitoringService already owns the node during navigation.
-                    if (!RouteMonitoringService.isRunning && responderId > 0) {
+                    if (
+                        !RouteMonitoringService.isRunning &&
+                        responderId > 0 &&
+                        latestNetworkAvailable
+                    ) {
                         val dbRef = com.google.firebase.database.FirebaseDatabase.getInstance()
                             .getReference("live_locations")
                             .child("responder_$responderId")
@@ -1426,6 +1918,15 @@ fun HomeScreen(
     }
 
     fun sendOnSceneReport(incident: Incident) {
+        if (!isNetworkAvailable) {
+            Toast.makeText(
+                context,
+                "You’re offline. Reconnect before reporting on-scene status.",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
         try {
             // sendOnSceneReport(incident)
             assignedVm.updateStatus(
@@ -1488,6 +1989,15 @@ fun HomeScreen(
     }
 
     fun markIncidentDone(incident: Incident, notes: String, proofUri: String?) {
+        if (!isNetworkAvailable) {
+            Toast.makeText(
+                context,
+                "You’re offline. Reconnect before completing this incident.",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
         if (proofUri == null) {
             Toast.makeText(context, "Photo proof is required", Toast.LENGTH_SHORT).show()
             return
@@ -1625,6 +2135,15 @@ fun HomeScreen(
 
 
     fun sendBackupRequest(request: BackupRequest) {
+        if (!isNetworkAvailable) {
+            Toast.makeText(
+                context,
+                "You’re offline. Reconnect before requesting backup.",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
         val deptName = when (request.department.shortCode) {
             "FIRE" -> "Fire Department"
             "MED" -> "Medical Department"
@@ -1652,14 +2171,13 @@ fun HomeScreen(
                     incidentId = request.fromIncidentId
                 )
 
-                result.onSuccess { newId ->
-                    scope.launch {
-                        backupRequestsList = com.ers.emergencyresponseapp.data.IncidentRepository().getMyBackupRequests(responderId)
-                    }
+                if (result.isSuccess) {
+                    loadBackupRequests(showError = true)
                     Toast.makeText(context, "Backup request sent to $deptName", Toast.LENGTH_SHORT).show()
-                }.onFailure { error ->
-                    Log.e("BackupRequest", "Failed: responderId=$responderId, resources=$resourceList, error=${error.message}")
-                    Toast.makeText(context, "Failed: ${error.message}", Toast.LENGTH_LONG).show()
+                } else {
+                    val error = result.exceptionOrNull()
+                    Log.e("BackupRequest", "Failed: responderId=$responderId, resources=$resourceList, error=${error?.message}")
+                    Toast.makeText(context, "Failed: ${error?.message}", Toast.LENGTH_LONG).show()
                 }
 
             } catch (e: Exception) {
@@ -1835,7 +2353,7 @@ fun HomeScreen(
 
 
             val assignedListForRole =
-                assignedUi.incidents.map { it.toDomain() }
+                displayedAssignedDtos.map { it.toDomain() }
 
             assignedListForRole.firstOrNull()?.id?.let { id -> if (!onSceneEnabledMap.containsKey(id)) onSceneEnabledMap[id] = false }
 
@@ -2167,101 +2685,73 @@ fun HomeScreen(
                         }
 
                         if (assignedListForRole.isEmpty()) {
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(22.dp),
-                                colors = CardDefaults.cardColors(containerColor = AppColors.CardBg),
-                                elevation = CardDefaults.cardElevation(1.dp),
-                                border = BorderStroke(1.dp, AppColors.Border)
+                            AssignedIncidentEmptyState(
+                                networkStatus = networkStatus,
+                                loading = assignedUi.loadingAssigned,
+                                requestCompleted = assignedUi.hasCompletedAssignedRequest,
+                                serverError = assignedUi.assignedError,
+                                lastSyncMillis = assignedLastSyncMillis,
+                                onRetry = ::refreshHomeData
+                            )
+                        } else {
+                            if (
+                                isUsingCachedAssigned ||
+                                networkStatus == ConnectivityStatus.Offline ||
+                                !assignedUi.assignedError.isNullOrBlank()
                             ) {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(18.dp),
-                                    verticalArrangement = Arrangement.spacedBy(14.dp)
-                                ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(52.dp)
-                                                .clip(RoundedCornerShape(16.dp))
-                                                .background(AppColors.DispatchSurface),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Done,
-                                                contentDescription = null,
-                                                tint = AppColors.DispatchText,
-                                                modifier = Modifier.size(28.dp)
-                                            )
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = if (networkStatus == ConnectivityStatus.Offline) {
+                                        AppColors.DangerSurface
+                                    } else {
+                                        AppColors.DispatchSurface
+                                    },
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (networkStatus == ConnectivityStatus.Offline) {
+                                            AppColors.DangerText.copy(alpha = 0.22f)
+                                        } else {
+                                            AppColors.DispatchText.copy(alpha = 0.22f)
                                         }
-
-                                        Spacer(Modifier.width(14.dp))
-
+                                    )
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = if (networkStatus == ConnectivityStatus.Offline) {
+                                                Icons.Default.CloudOff
+                                            } else {
+                                                Icons.Default.Warning
+                                            },
+                                            contentDescription = null,
+                                            tint = if (networkStatus == ConnectivityStatus.Offline) {
+                                                AppColors.DangerText
+                                            } else {
+                                                AppColors.DispatchText
+                                            },
+                                            modifier = Modifier.size(19.dp)
+                                        )
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(
-                                                text = "Ready for dispatch",
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 18.sp,
-                                                color = AppColors.Text
+                                                text = "Showing last known assignments",
+                                                color = AppColors.Text,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold
                                             )
-
-                                            Spacer(Modifier.height(3.dp))
-
                                             Text(
-                                                text = "No incident is currently assigned.",
+                                                text = "${formatLastSyncLabel(assignedLastSyncMillis)}. Confirm urgent changes with dispatch.",
                                                 color = AppColors.TextSecondary,
-                                                fontSize = 13.sp
+                                                fontSize = 11.sp,
+                                                lineHeight = 15.sp
                                             )
                                         }
                                     }
-
-                                    Surface(
-                                        color = AppColors.SuccessSurface,
-                                        shape = RoundedCornerShape(999.dp)
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 13.dp, vertical = 7.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(8.dp)
-                                                    .clip(CircleShape)
-                                                    .background(AppColors.SuccessText)
-                                            )
-
-                                            Spacer(Modifier.width(8.dp))
-
-                                            Text(
-                                                text = "Available for Dispatch",
-                                                color = AppColors.SuccessText,
-                                                fontWeight = FontWeight.SemiBold,
-                                                fontSize = 13.sp
-                                            )
-                                        }
-                                    }
-
-                                    Text(
-                                        text = "You’ll be notified as soon as the dispatch center assigns an incident.",
-                                        color = AppColors.TextSecondary,
-                                        fontSize = 13.sp,
-                                        lineHeight = 18.sp
-                                    )
-
-                                    HorizontalDivider(color = AppColors.Border)
-
-                                    Text(
-                                        text = "Current unit: ${unitCode.ifBlank { "Unit not assigned" }} • " +
-                                                unitType.ifBlank { "Responder unit" },
-                                        color = AppColors.TextSecondary,
-                                        fontSize = 11.sp,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
                                 }
                             }
-                        } else {
                             assignedListForRole.forEach { inc ->
                                 val timeLabel = timeAgoLabel(inc.timeReported)
 
@@ -2563,6 +3053,7 @@ fun HomeScreen(
                                             currentLatitude = currentLatitude,
                                             currentLongitude = currentLongitude,
                                             hasLocationPermission = hasLocationPermission,
+                                            networkAvailable = isNetworkAvailable,
                                             onSceneEnabled = (onSceneEnabledMap[inc.id] == true),
                                             setOnSceneEnabled = { enabled ->
                                                 onSceneEnabledMap[inc.id] = enabled
@@ -2635,17 +3126,15 @@ fun HomeScreen(
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text("Backup Requests", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = AppColors.Text)
                                     Text(
-                                        "${visibleBackupRequests.size} total • ${java.text.SimpleDateFormat("h:mm a", Locale.getDefault()).format(lastBackupUpdateTime)}",
+                                        "${visibleBackupRequests.size} total • ${formatLastSyncLabel(lastBackupSyncMillis)}",
                                         fontSize = 11.sp,
                                         color = AppColors.TextSecondary
                                     )
                                 }
                                 IconButton(
+                                    enabled = isNetworkAvailable,
                                     onClick = {
-                                        scope.launch {
-                                            backupRequestsList = com.ers.emergencyresponseapp.data.IncidentRepository().getMyBackupRequests(responderId)
-                                            lastBackupUpdateTime = java.util.Date()
-                                        }
+                                        scope.launch { loadBackupRequests(showError = true) }
                                     },
                                     modifier = Modifier.size(32.dp)
                                 ) {
@@ -2656,6 +3145,7 @@ fun HomeScreen(
                             // Action buttons row
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Button(
+                                    enabled = isNetworkAvailable,
                                     onClick = { showDepartmentSelection = true },
                                     modifier = Modifier.weight(1f).height(38.dp),
                                     shape = RoundedCornerShape(10.dp),
@@ -2700,9 +3190,53 @@ fun HomeScreen(
                                 }
                             }
 
+                            if (
+                                networkStatus == ConnectivityStatus.Offline ||
+                                backupLoadError != null ||
+                                backupEmptySuccessStreak == 1
+                            ) {
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = if (networkStatus == ConnectivityStatus.Offline) {
+                                        AppColors.DangerSurface
+                                    } else {
+                                        AppColors.DispatchSurface
+                                    }
+                                ) {
+                                    Text(
+                                        text = when {
+                                            networkStatus == ConnectivityStatus.Offline ->
+                                                "Offline • Showing last synced backup requests"
+                                            backupLoadError != null ->
+                                                "Unable to refresh • Showing last known request status"
+                                            else ->
+                                                "Confirming dispatch update • Showing last known requests"
+                                        },
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                        color = if (networkStatus == ConnectivityStatus.Offline) {
+                                            AppColors.DangerText
+                                        } else {
+                                            AppColors.DispatchText
+                                        },
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+
                             if (visibleBackupRequests.isEmpty()) {
                                 Text(
-                                    "No backup requests yet.",
+                                    text = when {
+                                        networkStatus == ConnectivityStatus.Offline && cachedBackupSnapshot == null ->
+                                            "Backup request history is unavailable offline."
+                                        backupLoadError != null && cachedBackupSnapshot == null ->
+                                            "Unable to load backup requests from the server."
+                                        backupRequestPending ->
+                                            "Checking backup requests…"
+                                        else ->
+                                            "No backup requests yet."
+                                    },
                                     color = AppColors.TextSecondary,
                                     fontSize = 12.sp
                                 )
@@ -2717,7 +3251,8 @@ fun HomeScreen(
                                                 pendingCancelBackupId = req.id
                                                 showCancelBackupConfirm = true
                                             },
-                                            onRefreshClick = { refreshSingleBackupRequest(req.id) }
+                                            onRefreshClick = { refreshSingleBackupRequest(req.id) },
+                                            actionsEnabled = isNetworkAvailable
                                         )
                                     }
                                 }
@@ -2756,6 +3291,35 @@ fun HomeScreen(
                                 )
                             }
                         }
+
+                        if (
+                            isUsingCachedActive ||
+                            networkStatus == ConnectivityStatus.Offline ||
+                            !assignedUi.activeError.isNullOrBlank()
+                        ) {
+                            Surface(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (networkStatus == ConnectivityStatus.Offline) {
+                                    AppColors.DangerSurface
+                                } else {
+                                    AppColors.DispatchSurface
+                                }
+                            ) {
+                                Text(
+                                    text = "Showing last known active incidents • ${formatLastSyncLabel(activeLastSyncMillis)}",
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                    color = if (networkStatus == ConnectivityStatus.Offline) {
+                                        AppColors.DangerText
+                                    } else {
+                                        AppColors.DispatchText
+                                    },
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             @Composable
                             fun chip(label: String, selected: Boolean, onClick: () -> Unit) {
@@ -2793,7 +3357,7 @@ fun HomeScreen(
                     // so Compose can reuse item positions across recompositions instead of
                     // treating it as a new list every time.
                     val activeListState = rememberLazyListState()
-                    if (isLoading && activeIncidents.isEmpty()) {
+                    if (activeRequestPending && activeIncidents.isEmpty()) {
                         Column (
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -2841,9 +3405,17 @@ fun HomeScreen(
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Default.Done,
+                                        imageVector = when {
+                                            networkStatus == ConnectivityStatus.Offline -> Icons.Default.CloudOff
+                                            !assignedUi.activeError.isNullOrBlank() -> Icons.Default.Warning
+                                            else -> Icons.Default.Done
+                                        },
                                         contentDescription = null,
-                                        tint = AppColors.Primary,
+                                        tint = when {
+                                            networkStatus == ConnectivityStatus.Offline -> AppColors.DangerText
+                                            !assignedUi.activeError.isNullOrBlank() -> AppColors.DispatchText
+                                            else -> AppColors.Primary
+                                        },
                                         modifier = Modifier.size(32.dp)
                                     )
                                 }
@@ -2851,7 +3423,11 @@ fun HomeScreen(
                                 Spacer(Modifier.height(14.dp))
 
                                 Text(
-                                    text = "No active incidents",
+                                    text = when {
+                                        networkStatus == ConnectivityStatus.Offline -> "Active incidents unavailable offline"
+                                        !assignedUi.activeError.isNullOrBlank() -> "Unable to refresh active incidents"
+                                        else -> "No active incidents"
+                                    },
                                     fontSize = 18.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = AppColors.Text
@@ -2860,7 +3436,14 @@ fun HomeScreen(
                                 Spacer(Modifier.height(6.dp))
 
                                 Text(
-                                    text = "Other assigned incidents will appear here for awareness.",
+                                    text = when {
+                                        networkStatus == ConnectivityStatus.Offline ->
+                                            "Reconnect to verify whether other incidents are currently active."
+                                        !assignedUi.activeError.isNullOrBlank() ->
+                                            "The dispatch server did not respond. Try again when the service is available."
+                                        else ->
+                                            "Other assigned incidents will appear here for awareness."
+                                    },
                                     fontSize = 13.sp,
                                     color = AppColors.TextSecondary,
                                     textAlign = TextAlign.Center
@@ -2869,13 +3452,25 @@ fun HomeScreen(
                                 Spacer(Modifier.height(16.dp))
 
                                 Surface(
-                                    color = AppColors.Primary.copy(alpha = 0.08f),
+                                    color = when {
+                                        networkStatus == ConnectivityStatus.Offline -> AppColors.DangerSurface
+                                        !assignedUi.activeError.isNullOrBlank() -> AppColors.DispatchSurface
+                                        else -> AppColors.Primary.copy(alpha = 0.08f)
+                                    },
                                     shape = RoundedCornerShape(999.dp)
                                 ) {
                                     Text(
-                                        text = "Monitoring dispatch updates",
+                                        text = when {
+                                            networkStatus == ConnectivityStatus.Offline -> "Offline • ${formatLastSyncLabel(activeLastSyncMillis)}"
+                                            !assignedUi.activeError.isNullOrBlank() -> "Unable to sync • ${formatLastSyncLabel(activeLastSyncMillis)}"
+                                            else -> "Monitoring dispatch updates"
+                                        },
                                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
-                                        color = AppColors.Primary,
+                                        color = when {
+                                            networkStatus == ConnectivityStatus.Offline -> AppColors.DangerText
+                                            !assignedUi.activeError.isNullOrBlank() -> AppColors.DispatchText
+                                            else -> AppColors.Primary
+                                        },
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.SemiBold
                                     )
@@ -3214,7 +3809,8 @@ fun HomeScreen(
                                             pendingCancelBackupId = req.id
                                             showCancelBackupConfirm = true
                                         },
-                                        onRefreshClick = { refreshSingleBackupRequest(req.id) }
+                                        onRefreshClick = { refreshSingleBackupRequest(req.id) },
+                                        actionsEnabled = isNetworkAvailable
                                     )
                                 }
                             }
@@ -3506,23 +4102,31 @@ fun HomeScreen(
                                             highlighted = broadcast.id == selectedBroadcastId,
                                             onAcknowledge = {
                                                 if (!broadcast.acknowledged) {
-                                                    scope.launch {
-                                                        notificationRepository
-                                                            .acknowledgeBroadcast(responderId, broadcast.id)
-                                                            .onSuccess {
-                                                                broadcastNotices = broadcastNotices.map { current ->
-                                                                    if (current.id == broadcast.id) {
-                                                                        current.copy(acknowledged = true)
-                                                                    } else current
+                                                    if (!isNetworkAvailable) {
+                                                        Toast.makeText(
+                                                            context,
+                                                            "You’re offline. Reconnect before acknowledging this broadcast.",
+                                                            Toast.LENGTH_SHORT
+                                                        ).show()
+                                                    } else {
+                                                        scope.launch {
+                                                            notificationRepository
+                                                                .acknowledgeBroadcast(responderId, broadcast.id)
+                                                                .onSuccess {
+                                                                    broadcastNotices = broadcastNotices.map { current ->
+                                                                        if (current.id == broadcast.id) {
+                                                                            current.copy(acknowledged = true)
+                                                                        } else current
+                                                                    }
                                                                 }
-                                                            }
-                                                            .onFailure { error ->
-                                                                Toast.makeText(
-                                                                    context,
-                                                                    error.message ?: "Unable to acknowledge broadcast",
-                                                                    Toast.LENGTH_SHORT
-                                                                ).show()
-                                                            }
+                                                                .onFailure { error ->
+                                                                    Toast.makeText(
+                                                                        context,
+                                                                        error.message ?: "Unable to acknowledge broadcast",
+                                                                        Toast.LENGTH_SHORT
+                                                                    ).show()
+                                                                }
+                                                        }
                                                     }
                                                 }
                                             }
@@ -3838,6 +4442,12 @@ fun HomeScreen(
                     onFullNameChange = { accountFullName = it }, onUsernameChange = { accountUsername = it }, onEmailChange = { accountEmail = it },
                     onDarkModeChange = { e -> isDarkMode = e; prefs.edit().putBoolean("dark_mode", e).apply() },
                     onPickPhoto = { pickProfilePhotoLauncher.launch("image/*") },
+                    onOpenGuide = {
+                        showSettingsDialog = false
+                        navController.navigate("how_to_use") {
+                            launchSingleTop = true
+                        }
+                    },
                     onSave = {
                         prefs.edit()
                             .putString("account_full_name", accountFullName.trim())
@@ -3847,7 +4457,7 @@ fun HomeScreen(
                             .apply()
                         if (accountUsername.isNotBlank()) responderName = accountUsername.trim()
 
-                        if (responderId > 0) {
+                        if (responderId > 0 && isNetworkAvailable) {
                             scope.launch {
                                 try {
                                     val response = RetrofitProvider.authApi.updateProfile(
@@ -3866,6 +4476,12 @@ fun HomeScreen(
                                     Toast.makeText(context, "Failed to update profile on server", Toast.LENGTH_SHORT).show()
                                 }
                             }
+                        } else if (responderId > 0) {
+                            Toast.makeText(
+                                context,
+                                "Profile changes were saved on this device, but not synced because you’re offline.",
+                                Toast.LENGTH_LONG
+                            ).show()
                         }
                         showSettingsDialog = false
                     },
@@ -4019,6 +4635,7 @@ private fun AccountSettingsDialog(
     isDarkMode: Boolean,
     onFullNameChange: (String) -> Unit, onUsernameChange: (String) -> Unit, onEmailChange: (String) -> Unit,
     onDarkModeChange: (Boolean) -> Unit, onPickPhoto: () -> Unit,
+    onOpenGuide: () -> Unit,
     onSave: () -> Unit, onBack: () -> Unit, onLogout: () -> Unit
 ) {
 
@@ -4039,7 +4656,26 @@ private fun AccountSettingsDialog(
         containerColor = AppColors.ElevatedSurface,
         titleContentColor = AppColors.Text,
         textContentColor = AppColors.Text,
-        title = { Text("Account Settings", fontWeight = FontWeight.Bold, fontSize = 20.sp) },
+        title = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Account Settings",
+                    modifier = Modifier.weight(1f),
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 20.sp
+                )
+                IconButton(onClick = onOpenGuide) {
+                    Icon(
+                        imageVector = Icons.Default.HelpOutline,
+                        contentDescription = "How to use this app",
+                        tint = AppColors.Primary
+                    )
+                }
+            }
+        },
         text = {
             Column(modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
