@@ -1,13 +1,8 @@
 package com.ers.emergencyresponseapp
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.content.Context
-import android.os.Build
 import android.os.Bundle
 import android.util.Log
-import android.view.MotionEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -60,8 +55,6 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.ers.emergencyresponseapp.data.HomeDataCache
-import com.ers.emergencyresponseapp.data.IncidentRepository
-import com.ers.emergencyresponseapp.firebase.repository.FirebaseChatRepository
 import com.ers.emergencyresponseapp.map.LiveRouteMapScreen
 import com.ers.emergencyresponseapp.network.ConnectivityObserver
 import com.ers.emergencyresponseapp.network.ConnectivityStatus
@@ -70,31 +63,22 @@ import com.ers.emergencyresponseapp.notification.AppNotificationManager
 import com.ers.emergencyresponseapp.notification.NotificationDestination
 import com.ers.emergencyresponseapp.notification.NotificationNavigation
 import com.ers.emergencyresponseapp.notification.PushTokenManager
-import com.ers.emergencyresponseapp.routing.RouteMonitoringService
+import com.ers.emergencyresponseapp.presence.ResponderPresenceManager
 import com.ers.emergencyresponseapp.ui.components.ConnectivityStatusBanner
 import com.ers.emergencyresponseapp.ui.theme.EmergencyResponseAppTheme
 import com.ers.emergencyresponseapp.ui.theme.ThemeController
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
-    private var lastTouchTime = System.currentTimeMillis()
-    private val firebaseChatRepository = FirebaseChatRepository()
-    private val presenceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
-    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
-        lastTouchTime = System.currentTimeMillis()
-        return super.dispatchTouchEvent(event)
-    }
+    private var presenceHeartbeatJob: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
-        createEmergencyChannel()
         AppNotificationManager.createChannels(this)
         NotificationNavigation.publishFromIntent(intent)
 
@@ -149,19 +133,13 @@ class MainActivity : ComponentActivity() {
                         }.onFailure { error ->
                             Log.w("CONNECTIVITY", "Push-token sync after reconnect failed", error)
                         }
-                        runCatching {
-                            firebaseChatRepository.setOnlineStatus(
-                                storedResponderId.toString(),
-                                true
-                            )
-                        }.onFailure { error ->
-                            Log.w("CONNECTIVITY", "Chat presence sync after reconnect failed", error)
-                        }
-                        runCatching {
-                            IncidentRepository().setUnitPresence(storedResponderId, "online")
-                        }.onFailure { error ->
-                            Log.w("CONNECTIVITY", "Unit presence sync after reconnect failed", error)
-                        }
+                        // Re-sync the existing lease without turning an expired
+                        // background responder back online. FCM registration remains
+                        // active independently of availability.
+                        ResponderPresenceManager.onConnectivityRestored(
+                            context.applicationContext,
+                            storedResponderId
+                        )
                     }
                 }
 
@@ -188,6 +166,8 @@ class MainActivity : ComponentActivity() {
                     if (responderIdToClear > 0) {
                         HomeDataCache(context).clearForResponder(responderIdToClear)
                     }
+                    NotificationNavigation.clear()
+                    AppNotificationManager.clearEventHistory(context.applicationContext)
                     authPrefs.edit().clear().apply()
                     userPrefs.edit().clear().apply()
                     context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
@@ -213,34 +193,33 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                // A responder stays signed in during an active route. Outside an
-                // active response, one hour without interaction closes the session.
-                // Never force an offline responder back to OTP login, because OTP
-                // cannot be completed without a validated internet connection.
-                LaunchedEffect(navController, connectivityStatus) {
-                    while (true) {
-                        delay(10_000L)
-                        val routeActive = context
-                            .getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
-                            .getBoolean("pending_en_route_check", false)
-                        val sessionActive = authPrefs.getBoolean("user_verified", false)
-                        val timedOut = System.currentTimeMillis() - lastTouchTime >= 60L * 60L * 1_000L
-
-                        if (
-                            sessionActive &&
-                            !routeActive &&
-                            !RouteMonitoringService.isRunning &&
-                            timedOut &&
-                            connectivityStatus == ConnectivityStatus.Online
-                        ) {
-                            logoutAndNavigate("login")
-                            break
-                        }
-                    }
-                }
+                // Authentication and operational presence are separate. Leaving
+                // the app never clears the verified session or FCM token. The
+                // process-level presence policy marks an idle background session
+                // offline after one hour and restores it on the next foreground.
 
                 val navBackStackEntry by navController.currentBackStackEntryAsState()
                 val currentRoute = navBackStackEntry?.destination?.route
+
+                // Keep the process-level tracker aligned with actual Compose navigation.
+                // This is intentionally driven by the NavController instead of individual
+                // screens so leaving Home/Coordination can never suppress a later FCM alert.
+                LaunchedEffect(currentRoute) {
+                    AppScreenTracker.currentScreen = when {
+                        currentRoute == null -> "NONE"
+                        currentRoute == "coordination_portal" -> "COORDINATION"
+                        currentRoute == "reviews_feedback" -> "REPORTS"
+                        currentRoute == "entry" -> "ENTRY"
+                        currentRoute == "login" -> "LOGIN"
+                        currentRoute == "how_to_use" -> "HOW_TO_USE"
+                        currentRoute?.startsWith("home") == true -> "HOME"
+                        currentRoute?.startsWith("live_map/") == true -> "LIVE_MAP"
+                        else -> currentRoute.orEmpty().uppercase()
+                    }
+                    if (currentRoute != "coordination_portal") {
+                        AppScreenTracker.currentThreadId = null
+                    }
+                }
 
                 LaunchedEffect(notificationDestination, currentRoute) {
                     val destination = notificationDestination ?: return@LaunchedEffect
@@ -258,7 +237,8 @@ class MainActivity : ComponentActivity() {
                         is NotificationDestination.PrivateChat,
                         is NotificationDestination.DepartmentChat -> "coordination_portal"
 
-                        is NotificationDestination.Broadcast -> initialHomeRoute
+                        is NotificationDestination.Broadcast,
+                        is NotificationDestination.AssignedIncident -> initialHomeRoute
                     }
 
                     if (currentRoute != route) {
@@ -360,7 +340,11 @@ class MainActivity : ComponentActivity() {
                                         } else {
                                             "home/$department"
                                         }
-                                        lastTouchTime = System.currentTimeMillis()
+                                        val loggedResponderId = userPrefs
+                                            .getString("user_id", "")
+                                            ?.toIntOrNull()
+                                            ?: 0
+                                        startPresenceSession(loggedResponderId)
                                         navController.navigate(destination) {
                                             popUpTo("entry") { inclusive = true }
                                             popUpTo("login") { inclusive = true }
@@ -541,22 +525,31 @@ class MainActivity : ComponentActivity() {
             ?.toIntOrNull()
             ?: 0
 
-        if (responderId > 0) {
-            lifecycleScope.launch {
-                runCatching {
-                    PushTokenManager.registerCurrentToken(applicationContext, responderId)
-                }.onFailure { error ->
-                    Log.w("PUSH_TOKEN", "Unable to register push token", error)
-                }
-                runCatching {
-                    firebaseChatRepository.setOnlineStatus(responderId.toString(), true)
-                }.onFailure { error ->
-                    Log.w("CHAT_PRESENCE", "Unable to mark chat presence online", error)
-                }
-                runCatching {
-                    IncidentRepository().setUnitPresence(responderId, "online")
-                }.onFailure { error ->
-                    Log.w("UNIT_PRESENCE", "Unable to mark responder online", error)
+        startPresenceSession(responderId)
+    }
+
+    private fun startPresenceSession(responderId: Int) {
+        if (responderId <= 0) return
+
+        // Back/Home no longer changes availability. Foregrounding the app or
+        // completing OTP cancels any pending timeout and renews the lease.
+        ResponderPresenceManager.onAppForeground(applicationContext, responderId)
+
+        presenceHeartbeatJob?.cancel()
+        presenceHeartbeatJob = lifecycleScope.launch {
+            runCatching {
+                PushTokenManager.registerCurrentToken(applicationContext, responderId)
+            }.onFailure { error ->
+                Log.w("PUSH_TOKEN", "Unable to register push token", error)
+            }
+
+            while (isActive && AppState.isForeground) {
+                delay(ResponderPresenceManager.FOREGROUND_HEARTBEAT_MS)
+                if (isActive && AppState.isForeground) {
+                    ResponderPresenceManager.heartbeatForeground(
+                        applicationContext,
+                        responderId
+                    )
                 }
             }
         }
@@ -564,33 +557,39 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         AppState.isForeground = false
+        presenceHeartbeatJob?.cancel()
+        presenceHeartbeatJob = null
 
         val responderId = getSharedPreferences("user_prefs", MODE_PRIVATE)
             .getString("user_id", "")
             ?.toIntOrNull()
             ?: 0
 
-        if (responderId > 0 && !RouteMonitoringService.isRunning) {
-            presenceScope.launch {
-                runCatching {
-                    firebaseChatRepository.setOnlineStatus(responderId.toString(), false)
-                }.onFailure { error ->
-                    Log.w("CHAT_PRESENCE", "Unable to mark chat presence offline", error)
-                }
-                runCatching {
-                    IncidentRepository().setUnitPresence(responderId, "offline")
-                }.onFailure { error ->
-                    Log.w("UNIT_PRESENCE", "Unable to mark responder offline", error)
-                }
-            }
+        if (responderId > 0) {
+            // Keep the responder online and assignable for one hour. A delayed
+            // worker owns the later offline transition; the FCM token stays active.
+            ResponderPresenceManager.onAppBackground(applicationContext, responderId)
         }
 
         super.onStop()
     }
 
     private suspend fun markResponderOffline(responderId: Int) {
-        // Every remote cleanup is best-effort. Local logout must always continue,
-        // including when the responder is currently offline.
+        presenceHeartbeatJob?.cancel()
+        presenceHeartbeatJob = null
+        // Explicit logout is the only path that also unregisters the push token.
+        // Background timeout/task removal changes presence only, so chat and
+        // broadcast notifications can still reach the signed-in device.
+        runCatching {
+            ResponderPresenceManager.markExplicitlyOffline(
+                context = applicationContext,
+                responderId = responderId,
+                reason = "logout"
+            )
+        }.onFailure { error ->
+            Log.w("LOGOUT", "Presence cleanup failed", error)
+        }
+
         runCatching {
             PushTokenManager.unregisterCurrentToken(applicationContext, responderId)
         }.onFailure { error ->
@@ -602,31 +601,7 @@ class MainActivity : ComponentActivity() {
         }.onFailure { error ->
             Log.w("LOGOUT", "Server logout endpoint failed", error)
         }
-
-        runCatching {
-            IncidentRepository().setUnitPresence(responderId, "offline")
-        }
-
-        runCatching {
-            firebaseChatRepository.setOnlineStatus(responderId.toString(), false)
-        }
     }
 
-    private fun createEmergencyChannel() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
 
-        val channel = NotificationChannel(
-            "emergency_incidents",
-            "Emergency Incidents",
-            NotificationManager.IMPORTANCE_HIGH
-        ).apply {
-            description = "Emergency assignments"
-            enableVibration(true)
-            vibrationPattern = longArrayOf(0, 500, 200, 500, 200, 500)
-            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-        }
-
-        getSystemService(NotificationManager::class.java)
-            .createNotificationChannel(channel)
-    }
 }

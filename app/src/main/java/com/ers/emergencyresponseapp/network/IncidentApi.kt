@@ -45,8 +45,7 @@ data class MarkIncidentCompleteResponse(
     val success: Boolean,
     val message: String? = null,
     val incident_id: Int? = null,
-    val completion_image_path: String? = null,
-    val review_status: String? = null
+    val completion_image_path: String? = null
 )
 
 data class BackupRequestStatusDto(
@@ -142,7 +141,7 @@ data class CancelBackupRequestResponse(
     val message: String?
 )
 
-data class PendingReviewIncidentDto(
+data class CompletedIncidentDto(
     val id: Long,
     val reference_no: String?,
     val type: String,
@@ -152,19 +151,13 @@ data class PendingReviewIncidentDto(
     val location_address: String?,
     val completion_notes: String?,
     val completion_image_path: String?,
-    val review_status: String,
     val completed_at: String?
 )
 
-data class GetPendingReviewIncidentsResponse(
+data class GetCompletedIncidentsResponse(
     val success: Boolean,
     val message: String? = null,
-    val incidents: List<PendingReviewIncidentDto>? = null
-)
-
-data class SubmitIncidentReviewResponse(
-    val success: Boolean,
-    val message: String? = null
+    val incidents: List<CompletedIncidentDto>? = null
 )
 
 
@@ -302,28 +295,17 @@ interface IncidentApi {
         @Field("responder_id") responderId: Int
     ): CancelBackupRequestResponse
 
-    @GET("api/api_app/get-pending-review-incidents.php")
-    suspend fun getPendingReviewIncidents(
+    @GET("api/api_app/get-completed-incidents.php")
+    suspend fun getCompletedIncidents(
         @Query("responder_id") responderId: Int
-    ): GetPendingReviewIncidentsResponse
-
-    @FormUrlEncoded
-    @POST("api/api_app/submit-incident-review.php")
-    suspend fun submitIncidentReview(
-        @Field("incident_id") incidentId: Long,
-        @Field("responder_id") responderId: Int,
-        @Field("response_rating") responseRating: Int,
-        @Field("communication_rating") communicationRating: Int,
-        @Field("professionalism_rating") professionalismRating: Int,
-        @Field("outcome") outcome: String,
-        @Field("review_text") reviewText: String
-    ): SubmitIncidentReviewResponse
+    ): GetCompletedIncidentsResponse
 
     @FormUrlEncoded
     @POST("api/api_app/set-unit-presence.php")
     suspend fun setUnitPresence(
         @Field("responder_id") responderId: Int,
-        @Field("presence") presence: String
+        @Field("presence") presence: String,
+        @Field("reason") reason: String
     ): SetUnitPresenceResponse
 
     @POST("api/api_app/request-alternative-route.php")

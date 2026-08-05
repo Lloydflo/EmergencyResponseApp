@@ -24,8 +24,6 @@ enum class IncidentStatus(val displayName: String) {
     DISPATCHED("Dispatched"),
     ON_ROUTE("On Route"),
     ON_SCENE("On Scene"),
-    PENDING_REVIEW("Pending Review"),
-    SUBMITTED_REVIEW("Submitted Review"),
     RESOLVED("Resolved"),
     UNKNOWN("Status unavailable")
 }

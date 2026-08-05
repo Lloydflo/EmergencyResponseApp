@@ -19,6 +19,11 @@ sealed interface NotificationDestination {
         val broadcastId: Long,
         val incidentId: Long
     ) : NotificationDestination
+
+    data class AssignedIncident(
+        val assignmentId: String,
+        val incidentId: Long
+    ) : NotificationDestination
 }
 
 /**
@@ -32,10 +37,12 @@ object NotificationNavigation {
     const val EXTRA_GROUP_ID = "ers_notification_group_id"
     const val EXTRA_BROADCAST_ID = "ers_notification_broadcast_id"
     const val EXTRA_INCIDENT_ID = "ers_notification_incident_id"
+    const val EXTRA_ASSIGNMENT_ID = "ers_notification_assignment_id"
 
     const val DEST_PRIVATE_CHAT = "private_chat"
     const val DEST_DEPARTMENT_CHAT = "department_chat"
     const val DEST_BROADCAST = "broadcast"
+    const val DEST_ASSIGNED_INCIDENT = "assigned_incident"
 
     private val _destination = MutableStateFlow<NotificationDestination?>(null)
     val destination: StateFlow<NotificationDestination?> = _destination.asStateFlow()
@@ -62,6 +69,13 @@ object NotificationNavigation {
                 else NotificationDestination.Broadcast(broadcastId, incidentId)
             }
 
+            DEST_ASSIGNED_INCIDENT -> {
+                val assignmentId = source.getStringExtra(EXTRA_ASSIGNMENT_ID).orEmpty()
+                val incidentId = source.getLongExtra(EXTRA_INCIDENT_ID, 0L)
+                if (assignmentId.isBlank() && incidentId <= 0L) null
+                else NotificationDestination.AssignedIncident(assignmentId, incidentId)
+            }
+
             else -> null
         }
 
@@ -74,6 +88,7 @@ object NotificationNavigation {
         source.removeExtra(EXTRA_GROUP_ID)
         source.removeExtra(EXTRA_BROADCAST_ID)
         source.removeExtra(EXTRA_INCIDENT_ID)
+        source.removeExtra(EXTRA_ASSIGNMENT_ID)
     }
 
     fun clear(expected: NotificationDestination? = null) {

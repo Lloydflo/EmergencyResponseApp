@@ -1,92 +1,30 @@
-# New Incident Notification Feature
+# Operational notification implementation
 
-## Overview
-I've implemented a pop-up notification system that appears at the top of the HomeScreen when a responder receives a new assigned incident.
+The app now uses Firebase Cloud Messaging and Android notification channels for four operational event classes:
 
-## Implementation Details
+- private responder chat;
+- department chat;
+- emergency broadcasts;
+- newly assigned incidents.
 
-### 1. **Notification State Management**
-Added state variables to track notification visibility and content:
-```kotlin
-var showNewIncidentNotification by remember { mutableStateOf(false) }
-var newIncidentMessage by remember { mutableStateOf("") }
-```
+`EmergencyFirebaseMessagingService` processes high-priority data messages even when the activity is not visible. `AppNotificationManager` creates a dedicated channel for each event class, selects a vibration pattern, builds a status-bar-safe monochrome icon, and attaches a deep-link intent. `NotificationNavigation` passes that destination into Compose navigation when the user taps the alert.
 
-### 2. **Automatic Detection**
-A `LaunchedEffect` watches for changes to the currently assigned incident candidate (the first matching assignment):
-```kotlin
-LaunchedEffect(assignedCandidateForRole.firstOrNull()?.id) {
-    val inc = assignedCandidateForRole.firstOrNull() ?: return@LaunchedEffect
-    newIncidentMessage = "New ${inc.type} incident assigned: ${inc.location.ifBlank { "Unknown location" }}"
-    showNewIncidentNotification = true
-    // Auto-dismiss after 5 seconds
-    delay(5000L)
-    showNewIncidentNotification = false
-}
-```
+The process defaults to a background state so a cold-started Firebase service never mistakes itself for an open Home screen. `MainActivity` updates the screen tracker from the actual navigation route. This suppresses alerts only while the responder is already viewing the exact chat, while still allowing assigned-incident alerts on Reports, Coordination, or outside the app.
 
-### 3. **Visual Design**
-The notification is a **Card** overlay with:
-- **Green background** (`Color(0xFF1B5E20)`) to indicate importance
-- **Emergency icon** (hospital icon)
-- **Bold title**: "New Incident Assigned!"
-- **Details**: Shows incident type and location
-- **Dismiss button**: Manual dismiss option
-- **Auto-dismiss**: Automatically hides after 5 seconds
+Home polling remains a fallback while the process is active. FCM and polling claim the same stable event key; whichever receives the event first owns the single visible alert.
 
-### 4. **Animation**
-Smooth entrance and exit animations:
-- **Entry**: Slides down from top + fade in
-- **Exit**: Slides up + fade out
+## Vibration channels
 
-### 5. **User Interaction**
-- **Tap to dismiss**: Click anywhere on the notification
-- **Long press to dismiss**: Alternative dismiss method
-- **Button dismiss**: Explicit dismiss button with checkmark icon
+- Private and department chat: short two-pulse pattern.
+- Emergency broadcast: strong three-pulse pattern.
+- Assigned incident: strong dispatch pattern.
 
-## Visual Position
-The notification appears:
-- At the **top center** of the screen
-- Above all other content (overlay)
-- With padding from edges (95% width)
-- 16dp from the top
+On Android 8 and newer the operating system owns channel behavior after creation. Responders can manage each channel from **Account Settings > Alerts & vibration**. The app cannot override a channel that the user has muted or disabled.
 
-## How It Works
+## Permission
 
-1. When a new incident is assigned to `assignedIncident` (via the `acceptHandler`)
-2. The `LaunchedEffect` triggers
-3. Creates a message with incident details
-4. Shows the notification card with animation
-5. After 5 seconds, automatically dismisses with animation
-6. User can manually dismiss at any time
+`POST_NOTIFICATIONS` is requested after the responder reaches Home on Android 13 or newer. `VIBRATE` is declared in the manifest. If permission is denied, system notifications are not shown; in-app Home alerts can still be displayed while Home is active.
 
-## Testing
+## Server integration
 
-To test this feature:
-1. Start the app and navigate to HomeScreen
-2. Accept an incoming emergency request
-3. The green notification should slide down from the top
-4. It will show the incident type and location
-5. After 5 seconds, it will slide back up
-6. Or tap/click to dismiss immediately
-
-## Code Location
-- **File**: `app/src/main/java/com/ers/emergencyresponseapp/HomeScreen.kt`
-- **Lines**: 
-  - State variables: ~199-201
-  - Detection logic: ~382-390
-  - UI component: ~1012-1067
-
-## Dependencies Used
-- `AnimatedVisibility` - For smooth animations
-- `slideInVertically`, `slideOutVertically` - Slide animations
-- `fadeIn`, `fadeOut` - Opacity transitions
-- Material 3 components (Card, Icon, etc.)
-
-## Future Enhancements
-Consider adding:
-- Sound notification
-- Vibration feedback
-- Notification history/log
-- Custom notification styles per incident type
-- Priority-based notification colors
+The Android side cannot discover a new chat, broadcast, or assignment after its process has been removed unless the server sends FCM. Deploy server-side event delivery according to `FCM_NOTIFICATION_PAYLOADS.md`. The server implementation and Firebase service-account credential are not bundled in this Android archive.

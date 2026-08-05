@@ -1,0 +1,70 @@
+EmergencyResponseApp Full Update — Validation Report
+----------------------------------------------------
+
+Source basis
+------------
+EmergencyResponseApp(7).rar, merged directly in the latest source tree. No git patch is required.
+
+Implemented scope
+-----------------
+1. Background/cold-process Android FCM handling for:
+   - private responder chat
+   - department chat
+   - emergency broadcasts
+   - newly assigned incidents
+2. High-importance notification channels, notification permission handling,
+   event-specific vibration patterns, deep-link navigation, and FCM/polling deduplication.
+3. Operational backup selection on Home with exact response teams/units/capabilities
+   and a quantity/operational-details field.
+4. Reviews equipment/supply requests separated from responder/team/vehicle backup.
+5. Coordination Portal reduced to Chats and Departments; responder directory moved
+   to the pencil-button bottom sheet.
+6. Quick text templates for ten narrative Reviews fields with apply, add, edit,
+   delete, and restore-defaults functions.
+7. The LoginScreen/OTP source was not modified by this update.
+
+Static and package validation
+-----------------------------
+PASS  Kotlin PSI syntax parse: 49 Kotlin files, 0 syntax errors
+PASS  Android XML parse: 15 XML files, 0 parse errors
+PASS  google-services.json parse and package match: com.ers.emergencyresponseapp
+PASS  Merge-conflict marker scan: 0 markers
+PASS  Duplicate Kotlin filename scan: 0 duplicates
+PASS  Required notification service, manager, navigation, icon, colors, and manifest entries
+PASS  Four notification event classes and four dedicated channels present
+PASS  Cold-process state defaults: background / no active screen
+PASS  Assigned-incident notification route and Home consumption present
+PASS  Operational backup catalog and details field present
+PASS  Reviews request catalog contains equipment/supplies only; no Personnel or Vehicles category
+PASS  Coordination persistent-tab range is 0..1 and responder-directory popup is present
+PASS  Ten Reviews quick-template integrations present
+PASS  Quick-template add/edit/delete/restore and local JSON persistence present
+PASS  LoginScreen.kt has no diff from the supplied project baseline
+PASS  Gradle wrapper retained; Unix executable mode 755
+PASS  Bundled intro video probe: H.264, 720x500, 5.000 seconds
+PASS  ZIP integrity test and clean re-extraction
+PASS  Re-extracted ZIP repeated Kotlin, XML, JSON, semantic-feature, and conflict checks
+
+Build limitation in this execution environment
+----------------------------------------------
+A full Android Gradle build was not completed here. The wrapper attempted to retrieve
+Gradle 8.10.2 from services.gradle.org, but this runtime has no external network access
+(UnknownHostException). The runtime also has no installed Android SDK. This is an
+environment limitation, not a successful assembleDebug result. Final confirmation must
+be performed through Android Studio Gradle Sync, Build > Rebuild Project, and device tests.
+
+Runtime/server requirement
+--------------------------
+The Android client is complete for receiving these events, but true notifications while
+the app process is not open require the PHP/dispatch backend to send high-priority,
+data-only FCM messages after the chat, broadcast, or assignment transaction commits.
+The server source and Firebase service-account credential were not present in the uploaded
+Android project, so remote server deployment cannot be validated here. Use the exact
+contract in FCM_NOTIFICATION_PAYLOADS.md.
+
+Android platform limits
+-----------------------
+- Android 13+ requires the user to grant Notifications permission.
+- Users can mute a channel or vibration in system settings.
+- A manually Force-stopped app does not receive FCM until reopened.
+- Manufacturer battery-management policies can delay FCM delivery.

@@ -1,8 +1,8 @@
-# Merge status
+# Clean full-update status
 
 The connectivity/offline changes are already integrated into this project. Do **not** run `git apply EmergencyResponseApp_connectivity_offline.patch` again.
 
-Included integration:
+Included integration from the previous connectivity merge:
 
 - validated internet-state observer;
 - offline banner;
@@ -18,10 +18,20 @@ Generated directories and machine-specific files were intentionally removed from
 
 ## Open and build on Windows
 
-1. Extract the ZIP to a new folder, for example `C:\Users\IT_ll\StudioProjects\EmergencyResponseApp_Merged`.
+1. Extract the ZIP to a new folder, for example `C:\Users\IT_ll\StudioProjects\EmergencyResponseApp_Full_Update`.
 2. Open that folder in Android Studio.
 3. Allow Gradle Sync to finish. Android Studio will create or update `local.properties` for your Android SDK.
 4. Use **Build > Clean Project**, then **Build > Rebuild Project**.
 5. The debug APK is normally generated at `app\build\outputs\apk\debug\app-debug.apk`.
 
 If a stale Kotlin/Gradle daemon error appears, close Android Studio, run `gradlew.bat --stop` in the project folder, delete the project-local `.gradle`, `.kotlin`, and `app\build` folders, then reopen Android Studio and rebuild.
+
+## Current full-update additions
+
+- background/cold-process FCM handling and vibration for chat, broadcasts, and assigned incidents;
+- operational backup options and quantity/dispatch details on Home;
+- equipment/supply-only requests in Reports;
+- responder directory opened from the Coordination pencil action;
+- add/edit/delete/restore quick templates for narrative Reports fields.
+
+See `FULL_UPDATE_NOTES.md` and `FCM_NOTIFICATION_PAYLOADS.md`.

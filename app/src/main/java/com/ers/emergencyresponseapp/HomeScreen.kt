@@ -3,7 +3,6 @@ package com.ers.emergencyresponseapp
 
 import android.Manifest
 import android.app.Activity
-import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -39,6 +38,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -127,8 +128,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Popup
-import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
@@ -886,7 +885,7 @@ private fun HeaderNotificationButton(
 @Composable
 private fun BackupRequestStatusCard(
     department: String,
-    resources: String,
+    backupNeed: String,
     status: String,
     onCancelClick: () -> Unit,
     onRefreshClick: (() -> Unit)? = null,
@@ -931,7 +930,13 @@ private fun BackupRequestStatusCard(
                 Spacer(Modifier.width(8.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(department, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = AppColors.Text)
-                    Text(resources, fontSize = 11.sp, color = AppColors.TextSecondary)
+                    Text(
+                        text = "Backup needed: $backupNeed",
+                        fontSize = 11.sp,
+                        color = AppColors.TextSecondary,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
                 if (onRefreshClick != null) {
                     IconButton(
@@ -1697,6 +1702,28 @@ fun HomeScreen(
         NotificationNavigation.clear(destination)
     }
 
+    LaunchedEffect(notificationDestination, displayedAssignedDtos) {
+        val destination = notificationDestination as? NotificationDestination.AssignedIncident
+            ?: return@LaunchedEffect
+        val incident = displayedAssignedDtos.firstOrNull { candidate ->
+            (destination.assignmentId.isNotBlank() &&
+                    candidate.assignment_id == destination.assignmentId) ||
+                    (destination.incidentId > 0L &&
+                            candidate.id.toLongOrNull() == destination.incidentId)
+        }
+
+        newIncidentMessage = if (incident != null) {
+            "${incident.type.uppercase()} incident assigned at ${incident.location}"
+        } else {
+            "New incident assigned. Dispatch details are loading."
+        }
+        showNewIncidentNotification = true
+        // The Home screen is the assignment destination even when the server has
+        // not returned the row yet. Clear the one-shot route and let normal polling
+        // populate the incident card as soon as dispatch data is available.
+        NotificationNavigation.clear(destination)
+    }
+
 
     // Location
     var isLocationShared by remember { mutableStateOf(false) }
@@ -1752,10 +1779,19 @@ fun HomeScreen(
                                 "heading" to loc.bearing,
                                 "speed" to loc.speed,
                                 "status" to "available",
+                                "connectionState" to "connected",
                                 "updatedAt" to System.currentTimeMillis()
                             )
                         )
-                        dbRef.onDisconnect().updateChildren(mapOf("status" to "offline"))
+                        // A suspended Firebase socket must not change dispatch
+                        // availability. Keep the last operational status and mark
+                        // only the location feed as disconnected/stale.
+                        dbRef.onDisconnect().updateChildren(
+                            mapOf(
+                                "connectionState" to "disconnected",
+                                "updatedAt" to com.google.firebase.database.ServerValue.TIMESTAMP
+                            )
+                        )
                     }
                 }
             }
@@ -2151,10 +2187,17 @@ fun HomeScreen(
             else -> "Emergency Services"
         }
 
-        val resourceList = if (request.isFullBackup) {
-            "Full Backup"
+        val selectedBackupNeeds = if (request.isFullBackup) {
+            "Full ${request.department.displayName} response package"
         } else {
-            request.resources.joinToString { it.label }
+            request.resources.joinToString(", ") { it.label }
+        }
+        val backupNeedSummary = buildString {
+            append(selectedBackupNeeds)
+            request.specificDetails.trim().takeIf { it.isNotBlank() }?.let { details ->
+                append(" • Details: ")
+                append(details)
+            }
         }
 
         scope.launch {
@@ -2166,17 +2209,17 @@ fun HomeScreen(
                     responderName = responderName,
                     department = effectiveRole ?: "",
                     requestedDepartment = deptName,
-                    resources = resourceList,
+                    resources = backupNeedSummary,
                     isFullBackup = request.isFullBackup,
                     incidentId = request.fromIncidentId
                 )
 
                 if (result.isSuccess) {
                     loadBackupRequests(showError = true)
-                    Toast.makeText(context, "Backup request sent to $deptName", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Backup request sent: $selectedBackupNeeds", Toast.LENGTH_SHORT).show()
                 } else {
                     val error = result.exceptionOrNull()
-                    Log.e("BackupRequest", "Failed: responderId=$responderId, resources=$resourceList, error=${error?.message}")
+                    Log.e("BackupRequest", "Failed: responderId=$responderId, backupNeed=$backupNeedSummary, error=${error?.message}")
                     Toast.makeText(context, "Failed: ${error?.message}", Toast.LENGTH_LONG).show()
                 }
 
@@ -2379,18 +2422,31 @@ fun HomeScreen(
                     AppState.isForeground &&
                             AppScreenTracker.currentScreen == "HOME"
 
+                val assignmentKey = incident.assignment_id.orEmpty()
+                    .ifBlank { incident.id }
+                val assignmentEventKey = "assigned:$assignmentKey"
+
                 if (isOnHomeScreen) {
-                    // HOME SCREEN = banner only
-                    showNewIncidentNotification = true
-                    vibratePhone(context)
+                    // Reserve the same event key used by FCM. Whichever source
+                    // arrives first (push or polling) owns the one visible alert.
+                    if (AppNotificationManager.claimEvent(context, assignmentEventKey)) {
+                        showNewIncidentNotification = true
+                        vibratePhone(context)
+                    }
                 } else {
                     // OTHER SCREEN / BACKGROUND = Android notification only
                     showNewIncidentNotification = false
 
-                    showAssignedIncidentNotification(
-                        context,
-                        "New Incident Assigned",
-                        newIncidentMessage
+                    AppNotificationManager.showAssignedIncident(
+                        context = context,
+                        eventKey = assignmentEventKey,
+                        assignmentId = incident.assignment_id.orEmpty(),
+                        incidentId = incident.id.toLongOrNull() ?: 0L,
+                        incidentReference = incident.id,
+                        incidentType = incident.type,
+                        priority = incident.priority.orEmpty(),
+                        location = incident.location,
+                        body = newIncidentMessage
                     )
                 }
             }
@@ -3245,7 +3301,7 @@ fun HomeScreen(
                                     visibleBackupRequests.take(1).forEach { req ->
                                         BackupRequestStatusCard(
                                             department = req.requested_department,
-                                            resources = req.resources,
+                                            backupNeed = req.resources,
                                             status = req.status,
                                             onCancelClick = {
                                                 pendingCancelBackupId = req.id
@@ -3774,7 +3830,7 @@ fun HomeScreen(
                                 onValueChange = { backupSearchQuery = it },
                                 placeholder = {
                                     Text(
-                                        "Search department or resource",
+                                        "Search department or backup need",
                                         color = AppColors.TextSecondary
                                     )
                                 },
@@ -3803,7 +3859,7 @@ fun HomeScreen(
                                 items(filteredRequests, key = { it.id }) { req ->
                                     BackupRequestStatusCard(
                                         department = req.requested_department,
-                                        resources = req.resources,
+                                        backupNeed = req.resources,
                                         status = req.status,
                                         onCancelClick = {
                                             pendingCancelBackupId = req.id
@@ -4677,7 +4733,13 @@ private fun AccountSettingsDialog(
             }
         },
         text = {
-            Column(modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 520.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                     Box(modifier = Modifier.size(96.dp), contentAlignment = Alignment.Center) {
                         Box(modifier = Modifier.size(88.dp).clip(CircleShape).border(1.dp, AppColors.Border, CircleShape).clickable { showProfilePreview = true }) {
@@ -4735,6 +4797,57 @@ private fun AccountSettingsDialog(
                 }
 
 
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            val settingsIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                                    putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                                }
+                            } else {
+                                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                    data = "package:${context.packageName}".toUri()
+                                }
+                            }
+                            runCatching { context.startActivity(settingsIntent) }
+                                .onFailure {
+                                    Toast.makeText(
+                                        context,
+                                        "Open system settings to manage app notifications.",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                        },
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = AppColors.CardBg),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, AppColors.Border)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Notifications,
+                            contentDescription = null,
+                            tint = AppColors.Primary,
+                            modifier = Modifier.size(21.dp)
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Alerts & vibration", fontWeight = FontWeight.SemiBold, color = AppColors.Text)
+                            Text(
+                                "Manage chat, broadcast, and assigned-incident alert channels",
+                                fontSize = 12.sp,
+                                color = AppColors.TextSecondary
+                            )
+                        }
+                        Text("Manage", color = AppColors.Primary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
                 Card(shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = AppColors.CardBg), border = androidx.compose.foundation.BorderStroke(1.dp, AppColors.Border)) {
                     Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                         Column { Text("Night mode", fontWeight = FontWeight.SemiBold, color = AppColors.Text); Text("Reduce glare in low light", fontSize = 12.sp, color = AppColors.TextSecondary) }
@@ -4786,56 +4899,5 @@ private fun vibratePhone(context: Context) {
         )
     } else {
         vibrator.vibrate(1200)
-    }
-}
-private fun showAssignedIncidentNotification(
-    context: Context,
-    title: String,
-    message: String
-) {
-
-    val intent =
-        Intent(context, MainActivity::class.java)
-
-    intent.flags =
-        Intent.FLAG_ACTIVITY_NEW_TASK or
-                Intent.FLAG_ACTIVITY_CLEAR_TOP
-
-    val pendingIntent =
-        PendingIntent.getActivity(
-            context,
-            0,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or
-                    PendingIntent.FLAG_IMMUTABLE
-        )
-
-    val notification =
-        NotificationCompat.Builder(
-            context,
-            "emergency_incidents"
-        )
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle(title)
-            .setContentText(message)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_ALARM)
-            .setAutoCancel(true)
-            .setContentIntent(pendingIntent)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .build()
-
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-        ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.POST_NOTIFICATIONS
-        ) == PackageManager.PERMISSION_GRANTED
-    ) {
-        NotificationManagerCompat
-            .from(context)
-            .notify(
-                System.currentTimeMillis().toInt(),
-                notification
-            )
     }
 }

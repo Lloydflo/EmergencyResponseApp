@@ -32,7 +32,6 @@ import com.ers.emergencyresponseapp.coordination.model.ChatThread
 import com.ers.emergencyresponseapp.coordination.model.MessageStatus
 import com.ers.emergencyresponseapp.coordination.model.MessageType
 import com.ers.emergencyresponseapp.coordination.model.ThreadType
-import com.ers.emergencyresponseapp.firebase.repository.FirebaseChatRepository
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.FirebaseDatabase
@@ -60,7 +59,6 @@ import android.util.Log
 class CoordinationViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── Repositories ─────────────────────────────────────────────────────────
-    private val firebaseRepo = FirebaseChatRepository()
     private val notificationRepository = NotificationRepository()
     private val db = FirebaseDatabase.getInstance().reference
     private val apiBaseUrl = BuildConfig.BASE_URL.trimEnd('/') + "/api/api_app/"
@@ -143,14 +141,9 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         myUserName = userName
         myRole     = userRole
 
-        viewModelScope.launch {
-            try {
-                // Mark online
-                firebaseRepo.setOnlineStatus(userId, isOnline = true)
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
+        // Presence is process-scoped and is managed by ResponderPresenceManager.
+        // Opening or leaving one Coordination screen must never change whether
+        // dispatch can assign this responder.
 
         // Load the real list of responders from Firebase /users
         loadRespondersFromFirebase()
@@ -349,12 +342,20 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                         ?.trim()
                         .orEmpty()
                         .ifBlank { "general" }
-                    val isOnline = when (val value = child.child("isOnline").value) {
+                    val onlineFlag = when (val value = child.child("isOnline").value) {
                         is Boolean -> value
                         is String -> value.toBoolean()
                         is Number -> value.toInt() != 0
                         else -> false
                     }
+                    val onlineUntil = when (val value = child.child("onlineUntil").value) {
+                        is Number -> value.toLong()
+                        is String -> value.toLongOrNull() ?: 0L
+                        else -> 0L
+                    }
+                    val isOnline = onlineFlag && (
+                        onlineUntil <= 0L || onlineUntil > System.currentTimeMillis()
+                    )
 
                     val existing = responders.firstOrNull { it.id == uid }
                     val preview = directThreadPreviewByThreadId[
@@ -587,13 +588,8 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
     //  DISCONNECT
     // ─────────────────────────────────────────────────────────────────────────
     fun disconnectRealtime() {
-        viewModelScope.launch {
-            try {
-                firebaseRepo.setOnlineStatus(myUserId, isOnline = false)
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
+        // Remove only screen-scoped listeners. Presence belongs to the signed-in
+        // app session and remains online during the background grace period.
         // Remove Firebase listeners to avoid memory leaks
         respondersListener?.let { db.child("users").removeEventListener(it) }
         threadsListener?.let { db.child("threads").removeEventListener(it) }
@@ -680,6 +676,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                     val messageType = when (typeText.uppercase()) {
                         "IMAGE" -> MessageType.IMAGE
                         "FILE" -> MessageType.FILE
+                        "AUDIO", "VOICE" -> MessageType.AUDIO
                         else -> MessageType.TEXT
                     }
 
@@ -705,8 +702,16 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                             createdAt = item.optLong("createdAt"),
                             status = messageStatus,   // <-- was hardcoded MessageStatus.SENT
                             isOwn = senderId == myUserId || senderName.equals(myUserName, ignoreCase = true),
-                            attachmentUri = item.optString("attachmentUri").takeIf { it.isNotBlank() && it != "null" },
-                            attachmentName = item.optString("attachmentName").takeIf { it.isNotBlank() && it != "null" }
+                            attachmentUri = item.optString("attachmentUri")
+                                .takeIf { it.isNotBlank() && it != "null" },
+                            attachmentName = item.optString("attachmentName")
+                                .takeIf { it.isNotBlank() && it != "null" },
+                            attachmentMimeType = item.optString("attachmentMimeType")
+                                .takeIf { it.isNotBlank() && it != "null" },
+                            attachmentSize = item.optLong("attachmentSize", 0L)
+                                .coerceAtLeast(0L),
+                            audioDurationMs = item.optLong("audioDurationMs", 0L)
+                                .coerceAtLeast(0L)
                         )
                     )
                 }
@@ -810,11 +815,16 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                     val msgType = when (typeText.uppercase()) {
                         "IMAGE" -> MessageType.IMAGE
                         "FILE" -> MessageType.FILE
+                        "AUDIO", "VOICE" -> MessageType.AUDIO
                         else -> MessageType.TEXT
                     }
 
                     val attachmentUri = child.child("attachmentUri").getValue(String::class.java)
                     val attachmentName = child.child("attachmentName").getValue(String::class.java)
+                    val attachmentMimeType = child.child("attachmentMimeType")
+                        .getValue(String::class.java)
+                    val attachmentSize = child.readLongChild("attachmentSize")
+                    val audioDurationMs = child.readLongChild("audioDurationMs")
                     val statusText = child.child("status").getValue(String::class.java) ?: "sent"
 
                     val messageStatus = when (statusText.lowercase()) {
@@ -850,6 +860,9 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                             isOwn = senderId == myUserId,
                             attachmentUri = attachmentUri,
                             attachmentName = attachmentName,
+                            attachmentMimeType = attachmentMimeType,
+                            attachmentSize = attachmentSize,
+                            audioDurationMs = audioDurationMs,
                             reactions = reactions
                         )
                     )
@@ -935,9 +948,10 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         val context = getApplication<Application>()
         val content = when {
             message.text.orEmpty().contains("ERS_COORDINATION_TIP_") -> "Incident tip shared"
-            !message.text.isNullOrBlank() -> message.text!!.trim()
+            message.type == MessageType.AUDIO -> "Sent a voice message"
             message.type == MessageType.IMAGE -> "Sent an image"
             message.type == MessageType.FILE -> "Sent a file"
+            !message.text.isNullOrBlank() -> message.text!!.trim()
             else -> "New message"
         }
 
@@ -1055,6 +1069,8 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
             preview.contains("ERS_COORDINATION_TIP_") -> "Incident tip shared"
             messageType.equals("image", ignoreCase = true) -> "Sent an image"
             messageType.equals("file", ignoreCase = true) -> "Sent a file: ${preview.take(100)}"
+            messageType.equals("audio", ignoreCase = true) ||
+                    messageType.equals("voice", ignoreCase = true) -> "Sent a voice message"
             else -> preview.trim().take(240)
         }
 
@@ -1222,8 +1238,88 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
+    /** Uploads an app-owned recording and always removes the cache file. */
+    private fun uploadVoiceFileToServer(
+        recordingFile: File,
+        declaredMimeType: String,
+        onSuccess: (
+            fileUrl: String,
+            uploadedName: String,
+            fileSize: Long,
+            mimeType: String
+        ) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                if (!recordingFile.exists() || recordingFile.length() <= 0L) {
+                    throw IOException("The voice recording is empty")
+                }
+                if (recordingFile.length() > 15L * 1024L * 1024L) {
+                    throw IOException("The voice recording exceeds the 15 MB limit")
+                }
+
+                val safeName = safeAttachmentName(recordingFile.name)
+                val extension = safeName.substringAfterLast('.', "").lowercase()
+                val fallbackMimeType = when (extension) {
+                    "wav" -> "audio/wav"
+                    "m4a", "mp4" -> "audio/mp4"
+                    "aac" -> "audio/aac"
+                    "3gp" -> "audio/3gpp"
+                    "ogg", "opus" -> "audio/ogg"
+                    "mp3" -> "audio/mpeg"
+                    else -> "application/octet-stream"
+                }
+                val uploadMimeType = declaredMimeType
+                    .trim()
+                    .takeIf { it.startsWith("audio/", ignoreCase = true) }
+                    ?: fallbackMimeType
+                val mediaType = uploadMimeType.toMediaTypeOrNull()
+                val uploaderUserId = myUserId.toIntOrNull()
+                    ?: throw IllegalStateException("Responder session is unavailable")
+                val requestBody = recordingFile.asRequestBody(mediaType)
+                val multipartBody = MultipartBody.Builder()
+                    .setType(MultipartBody.FORM)
+                    .addFormDataPart("uploader_user_id", uploaderUserId.toString())
+                    .addFormDataPart("file", safeName, requestBody)
+                    .build()
+
+                val request = Request.Builder()
+                    .url(apiUrl("upload_chat_file.php"))
+                    .post(multipartBody)
+                    .build()
+
+                val json = executeJson(request)
+                val uploadedUrl = json.optString("file_url").trim()
+                val uploadedName = json.optString("file_name", safeName)
+                    .trim()
+                    .ifBlank { safeName }
+                val uploadedSize = json.optLong("file_size", recordingFile.length())
+                    .takeIf { it > 0L }
+                    ?: recordingFile.length()
+                val uploadedMime = json.optString("mime_type", uploadMimeType)
+                    .trim()
+                    .ifBlank { uploadMimeType }
+
+                if (!json.optBoolean("success") || uploadedUrl.isBlank()) {
+                    throw IOException(json.optString("message", "Voice upload failed"))
+                }
+
+                withContext(Dispatchers.Main) {
+                    onSuccess(uploadedUrl, uploadedName, uploadedSize, uploadedMime)
+                }
+            } catch (error: Exception) {
+                withContext(Dispatchers.Main) {
+                    onError(error.message ?: "Voice upload error")
+                }
+            } finally {
+                recordingFile.delete()
+            }
+        }
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
-    //  FILE / IMAGE SENDING
+    //  FILE / IMAGE / VOICE SENDING
     // ─────────────────────────────────────────────────────────────────────────
     fun sendFileMessage(
         meId: String,
@@ -1288,6 +1384,78 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         )
     }
 
+    fun sendVoiceMessage(
+        meId: String,
+        peer: ResponderBrief,
+        recordingFile: File,
+        durationMs: Long,
+        mimeType: String
+    ) {
+        val threadId = buildChatId(meId, peer.id)
+        val safeDuration = durationMs.coerceIn(0L, 120_000L)
+
+        uploadVoiceFileToServer(
+            recordingFile = recordingFile,
+            declaredMimeType = mimeType,
+            onSuccess = { fileUrl, uploadedName, fileSize, uploadedMimeType ->
+                pushFileMessageToFirebase(
+                    threadId = threadId,
+                    senderId = meId,
+                    senderName = myUserName.ifBlank { meId },
+                    role = myRole,
+                    recipientId = peer.id,
+                    fileUrl = fileUrl,
+                    fileName = uploadedName,
+                    fileSize = fileSize,
+                    mimeType = uploadedMimeType,
+                    isImage = false,
+                    isAudio = true,
+                    audioDurationMs = safeDuration
+                )
+            },
+            onError = { error ->
+                latestNotification.value = "Voice message failed: $error"
+            }
+        )
+    }
+
+    fun sendVoiceToDepartment(
+        meId: String,
+        department: String,
+        recordingFile: File,
+        durationMs: Long,
+        mimeType: String
+    ) {
+        val groupId = department.toIntOrNull()
+        if (groupId == null) {
+            recordingFile.delete()
+            latestNotification.value = "Department channel is unavailable"
+            return
+        }
+        val safeDuration = durationMs.coerceIn(0L, 120_000L)
+
+        uploadVoiceFileToServer(
+            recordingFile = recordingFile,
+            declaredMimeType = mimeType,
+            onSuccess = { fileUrl, uploadedName, fileSize, uploadedMimeType ->
+                sendGroupAttachmentToSql(
+                    groupId = groupId,
+                    senderUserId = meId,
+                    fileUrl = fileUrl,
+                    fileName = uploadedName,
+                    fileSize = fileSize,
+                    mimeType = uploadedMimeType,
+                    isImage = false,
+                    isAudio = true,
+                    audioDurationMs = safeDuration
+                )
+            },
+            onError = { error ->
+                latestNotification.value = "Voice message failed: $error"
+            }
+        )
+    }
+
     private fun sendGroupAttachmentToSql(
         groupId: Int,
         senderUserId: String,
@@ -1295,7 +1463,9 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         fileName: String,
         fileSize: Long,
         mimeType: String,
-        isImage: Boolean
+        isImage: Boolean,
+        isAudio: Boolean = false,
+        audioDurationMs: Long = 0L
     ) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -1306,7 +1476,9 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                     .add("file_name", fileName)
                     .add("mime_type", mimeType)
                     .add("file_size", fileSize.coerceAtLeast(0L).toString())
-                    .add("is_image", if (isImage) "1" else "0")
+                    .add("is_image", if (isImage && !isAudio) "1" else "0")
+                    .add("is_audio", if (isAudio) "1" else "0")
+                    .add("audio_duration_ms", audioDurationMs.coerceAtLeast(0L).toString())
                     .build()
 
                 val request = Request.Builder()
@@ -1344,7 +1516,9 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         fileName: String,
         fileSize: Long,
         mimeType: String,
-        isImage: Boolean
+        isImage: Boolean,
+        isAudio: Boolean = false,
+        audioDurationMs: Long = 0L
     ) {
         val now = System.currentTimeMillis()
         val messageId = db.child("messages").child(threadId).push().key
@@ -1353,17 +1527,32 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
             return
         }
 
-        val previewText = if (isImage) "📷 Image" else "📎 $fileName"
+        val messageType = when {
+            isAudio -> "AUDIO"
+            isImage -> "IMAGE"
+            else -> "FILE"
+        }
+        val previewText = when {
+            isAudio -> "🎙 Voice message"
+            isImage -> "📷 Image"
+            else -> "📎 $fileName"
+        }
+        val messageText = when {
+            isAudio -> "Voice message"
+            isImage -> "Image"
+            else -> fileName
+        }
         val data = mapOf(
             "senderId" to senderId,
             "senderName" to senderName,
             "role" to role,
-            "text" to if (isImage) "Image" else fileName,
-            "type" to if (isImage) "IMAGE" else "FILE",
+            "text" to messageText,
+            "type" to messageType,
             "attachmentUri" to fileUrl,
             "attachmentName" to fileName,
             "attachmentSize" to fileSize.coerceAtLeast(0L),
             "attachmentMimeType" to mimeType,
+            "audioDurationMs" to if (isAudio) audioDurationMs.coerceAtLeast(0L) else 0L,
             "createdAt" to now,
             "status" to "sent"
         )
@@ -1390,8 +1579,12 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                     threadId = threadId,
                     messageId = messageId,
                     senderName = senderName,
-                    messageType = if (isImage) "image" else "file",
-                    preview = if (isImage) "Image" else fileName
+                    messageType = when {
+                        isAudio -> "audio"
+                        isImage -> "image"
+                        else -> "file"
+                    },
+                    preview = messageText
                 )
             }
             .addOnFailureListener { error ->

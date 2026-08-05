@@ -1,9 +1,13 @@
 package com.ers.emergencyresponseapp
 
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Canvas
+import android.annotation.SuppressLint
+import android.content.Context
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,29 +22,20 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.CameraAlt
-import androidx.compose.material.icons.filled.Done
-import androidx.compose.material.icons.filled.Email
-import androidx.compose.material.icons.filled.Groups
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.LocalHospital
-import androidx.compose.material.icons.filled.Navigation
-import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Image as ImageIcon
+import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -49,96 +44,44 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.painter.Painter
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 
 private val GuidePrimary = Color(0xFF4C8A89)
-private val GuideSecondary = Color(0xFF3A506B)
-private val GuideDark = Color(0xFF0B132B)
-private val GuideDanger = Color(0xFFD94C4C)
-private val GuideSuccess = Color(0xFF2E7D32)
 
-private enum class GuidePreviewType {
-    WELCOME,
-    LOGIN,
-    ASSIGNMENT,
-    NAVIGATION,
-    HOME_BACKUP,
-    COMPLETION
-}
-
-private data class GuideStep(
-    val number: Int,
-    val title: String,
-    val description: String,
-    val primaryCallout: String,
-    val secondaryCallout: String,
-    val previewType: GuidePreviewType
-)
-
-private val guideSteps = listOf(
-    GuideStep(
-        number = 1,
-        title = "Start the responder app",
-        description = "Tap Proceed on the welcome screen. The How to use this app button opens this guide again whenever you need it.",
-        primaryCallout = "Tap Proceed",
-        secondaryCallout = "Open this guide",
-        previewType = GuidePreviewType.WELCOME
-    ),
-    GuideStep(
-        number = 2,
-        title = "Sign in and verify",
-        description = "Enter your registered email, tap Send OTP, enter the six-digit code, then tap Verify.",
-        primaryCallout = "Enter email",
-        secondaryCallout = "Verify OTP",
-        previewType = GuidePreviewType.LOGIN
-    ),
-    GuideStep(
-        number = 3,
-        title = "Watch for your assignment",
-        description = "On Home, a new card appears under Assigned Incidents. Review the type, priority, location, and incident details.",
-        primaryCallout = "New incident card",
-        secondaryCallout = "Review details",
-        previewType = GuidePreviewType.ASSIGNMENT
-    ),
-    GuideStep(
-        number = 4,
-        title = "Navigate to the incident",
-        description = "Tap Navigate to Incident and allow location access. The live route opens and your response status moves to En Route.",
-        primaryCallout = "Start navigation",
-        secondaryCallout = "Follow live route",
-        previewType = GuidePreviewType.NAVIGATION
-    ),
-    GuideStep(
-        number = 5,
-        title = "Coordinate and request backup",
-        description = "Open Coordination from the bottom navigation for responder messages. To request another unit or resource, return to Home and tap Request Backup in the Backup Requests card.",
-        primaryCallout = "Backup Requests on Home",
-        secondaryCallout = "Tap Request Backup",
-        previewType = GuidePreviewType.HOME_BACKUP
-    ),
-    GuideStep(
-        number = 6,
-        title = "Complete and document",
-        description = "Tap Complete Incident, add the required notes or proof, and submit. Post-incident records are available in Reviews.",
-        primaryCallout = "Add proof and notes",
-        secondaryCallout = "Complete incident",
-        previewType = GuidePreviewType.COMPLETION
-    )
+/**
+ * Image-based responder guide.
+ *
+ * Add either:
+ * 1. One long image named `how_to_tutorial.webp`, or
+ * 2. Multiple images named `how_to_01.webp`, `how_to_02.webp`, and so on.
+ *
+ * Put the files in `app/src/main/res/drawable-nodpi/`. The screen discovers
+ * them at runtime, so no Kotlin changes are needed whenever a tutorial image
+ * is replaced or another numbered page is added.
+ */
+private data class TutorialImage(
+    val resourceId: Int,
+    val label: String
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -147,6 +90,10 @@ fun HowToUseScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val tutorialImages = remember(context) { findTutorialImages(context) }
+    var enlargedImage by remember { mutableStateOf<TutorialImage?>(null) }
+
     Scaffold(
         modifier = modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.background,
@@ -186,15 +133,29 @@ fun HowToUseScreen(
             ),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            item(key = "guide_intro") {
-                GuideIntroCard()
+            if (tutorialImages.isEmpty()) {
+                item(key = "tutorial_empty") {
+                    MissingTutorialImagesCard()
+                }
+            } else {
+                item(key = "tutorial_hint") {
+                    TutorialHintCard(pageCount = tutorialImages.size)
+                }
+
+                itemsIndexed(
+                    items = tutorialImages,
+                    key = { _, item -> item.resourceId }
+                ) { index, item ->
+                    TutorialImageCard(
+                        image = item,
+                        pageNumber = index + 1,
+                        pageCount = tutorialImages.size,
+                        onOpen = { enlargedImage = item }
+                    )
+                }
             }
 
-            items(guideSteps, key = { it.number }) { step ->
-                GuideStepCard(step)
-            }
-
-            item(key = "guide_footer") {
+            item(key = "tutorial_back") {
                 Button(
                     onClick = onBack,
                     modifier = Modifier
@@ -211,923 +172,307 @@ fun HowToUseScreen(
             }
         }
     }
+
+    enlargedImage?.let { image ->
+        TutorialImageViewer(
+            image = image,
+            onDismiss = { enlargedImage = null }
+        )
+    }
 }
 
 @Composable
-private fun GuideIntroCard() {
+private fun TutorialHintCard(pageCount: Int) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = GuidePrimary.copy(alpha = 0.10f)
+        ),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(
-                    Brush.linearGradient(
-                        colors = listOf(GuidePrimary, GuideSecondary, GuideDark)
-                    )
-                )
-                .padding(20.dp)
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Surface(
-                    color = Color.White.copy(alpha = 0.16f),
-                    shape = RoundedCornerShape(999.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Security,
-                            contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(Modifier.width(7.dp))
-                        Text(
-                            text = "RESPONDER QUICK GUIDE",
-                            color = Color.White,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.6.sp
-                        )
-                    }
-                }
-
-                Text(
-                    text = "From sign-in to incident completion",
-                    color = Color.White,
-                    fontSize = 22.sp,
-                    lineHeight = 28.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = "Follow the six screens below. Important controls are labeled in each phone preview.",
-                    color = Color.White.copy(alpha = 0.86f),
-                    fontSize = 13.sp,
-                    lineHeight = 19.sp
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun GuideStepCard(step: GuideStep) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
-        ),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.Top
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(38.dp)
-                        .clip(CircleShape)
-                        .background(GuidePrimary),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = step.number.toString(),
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 18.sp
-                    )
-                }
-
-                Spacer(Modifier.width(12.dp))
-
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = step.title,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontSize = 18.sp,
-                        lineHeight = 23.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = step.description,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontSize = 13.sp,
-                        lineHeight = 19.sp
-                    )
-                }
-            }
-
-            GuidePhonePreview(
-                previewType = step.previewType,
-                primaryCallout = step.primaryCallout,
-                secondaryCallout = step.secondaryCallout
-            )
-        }
-    }
-}
-
-@Composable
-private fun GuidePhonePreview(
-    previewType: GuidePreviewType,
-    primaryCallout: String,
-    secondaryCallout: String
-) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .aspectRatio(0.96f)
-            .clip(RoundedCornerShape(20.dp))
-            .background(
-                Brush.linearGradient(
-                    colors = listOf(
-                        GuidePrimary.copy(alpha = 0.13f),
-                        MaterialTheme.colorScheme.surfaceVariant,
-                        GuideSecondary.copy(alpha = 0.10f)
-                    )
-                )
-            )
-            .border(
-                width = 1.dp,
-                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
-                shape = RoundedCornerShape(20.dp)
-            )
-            .padding(10.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Surface(
-            modifier = Modifier
-                .width(154.dp)
-                .height(240.dp)
-                .shadow(10.dp, RoundedCornerShape(28.dp), clip = false),
-            shape = RoundedCornerShape(28.dp),
-            color = Color(0xFF111318)
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(7.dp)
-                    .clip(RoundedCornerShape(22.dp))
-                    .background(Color(0xFFF7F9F9))
-            ) {
-                when (previewType) {
-                    GuidePreviewType.WELCOME -> MiniWelcomeScreen()
-                    GuidePreviewType.LOGIN -> MiniLoginScreen()
-                    GuidePreviewType.ASSIGNMENT -> MiniAssignmentScreen()
-                    GuidePreviewType.NAVIGATION -> MiniNavigationScreen()
-                    GuidePreviewType.HOME_BACKUP -> MiniHomeBackupScreen()
-                    GuidePreviewType.COMPLETION -> MiniCompletionScreen()
-                }
-
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .padding(top = 4.dp)
-                        .width(48.dp)
-                        .height(10.dp)
-                        .clip(RoundedCornerShape(999.dp))
-                        .background(Color(0xFF111318))
-                )
-            }
-        }
-
-        GuideCallout(
-            text = primaryCallout,
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(top = 12.dp)
-        )
-        GuideCallout(
-            text = secondaryCallout,
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(bottom = 12.dp),
-            emphasize = true
-        )
-    }
-}
-
-@Composable
-private fun GuideCallout(
-    text: String,
-    modifier: Modifier = Modifier,
-    emphasize: Boolean = false
-) {
-    Surface(
-        modifier = modifier,
-        shape = RoundedCornerShape(12.dp),
-        color = if (emphasize) GuidePrimary else MaterialTheme.colorScheme.surface,
-        border = if (emphasize) null else BorderStroke(
-            1.dp,
-            MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)
-        ),
-        shadowElevation = 4.dp
-    ) {
         Row(
-            modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 13.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                modifier = Modifier
-                    .size(6.dp)
-                    .clip(CircleShape)
-                    .background(if (emphasize) Color.White else GuidePrimary)
-            )
-            Spacer(Modifier.width(6.dp))
-            Text(
-                text = text,
-                color = if (emphasize) Color.White else MaterialTheme.colorScheme.onSurface,
-                fontSize = 9.sp,
-                lineHeight = 11.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-    }
-}
-
-@Composable
-private fun MiniStatusBar(title: String, icon: ImageVector? = null) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(30.dp)
-            .background(GuidePrimary)
-            .padding(start = 9.dp, end = 7.dp, top = 10.dp, bottom = 4.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        if (icon != null) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(10.dp)
-            )
-            Spacer(Modifier.width(4.dp))
-        }
-        Text(
-            text = title,
-            color = Color.White,
-            fontSize = 7.sp,
-            lineHeight = 8.sp,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
-        )
-    }
-}
-
-@Composable
-private fun MiniWelcomeScreen() {
-    Column(modifier = Modifier.fillMaxSize()) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(116.dp)
-                .background(
-                    Brush.linearGradient(
-                        listOf(GuideDark, GuideSecondary, GuidePrimary)
-                    )
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Canvas(modifier = Modifier.size(90.dp)) {
-                drawCircle(
-                    color = Color.White.copy(alpha = 0.12f),
-                    radius = size.minDimension * 0.43f
-                )
-                drawCircle(
-                    color = Color.White.copy(alpha = 0.25f),
-                    radius = size.minDimension * 0.31f,
-                    style = Stroke(width = 3f)
-                )
-                drawCircle(
-                    color = GuidePrimary,
-                    radius = size.minDimension * 0.20f
-                )
-                drawLine(
-                    color = Color.White,
-                    start = Offset(size.width * 0.50f, size.height * 0.35f),
-                    end = Offset(size.width * 0.50f, size.height * 0.65f),
-                    strokeWidth = 7f,
-                    cap = StrokeCap.Round
-                )
-                drawLine(
-                    color = Color.White,
-                    start = Offset(size.width * 0.35f, size.height * 0.50f),
-                    end = Offset(size.width * 0.65f, size.height * 0.50f),
-                    strokeWidth = 7f,
-                    cap = StrokeCap.Round
-                )
-            }
-        }
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 12.dp, vertical = 9.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                "Emergency Response",
-                color = GuideDark,
-                fontSize = 9.sp,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(Modifier.height(4.dp))
-            MiniTextLine(widthFraction = 0.78f)
-            MiniTextLine(widthFraction = 0.62f)
-            Spacer(Modifier.weight(1f))
-            MiniButton("PROCEED", highlighted = true)
-            Spacer(Modifier.height(5.dp))
-            MiniButton("HOW TO USE THIS APP", highlighted = false)
-        }
-    }
-}
-
-@Composable
-private fun MiniLoginScreen() {
-    Column(modifier = Modifier.fillMaxSize()) {
-        MiniStatusBar(title = "Responder sign in", icon = Icons.Default.Security)
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 12.dp, vertical = 14.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Icon(
-                imageVector = Icons.Default.Email,
-                contentDescription = null,
-                tint = GuidePrimary,
-                modifier = Modifier.size(24.dp)
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "Email Login",
-                color = GuideDark,
-                fontSize = 9.sp,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(Modifier.height(12.dp))
-            MiniField(label = "Registered email")
-            Spacer(Modifier.height(8.dp))
-            MiniButton("SEND OTP", highlighted = true)
-            Spacer(Modifier.height(14.dp))
-            Text(
-                "OTP Verification",
-                color = GuideDark,
-                fontSize = 7.sp,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(Modifier.height(6.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                repeat(6) {
-                    Box(
-                        modifier = Modifier
-                            .size(width = 17.dp, height = 22.dp)
-                            .clip(RoundedCornerShape(5.dp))
-                            .border(1.dp, GuidePrimary.copy(alpha = 0.55f), RoundedCornerShape(5.dp)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("•", color = GuideDark, fontSize = 10.sp)
-                    }
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-            MiniButton("VERIFY", highlighted = true)
-        }
-    }
-}
-
-@Composable
-private fun MiniAssignmentScreen() {
-    Column(modifier = Modifier.fillMaxSize()) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(66.dp)
-                .background(
-                    Brush.linearGradient(listOf(GuidePrimary, GuideSecondary, GuideDark))
-                )
-                .padding(start = 10.dp, end = 8.dp, top = 15.dp, bottom = 7.dp)
-        ) {
-            Column {
-                Text("Hello, Responder", color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(3.dp))
-                Text("Unit 12 • Available", color = Color.White.copy(alpha = 0.80f), fontSize = 5.sp)
-            }
-            Icon(
-                imageVector = Icons.Default.Notifications,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .size(13.dp)
-            )
-        }
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 9.dp, vertical = 8.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "Assigned Incidents",
-                    color = GuideDark,
-                    fontSize = 7.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f)
-                )
-                Surface(color = GuideDanger.copy(alpha = 0.12f), shape = CircleShape) {
-                    Text(
-                        "1",
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                        color = GuideDanger,
-                        fontSize = 6.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-            Spacer(Modifier.height(6.dp))
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(10.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                border = BorderStroke(1.dp, GuideDanger.copy(alpha = 0.38f))
+            Surface(
+                modifier = Modifier.size(34.dp),
+                shape = CircleShape,
+                color = GuidePrimary.copy(alpha = 0.15f)
             ) {
-                Column(
-                    modifier = Modifier.padding(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(5.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(24.dp)
-                                .clip(RoundedCornerShape(7.dp))
-                                .background(GuideDanger.copy(alpha = 0.12f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                Icons.Default.Warning,
-                                contentDescription = null,
-                                tint = GuideDanger,
-                                modifier = Modifier.size(13.dp)
-                            )
-                        }
-                        Spacer(Modifier.width(6.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Fire Incident", color = GuideDark, fontSize = 7.sp, fontWeight = FontWeight.Bold)
-                            Text("HIGH PRIORITY", color = GuideDanger, fontSize = 5.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Default.LocationOn,
-                            contentDescription = null,
-                            tint = GuidePrimary,
-                            modifier = Modifier.size(10.dp)
-                        )
-                        Spacer(Modifier.width(3.dp))
-                        Text("Barangay response location", color = Color(0xFF575757), fontSize = 5.5.sp)
-                    }
-                    MiniTextLine(widthFraction = 0.95f)
-                    MiniTextLine(widthFraction = 0.72f)
-                    MiniButton("NAVIGATE TO INCIDENT", highlighted = true)
-                }
-            }
-            Spacer(Modifier.weight(1f))
-            MiniBottomNavigation(selected = 0)
-        }
-    }
-}
-
-@Composable
-private fun MiniNavigationScreen() {
-    Box(modifier = Modifier.fillMaxSize()) {
-        Canvas(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color(0xFFE8EFEE))
-        ) {
-            val gridColor = Color(0xFFCBD8D6)
-            val step = size.width / 6f
-            var x = 0f
-            while (x <= size.width) {
-                drawLine(gridColor, Offset(x, 0f), Offset(x, size.height), 1.2f)
-                x += step
-            }
-            var y = 0f
-            while (y <= size.height) {
-                drawLine(gridColor, Offset(0f, y), Offset(size.width, y), 1.2f)
-                y += step
-            }
-
-            val route = Path().apply {
-                moveTo(size.width * 0.12f, size.height * 0.78f)
-                cubicTo(
-                    size.width * 0.24f,
-                    size.height * 0.46f,
-                    size.width * 0.64f,
-                    size.height * 0.70f,
-                    size.width * 0.82f,
-                    size.height * 0.27f
-                )
-            }
-            drawPath(route, color = Color.White, style = Stroke(width = 11f, cap = StrokeCap.Round))
-            drawPath(route, color = GuidePrimary, style = Stroke(width = 6f, cap = StrokeCap.Round))
-            drawCircle(GuidePrimary, 12f, Offset(size.width * 0.12f, size.height * 0.78f))
-            drawCircle(GuideDanger, 14f, Offset(size.width * 0.82f, size.height * 0.27f))
-            drawCircle(Color.White, 5f, Offset(size.width * 0.82f, size.height * 0.27f))
-        }
-
-        Surface(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 29.dp, start = 8.dp, end = 8.dp)
-                .fillMaxWidth(),
-            color = Color.White.copy(alpha = 0.96f),
-            shape = RoundedCornerShape(9.dp),
-            shadowElevation = 3.dp
-        ) {
-            Row(
-                modifier = Modifier.padding(7.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    Icons.Default.Navigation,
-                    contentDescription = null,
-                    tint = GuidePrimary,
-                    modifier = Modifier.size(13.dp)
-                )
-                Spacer(Modifier.width(5.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("En Route", color = GuideDark, fontSize = 7.sp, fontWeight = FontWeight.Bold)
-                    Text("4.2 km • 9 min", color = Color(0xFF575757), fontSize = 5.sp)
-                }
-            }
-        }
-
-        Surface(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(8.dp)
-                .fillMaxWidth(),
-            color = Color.White,
-            shape = RoundedCornerShape(12.dp),
-            shadowElevation = 5.dp
-        ) {
-            Column(modifier = Modifier.padding(8.dp)) {
-                Text("Incident destination", color = GuideDark, fontSize = 7.sp, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(3.dp))
-                MiniTextLine(widthFraction = 0.78f)
-                Spacer(Modifier.height(6.dp))
-                MiniButton("CONTINUE ROUTE", highlighted = true)
-            }
-        }
-    }
-}
-
-@Composable
-private fun MiniHomeBackupScreen() {
-    Column(modifier = Modifier.fillMaxSize()) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(52.dp)
-                .background(
-                    Brush.linearGradient(listOf(GuidePrimary, GuideSecondary, GuideDark))
-                )
-                .padding(start = 10.dp, end = 8.dp, top = 15.dp, bottom = 7.dp)
-        ) {
-            Column {
-                Text(
-                    "Home",
-                    color = Color.White,
-                    fontSize = 8.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    "Unit 12 • Available",
-                    color = Color.White.copy(alpha = 0.80f),
-                    fontSize = 5.sp
-                )
-            }
-            Icon(
-                imageVector = Icons.Default.Notifications,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .size(13.dp)
-            )
-        }
-
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 8.dp, vertical = 7.dp)
-        ) {
-            Text(
-                "Assigned Incidents",
-                color = GuideDark,
-                fontSize = 7.sp,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(Modifier.height(5.dp))
-
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(9.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                border = BorderStroke(1.dp, GuideDanger.copy(alpha = 0.28f))
-            ) {
-                Row(
-                    modifier = Modifier.padding(7.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(22.dp)
-                            .clip(RoundedCornerShape(7.dp))
-                            .background(GuideDanger.copy(alpha = 0.12f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Warning,
-                            contentDescription = null,
-                            tint = GuideDanger,
-                            modifier = Modifier.size(12.dp)
-                        )
-                    }
-                    Spacer(Modifier.width(6.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            "Active incident",
-                            color = GuideDark,
-                            fontSize = 6.5.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            "Response in progress",
-                            color = Color(0xFF575757),
-                            fontSize = 5.sp
-                        )
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(7.dp))
-
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(10.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                border = BorderStroke(1.dp, GuidePrimary.copy(alpha = 0.38f))
-            ) {
-                Column(
-                    modifier = Modifier.padding(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(24.dp)
-                                .clip(RoundedCornerShape(7.dp))
-                                .background(GuidePrimary.copy(alpha = 0.12f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.LocalHospital,
-                                contentDescription = null,
-                                tint = GuidePrimary,
-                                modifier = Modifier.size(13.dp)
-                            )
-                        }
-                        Spacer(Modifier.width(6.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                "Backup Requests",
-                                color = GuideDark,
-                                fontSize = 7.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                "Additional units or resources",
-                                color = Color(0xFF575757),
-                                fontSize = 4.8.sp
-                            )
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(5.dp)
-                    ) {
-                        MiniCompactButton(
-                            label = "REQUEST BACKUP",
-                            highlighted = true,
-                            modifier = Modifier.weight(1.35f)
-                        )
-                        MiniCompactButton(
-                            label = "VIEW ALL",
-                            highlighted = false,
-                            modifier = Modifier.weight(0.75f)
-                        )
-                    }
-
-                    Text(
-                        "No backup requests yet.",
-                        color = Color(0xFF6F7978),
-                        fontSize = 5.sp
-                    )
-                }
-            }
-
-            Spacer(Modifier.weight(1f))
-            MiniBottomNavigation(selected = 0)
-        }
-    }
-}
-
-@Composable
-private fun MiniCompactButton(
-    label: String,
-    highlighted: Boolean,
-    modifier: Modifier = Modifier
-) {
-    Box(
-        modifier = modifier
-            .height(24.dp)
-            .clip(RoundedCornerShape(7.dp))
-            .background(if (highlighted) GuidePrimary else Color.Transparent)
-            .border(
-                width = 1.dp,
-                color = if (highlighted) GuidePrimary else GuidePrimary.copy(alpha = 0.65f),
-                shape = RoundedCornerShape(7.dp)
-            ),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = label,
-            color = if (highlighted) Color.White else GuidePrimary,
-            fontSize = 4.8.sp,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1
-        )
-    }
-}
-
-@Composable
-private fun MiniCompletionScreen() {
-    Column(modifier = Modifier.fillMaxSize()) {
-        MiniStatusBar(title = "Complete incident", icon = Icons.Default.Done)
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 10.dp, vertical = 10.dp)
-        ) {
-            Text("Completion proof", color = GuideDark, fontSize = 7.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(6.dp))
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(58.dp)
-                    .clip(RoundedCornerShape(9.dp))
-                    .background(GuidePrimary.copy(alpha = 0.08f))
-                    .border(1.dp, GuidePrimary.copy(alpha = 0.35f), RoundedCornerShape(9.dp)),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(contentAlignment = Alignment.Center) {
                     Icon(
-                        Icons.Default.CameraAlt,
+                        imageVector = Icons.Default.TouchApp,
                         contentDescription = null,
                         tint = GuidePrimary,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(19.dp)
                     )
-                    Text("Add photo", color = GuidePrimary, fontSize = 5.5.sp, fontWeight = FontWeight.Bold)
                 }
             }
-            Spacer(Modifier.height(8.dp))
-            MiniField(label = "Completion notes", height = 50.dp)
-            Spacer(Modifier.height(8.dp))
-            Surface(
-                color = GuideSuccess.copy(alpha = 0.10f),
-                shape = RoundedCornerShape(8.dp)
-            ) {
+
+            Spacer(Modifier.width(11.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = if (pageCount == 1) "Responder tutorial" else "$pageCount tutorial pages",
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = "Scroll to continue. Tap an image to open the full-screen viewer.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TutorialImageCard(
+    image: TutorialImage,
+    pageNumber: Int,
+    pageCount: Int,
+    onOpen: () -> Unit
+) {
+    val painter = painterResource(id = image.resourceId)
+    val ratio = imageAspectRatio(painter)
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .shadow(3.dp, RoundedCornerShape(22.dp), clip = false)
+            .clip(RoundedCornerShape(22.dp))
+            .clickable(onClick = onOpen),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            if (pageCount > 1) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(7.dp),
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        Icons.Default.Done,
-                        contentDescription = null,
-                        tint = GuideSuccess,
-                        modifier = Modifier.size(12.dp)
-                    )
-                    Spacer(Modifier.width(5.dp))
                     Text(
-                        "Ready to submit",
-                        color = GuideSuccess,
-                        fontSize = 6.sp,
+                        text = image.label,
+                        modifier = Modifier.weight(1f),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "$pageNumber / $pageCount",
+                        color = GuidePrimary,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }
             }
-            Spacer(Modifier.weight(1f))
-            MiniButton("COMPLETE INCIDENT", highlighted = true)
+
+            Image(
+                painter = painter,
+                contentDescription = image.label,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(ratio)
+                    .background(Color.White)
+                    .border(
+                        width = 1.dp,
+                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f),
+                        shape = if (pageCount > 1) {
+                            RoundedCornerShape(bottomStart = 22.dp, bottomEnd = 22.dp)
+                        } else {
+                            RoundedCornerShape(22.dp)
+                        }
+                    ),
+                contentScale = ContentScale.Fit
+            )
         }
     }
 }
 
 @Composable
-private fun MiniField(label: String, height: androidx.compose.ui.unit.Dp = 34.dp) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(height)
-            .clip(RoundedCornerShape(8.dp))
-            .background(Color.White)
-            .border(1.dp, Color(0xFFD6DEDD), RoundedCornerShape(8.dp))
-            .padding(horizontal = 7.dp, vertical = 5.dp)
+private fun MissingTutorialImagesCard() {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
-        Text(
-            text = label,
-            color = Color(0xFF7A8585),
-            fontSize = 5.5.sp,
-            maxLines = 1
-        )
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp, vertical = 34.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Surface(
+                modifier = Modifier.size(72.dp),
+                shape = RoundedCornerShape(22.dp),
+                color = GuidePrimary.copy(alpha = 0.12f)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Default.ImageIcon,
+                        contentDescription = null,
+                        tint = GuidePrimary,
+                        modifier = Modifier.size(34.dp)
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(18.dp))
+
+            Text(
+                text = "Tutorial images are being prepared",
+                color = MaterialTheme.colorScheme.onSurface,
+                fontSize = 19.sp,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(Modifier.height(8.dp))
+
+            Text(
+                text = "The image guide will appear here when it is included in the next app build.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 13.sp,
+                lineHeight = 19.sp,
+                textAlign = TextAlign.Center
+            )
+        }
     }
 }
 
 @Composable
-private fun MiniButton(label: String, highlighted: Boolean) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(25.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(if (highlighted) GuidePrimary else Color.Transparent)
-            .border(
-                width = 1.dp,
-                color = if (highlighted) GuidePrimary else GuidePrimary.copy(alpha = 0.65f),
-                shape = RoundedCornerShape(8.dp)
-            ),
-        contentAlignment = Alignment.Center
+private fun TutorialImageViewer(
+    image: TutorialImage,
+    onDismiss: () -> Unit
+) {
+    val painter = painterResource(id = image.resourceId)
+    var scale by remember(image.resourceId) { mutableStateOf(1f) }
+    var offset by remember(image.resourceId) { mutableStateOf(Offset.Zero) }
+
+    val transformState = rememberTransformableState { zoomChange, panChange, _ ->
+        val newScale = (scale * zoomChange).coerceIn(1f, 5f)
+        scale = newScale
+        offset = if (newScale <= 1.01f) Offset.Zero else offset + panChange
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
-        Text(
-            text = label,
-            color = if (highlighted) Color.White else GuidePrimary,
-            fontSize = 5.5.sp,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1
-        )
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = Color.Black.copy(alpha = 0.96f)
+        ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                Image(
+                    painter = painter,
+                    contentDescription = image.label,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 12.dp, vertical = 72.dp)
+                        .transformable(state = transformState)
+                        .graphicsLayer {
+                            scaleX = scale
+                            scaleY = scale
+                            translationX = offset.x
+                            translationY = offset.y
+                        },
+                    contentScale = ContentScale.Fit
+                )
+
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 18.dp),
+                    shape = RoundedCornerShape(999.dp),
+                    color = Color.Black.copy(alpha = 0.58f)
+                ) {
+                    Text(
+                        text = "Pinch to zoom • Drag to move",
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 12.dp, end = 12.dp)
+                        .background(Color.Black.copy(alpha = 0.62f), CircleShape)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Close image",
+                        tint = Color.White
+                    )
+                }
+            }
+        }
     }
 }
 
-@Composable
-private fun MiniTextLine(widthFraction: Float) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth(widthFraction)
-            .height(4.dp)
-            .clip(RoundedCornerShape(999.dp))
-            .background(Color(0xFFD9E1E0))
+private fun imageAspectRatio(painter: Painter): Float {
+    val size = painter.intrinsicSize
+    val width = size.width
+    val height = size.height
+    return if (
+        width.isFinite() &&
+        height.isFinite() &&
+        width > 0f &&
+        height > 0f
+    ) {
+        (width / height).coerceIn(0.08f, 4f)
+    } else {
+        0.72f
+    }
+}
+
+@SuppressLint("DiscouragedApi")
+private fun findTutorialImages(context: Context): List<TutorialImage> {
+    val resources = context.resources
+    val packageName = context.packageName
+
+    // A single, vertically designed tutorial poster takes priority when present.
+    val singleImageId = resources.getIdentifier(
+        "how_to_tutorial",
+        "drawable",
+        packageName
     )
-    Spacer(Modifier.height(3.dp))
-}
+    if (singleImageId != 0) {
+        return listOf(
+            TutorialImage(
+                resourceId = singleImageId,
+                label = "Responder tutorial"
+            )
+        )
+    }
 
-@Composable
-private fun MiniBottomNavigation(selected: Int) {
-    HorizontalDivider(color = Color(0xFFE1E6E5))
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 5.dp),
-        horizontalArrangement = Arrangement.SpaceAround
-    ) {
-        listOf(Icons.Default.Home, Icons.Default.Groups, Icons.Default.Done).forEachIndexed { index, icon ->
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = if (index == selected) GuidePrimary else Color(0xFF9AA4A3),
-                modifier = Modifier.size(13.dp)
+    // Otherwise load numbered pages in order. Gaps are allowed.
+    return (1..30).mapNotNull { page ->
+        val paddedName = "how_to_${page.toString().padStart(2, '0')}"
+        val shortName = "how_to_$page"
+        val id = resources.getIdentifier(paddedName, "drawable", packageName)
+            .takeIf { it != 0 }
+            ?: resources.getIdentifier(shortName, "drawable", packageName)
+                .takeIf { it != 0 }
+
+        id?.let {
+            TutorialImage(
+                resourceId = it,
+                label = "Step $page"
             )
         }
     }

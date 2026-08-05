@@ -56,31 +56,34 @@ data class BackupResource(
     val department: BackupDepartment
 )
 
-// ──── Resource catalogue per department ────
+// ──── Operational backup catalogue per department ────
+// These are response units, teams, and capabilities. Equipment and consumable
+// supplies are requested separately from Reports > Equipment & Supplies.
 val BACKUP_RESOURCES: Map<BackupDepartment, List<BackupResource>> = mapOf(
 
     BackupDepartment.FIRE to listOf(
-        BackupResource("fire_fighters",    "Firefighters",     Icons.Default.People,         BackupDepartment.FIRE),
-        BackupResource("fire_truck",       "Fire Truck",       Icons.Default.LocalShipping,  BackupDepartment.FIRE),
-        BackupResource("rescue_equipment", "Rescue Equipment", Icons.Default.Build,          BackupDepartment.FIRE),
-        BackupResource("aerial_ladder",    "Aerial Ladder",    Icons.Default.ArrowUpward,    BackupDepartment.FIRE),
-        BackupResource("hazmat_team",      "HazMat Team",      Icons.Default.Warning,        BackupDepartment.FIRE)
+        BackupResource("fire_crew",       "Firefighting Crew",       Icons.Default.People,         BackupDepartment.FIRE),
+        BackupResource("fire_engine",     "Fire Engine Unit",        Icons.Default.LocalShipping,  BackupDepartment.FIRE),
+        BackupResource("technical_rescue","Technical Rescue Team",  Icons.Default.HealthAndSafety,BackupDepartment.FIRE),
+        BackupResource("aerial_unit",     "Aerial Ladder Unit",      Icons.Default.ArrowUpward,    BackupDepartment.FIRE),
+        BackupResource("hazmat_team",     "HazMat Response Team",    Icons.Default.Warning,        BackupDepartment.FIRE)
     ),
 
     BackupDepartment.MEDICAL to listOf(
-        BackupResource("paramedics",    "Paramedics",    Icons.Default.PersonPin,      BackupDepartment.MEDICAL),
-        BackupResource("ambulance",     "Ambulance",     Icons.Default.LocalShipping,  BackupDepartment.MEDICAL),
-        BackupResource("medical_kit",   "Medical Kit",   Icons.Default.MedicalServices,BackupDepartment.MEDICAL),
-        BackupResource("trauma_team",   "Trauma Team",   Icons.Default.Group,          BackupDepartment.MEDICAL),
-        BackupResource("defibrillator", "Defibrillator", Icons.Default.Bolt,           BackupDepartment.MEDICAL)
+        BackupResource("ems_crew",        "EMS Crew",                 Icons.Default.People,         BackupDepartment.MEDICAL),
+        BackupResource("ambulance_unit",  "Ambulance Unit",          Icons.Default.LocalShipping,  BackupDepartment.MEDICAL),
+        BackupResource("trauma_team",     "Trauma Team",             Icons.Default.Group,          BackupDepartment.MEDICAL),
+        BackupResource("triage_team",     "Triage Team",             Icons.Default.MedicalServices,BackupDepartment.MEDICAL),
+        BackupResource("mci_support",     "Mass-Casualty Support",   Icons.Default.HealthAndSafety,BackupDepartment.MEDICAL)
     ),
 
     BackupDepartment.POLICE to listOf(
-        BackupResource("officers",     "Officers",     Icons.Default.Badge,          BackupDepartment.POLICE),
-        BackupResource("patrol_car",   "Patrol Car",   Icons.Default.DirectionsCar,  BackupDepartment.POLICE),
-        BackupResource("k9_unit",      "K9 Unit",      Icons.Default.Pets,           BackupDepartment.POLICE),
-        BackupResource("swat",         "SWAT",         Icons.Default.Shield,         BackupDepartment.POLICE),
-        BackupResource("negotiator",   "Negotiator",   Icons.Default.RecordVoiceOver,BackupDepartment.POLICE)
+        BackupResource("patrol_officers", "Patrol Officers",         Icons.Default.Badge,          BackupDepartment.POLICE),
+        BackupResource("patrol_unit",     "Patrol Unit",             Icons.Default.DirectionsCar,  BackupDepartment.POLICE),
+        BackupResource("traffic_team",    "Traffic Control Team",    Icons.Default.Traffic,        BackupDepartment.POLICE),
+        BackupResource("k9_unit",         "K9 Unit",                 Icons.Default.Pets,           BackupDepartment.POLICE),
+        BackupResource("tactical_team",   "Tactical Response Team",  Icons.Default.Shield,         BackupDepartment.POLICE),
+        BackupResource("negotiator",      "Crisis Negotiator",       Icons.Default.RecordVoiceOver,BackupDepartment.POLICE)
     )
 )
 
@@ -90,6 +93,7 @@ data class BackupRequest(
     val department: BackupDepartment,
     val resources: List<BackupResource>,
     val isFullBackup: Boolean,
+    val specificDetails: String = "",
     val timestamp: Long = System.currentTimeMillis()
 )
 
@@ -153,7 +157,7 @@ fun DepartmentSelectionDialog(
             }
         )
     } else {
-        // ── Step 2: resource picker sheet ──
+        // ── Step 2: response-unit/capability picker sheet ──
         BackupResourceSheet(
             department = selectedDepartment!!,
             onDismiss  = onDismiss,
@@ -225,7 +229,7 @@ private fun DepartmentTile(
                     color = Color(0xFF171717)
                 )
                 Text(
-                    text = "${BACKUP_RESOURCES[department]?.size ?: 0} resources available",
+                    text = "${BACKUP_RESOURCES[department]?.size ?: 0} response options",
                     fontSize = 12.sp,
                     color = Color(0xFF575757)
                 )
@@ -243,7 +247,7 @@ private fun DepartmentTile(
 
 
 // ─────────────────────────────────────────────
-//  BACKUP RESOURCE BOTTOM-SHEET  (Step 2)
+//  BACKUP UNIT / CAPABILITY BOTTOM-SHEET  (Step 2)
 // ─────────────────────────────────────────────
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -256,9 +260,10 @@ fun BackupResourceSheet(
     onBack: (() -> Unit)? = null          // null = show as standalone sheet
 ) {
     val accent     = department.accent
-    val resources  = BACKUP_RESOURCES[department] ?: emptyList()
-    val selected   = remember { mutableStateListOf<String>() }   // stores resource ids
-    var fullBackup by remember { mutableStateOf(false) }
+    val resources       = BACKUP_RESOURCES[department] ?: emptyList()
+    val selected        = remember { mutableStateListOf<String>() }   // stores option ids
+    var fullBackup      by remember { mutableStateOf(false) }
+    var specificDetails by remember { mutableStateOf("") }
 
     // sync full-backup toggle
     LaunchedEffect(fullBackup) {
@@ -280,6 +285,8 @@ fun BackupResourceSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .navigationBarsPadding()
+                .imePadding()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -326,7 +333,7 @@ fun BackupResourceSheet(
                         color = Color(0xFF171717)
                     )
                     Text(
-                        text = "Select needed resources",
+                        text = "Select the exact unit or capability needed",
                         fontSize = 12.sp,
                         color = Color(0xFF575757)
                     )
@@ -345,9 +352,9 @@ fun BackupResourceSheet(
                 }
             )
 
-            // ── Resource chips grid ──
+            // ── Backup unit/capability chips grid ──
             Text(
-                text = "Or choose specific resources",
+                text = "Choose specific backup needs",
                 fontSize = 12.sp,
                 color = Color(0xFF575757),
                 fontWeight = FontWeight.Medium
@@ -387,10 +394,40 @@ fun BackupResourceSheet(
                 }
             }
 
+            // ── Quantity / operational detail ──
+            OutlinedTextField(
+                value = specificDetails,
+                onValueChange = { specificDetails = it.take(300) },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Quantity or operational details") },
+                placeholder = {
+                    Text(
+                        "Example: 2 ambulance units for patient transport",
+                        fontSize = 12.sp
+                    )
+                },
+                supportingText = {
+                    Text(
+                        "State the number of units, capability, staging point, or other dispatch detail.",
+                        fontSize = 11.sp
+                    )
+                },
+                minLines = 2,
+                maxLines = 4,
+                shape = RoundedCornerShape(14.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = accent,
+                    cursorColor = accent,
+                    focusedLabelColor = accent,
+                    focusedContainerColor = Color.White,
+                    unfocusedContainerColor = Color.White
+                )
+            )
+
             // ── Selection summary ──
             AnimatedVisibility(visible = selected.isNotEmpty()) {
                 Text(
-                    text = "Requesting: ${selected.size} resource${if (selected.size > 1) "s" else ""}",
+                    text = "Selected: ${selected.size} backup option${if (selected.size > 1) "s" else ""}",
                     color = accent,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 13.sp
@@ -408,7 +445,8 @@ fun BackupResourceSheet(
                             fromIncidentId = incidentId,
                             department     = department,
                             resources      = selectedResources,
-                            isFullBackup   = fullBackup
+                            isFullBackup   = fullBackup,
+                            specificDetails = specificDetails.trim()
                         )
                     )
                 },
@@ -425,7 +463,7 @@ fun BackupResourceSheet(
                 Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = if (fullBackup) "Send Full Backup Request" else "Send Request",
+                    text = if (fullBackup) "Send Full Response Request" else "Send Backup Request",
                     fontWeight = FontWeight.Bold,
                     fontSize = 15.sp
                 )
@@ -510,13 +548,13 @@ private fun FullBackupChip(
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "Full Backup",
+                    text = "Full Department Response",
                     fontWeight = FontWeight.Bold,
                     fontSize = 14.sp,
                     color = if (active) accent else Color(0xFF171717)
                 )
                 Text(
-                    text = "Request all available resources at once",
+                    text = "Request all available units and teams from this department",
                     fontSize = 11.sp,
                     color = Color(0xFF757575)
                 )
@@ -536,7 +574,7 @@ private fun FullBackupChip(
 
 
 // ─────────────────────────────────────────────
-//  INDIVIDUAL RESOURCE CHIP
+//  INDIVIDUAL BACKUP OPTION CHIP
 // ─────────────────────────────────────────────
 
 @Composable
