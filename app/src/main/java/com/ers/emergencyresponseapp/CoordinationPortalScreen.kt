@@ -28,6 +28,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
+import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -54,6 +55,7 @@ import androidx.navigation.NavHostController
 import com.ers.emergencyresponseapp.coordination.model.ChatMessage
 import com.ers.emergencyresponseapp.coordination.model.MessageStatus
 import com.ers.emergencyresponseapp.coordination.model.MessageType
+import com.ers.emergencyresponseapp.coordination.model.ReplyMessageCodec
 import com.ers.emergencyresponseapp.coordination.voice.VoicePlaybackCache
 import com.ers.emergencyresponseapp.coordination.voice.VoiceRecorder
 import com.ers.emergencyresponseapp.coordination.model.viewmodel.CoordinationViewModel
@@ -570,6 +572,7 @@ fun CoordinationPortalScreen(
     }
 
     BackHandler(enabled = navState == NavState.CHAT) {
+        vm.clearTyping()
         navState = NavState.INBOX
     }
 
@@ -599,6 +602,7 @@ fun CoordinationPortalScreen(
                 currentResponderId   = currentResponderId,
                 currentResponderName = currentResponderName,
                 onBack               = {
+                    vm.clearTyping()
                     inboxTabIndex = if (vm.selectedDepartment.value != null) 1 else 0
                     navState = NavState.INBOX
                 }
@@ -1549,7 +1553,16 @@ private fun ChatScreen(
     val selectedDepartment = vm.selectedDepartment.value
     val messages           = vm.messages
     val isPeerTyping       = vm.isPeerTyping
-    val messageInput       = remember { mutableStateOf("") }
+    val ctx                 = LocalContext.current
+    val threadKey           = vm.activeThreadId.orEmpty()
+    val draftPreferences    = remember(ctx) {
+        ctx.getSharedPreferences("coordination_drafts", Context.MODE_PRIVATE)
+    }
+    val draftKey            = remember(threadKey) { "draft:$threadKey" }
+    val messageInput        = remember(draftKey) {
+        mutableStateOf(draftPreferences.getString(draftKey, "").orEmpty())
+    }
+    var replyTarget by remember(threadKey) { mutableStateOf<ChatMessage?>(null) }
     val listState          = rememberLazyListState()
     val scope              = rememberCoroutineScope()
     val unseenCount        = remember { mutableIntStateOf(0) }
@@ -1565,7 +1578,6 @@ private fun ChatScreen(
     val showSharedFilesDialog = remember { mutableStateOf(false) }
     var showChatSearch by remember { mutableStateOf(false) }
     var chatSearchQuery by remember { mutableStateOf("") }
-    val ctx                = LocalContext.current
     val chatName           = selectedResponder?.fullName ?: selectedDepartment?.displayName ?: "Chat"
     val lifecycleOwner     = LocalLifecycleOwner.current
     val voiceRecorder      = remember(ctx) { VoiceRecorder(ctx) }
@@ -1691,10 +1703,25 @@ private fun ChatScreen(
     val latestCancelVoiceRecording = rememberUpdatedState<() -> Unit> {
         cancelVoiceRecording()
     }
+    var isChatLifecycleActive by remember {
+        mutableStateOf(
+            lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+        )
+    }
     DisposableEffect(lifecycleOwner, voiceRecorder) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP && latestRecordingActive.value) {
-                latestCancelVoiceRecording.value.invoke()
+            when (event) {
+                Lifecycle.Event.ON_START,
+                Lifecycle.Event.ON_RESUME -> isChatLifecycleActive = true
+
+                Lifecycle.Event.ON_STOP -> {
+                    isChatLifecycleActive = false
+                    if (latestRecordingActive.value) {
+                        latestCancelVoiceRecording.value.invoke()
+                    }
+                }
+
+                else -> Unit
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -1702,6 +1729,10 @@ private fun ChatScreen(
             lifecycleOwner.lifecycle.removeObserver(observer)
             voiceRecorder.cancel()
         }
+    }
+
+    DisposableEffect(threadKey) {
+        onDispose { vm.clearTyping() }
     }
 
     BackHandler(enabled = isRecordingVoice) {
@@ -1796,15 +1827,37 @@ private fun ChatScreen(
         }
     }
 
-    fun doSend() {
-        val text = messageInput.value.trim()
+    fun sendText(rawText: String) {
+        val text = rawText.trim()
         if (text.isEmpty()) return
+        val outgoingText = replyTarget?.let { target ->
+            ReplyMessageCodec.encode(
+                body = text,
+                sender = target.senderName.ifBlank {
+                    if (target.isOwn) "You" else "Responder"
+                },
+                preview = coordinationReplyPreview(target)
+            )
+        } ?: text
+
         when {
-            selectedResponder  != null -> vm.sendPrivateMessage(currentResponderId, selectedResponder, text)
-            selectedDepartment != null -> vm.sendDepartmentMessage(currentResponderId, selectedDepartment.name, text)
+            selectedResponder  != null ->
+                vm.sendPrivateMessage(currentResponderId, selectedResponder, outgoingText)
+
+            selectedDepartment != null ->
+                vm.sendDepartmentMessage(currentResponderId, selectedDepartment.name, outgoingText)
+
             else -> Toast.makeText(ctx, "Select a chat to send", Toast.LENGTH_SHORT).show()
         }
+
         messageInput.value = ""
+        replyTarget = null
+        draftPreferences.edit().remove(draftKey).apply()
+        vm.clearTyping()
+    }
+
+    fun doSend() {
+        sendText(messageInput.value)
     }
 
     fun sendTipToCurrentChat(payload: CoordinationTipPayload) {
@@ -1912,11 +1965,13 @@ private fun ChatScreen(
             }
         }
     }
-    LaunchedEffect(messages.size, selectedResponder?.id) {
-        vm.markMessagesAsRead(
-            currentResponderId,
-            selectedResponder?.id
-        )
+    LaunchedEffect(messages.size, selectedResponder?.id, isChatLifecycleActive) {
+        if (isChatLifecycleActive && AppState.isForeground) {
+            vm.markMessagesAsRead(
+                currentResponderId,
+                selectedResponder?.id
+            )
+        }
     }
 
     val visibleMessages = if (chatSearchQuery.isBlank()) {
@@ -1936,7 +1991,12 @@ private fun ChatScreen(
                     tip.senderName
                 ).joinToString(" ")
             } else {
-                message.text.orEmpty()
+                val reply = ReplyMessageCodec.decode(message.text.orEmpty())
+                listOfNotNull(
+                    reply?.body ?: message.text,
+                    reply?.sender,
+                    reply?.preview
+                ).joinToString(" ")
             }
 
             searchableText.contains(chatSearchQuery, ignoreCase = true) ||
@@ -2126,34 +2186,33 @@ private fun ChatScreen(
                 AnimatedVisibility(visible = showQuickReplies) {
                     QuickReplyBar(
                         onSelect = { reply ->
-                            when {
-                                selectedResponder != null ->
-                                    vm.sendPrivateMessage(
-                                        currentResponderId,
-                                        selectedResponder,
-                                        reply
-                                    )
-
-                                selectedDepartment != null ->
-                                    vm.sendDepartmentMessage(
-                                        currentResponderId,
-                                        selectedDepartment.name,
-                                        reply
-                                    )
-
-                                else -> Toast.makeText(
-                                    ctx,
-                                    "Select a chat first",
-                                    Toast.LENGTH_SHORT
-                                ).show()
-                            }
+                            sendText(reply)
+                            showQuickReplies = false
                         }
+                    )
+                }
+
+                replyTarget?.let { target ->
+                    ReplyComposerBanner(
+                        sender = target.senderName.ifBlank {
+                            if (target.isOwn) "You" else "Responder"
+                        },
+                        preview = coordinationReplyPreview(target),
+                        onCancel = { replyTarget = null }
                     )
                 }
 
                 ChatComposer(
                     text = messageInput.value,
-                    onTextChange = { messageInput.value = it },
+                    onTextChange = { value ->
+                        messageInput.value = value
+                        if (value.isBlank()) {
+                            draftPreferences.edit().remove(draftKey).apply()
+                        } else {
+                            draftPreferences.edit().putString(draftKey, value).apply()
+                        }
+                        vm.onComposerTextChanged(value.isNotBlank())
+                    },
                     onSend = { doSend() },
                     onAttachClick = { showAttach.value = true },
                     onQuickReplyToggle = {
@@ -2184,6 +2243,20 @@ private fun ChatScreen(
                 currentResponderId = currentResponderId,
                 onReact = { id, emoji ->
                     vm.addReaction(id, emoji, currentResponderId)
+                },
+                reactionsEnabled = selectedResponder != null,
+                onReply = { message ->
+                    replyTarget = message
+                    showQuickReplies = false
+                },
+                onCopy = { message ->
+                    val copiedText = coordinationCopyText(message)
+                    val clipboard = ctx.getSystemService(Context.CLIPBOARD_SERVICE)
+                            as android.content.ClipboardManager
+                    clipboard.setPrimaryClip(
+                        android.content.ClipData.newPlainText("Coordination message", copiedText)
+                    )
+                    Toast.makeText(ctx, "Message copied", Toast.LENGTH_SHORT).show()
                 },
                 onOpenTip = { payload ->
                     selectedTipDetails = payload
@@ -2317,6 +2390,9 @@ private fun ChatMessagesPanel(
     listState: LazyListState,
     currentResponderId: String,
     onReact: (String, String) -> Unit,
+    reactionsEnabled: Boolean,
+    onReply: (ChatMessage) -> Unit,
+    onCopy: (ChatMessage) -> Unit,
     onOpenTip: (CoordinationTipPayload) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -2402,6 +2478,9 @@ private fun ChatMessagesPanel(
                 timeLabel = timeFmt.format(Date(msg.createdAt)),
                 currentResponderId = currentResponderId,
                 onReact = onReact,
+                reactionsEnabled = reactionsEnabled,
+                onReply = onReply,
+                onCopy = onCopy,
                 onOpenTip = onOpenTip,
                 isTimeVisible = revealedMessageId == msg.id,
                 onToggleTime = {
@@ -2443,6 +2522,9 @@ private fun ChatBubble(
     timeLabel: String,
     currentResponderId: String,
     onReact: (String, String) -> Unit,
+    reactionsEnabled: Boolean,
+    onReply: (ChatMessage) -> Unit,
+    onCopy: (ChatMessage) -> Unit,
     onOpenTip: (CoordinationTipPayload) -> Unit,
     isTimeVisible: Boolean,
     onToggleTime: () -> Unit
@@ -2453,13 +2535,16 @@ private fun ChatBubble(
     val alignment = if (isOwn) Alignment.End else Alignment.Start
     val horizontalArrangement = if (isOwn) Arrangement.End else Arrangement.Start
     val tipPayload = remember(msg.text) { parseCoordinationTip(msg.text) }
+    val replyPayload = remember(msg.text) {
+        ReplyMessageCodec.decode(msg.text.orEmpty())
+    }
     val maximumBubbleWidth = when {
         tipPayload != null -> 360.dp
         msg.type == MessageType.AUDIO -> 320.dp
         else -> 280.dp
     }
 
-    var showEmojiPicker by remember(msg.id) { mutableStateOf(false) }
+    var showMessageActions by remember(msg.id) { mutableStateOf(false) }
     var showLightbox by remember(msg.id) { mutableStateOf(false) }
 
     val bubbleShape = RoundedCornerShape(
@@ -2490,25 +2575,50 @@ private fun ChatBubble(
             horizontalAlignment = alignment,
             modifier = Modifier.widthIn(max = maximumBubbleWidth)
         ) {
-            AnimatedVisibility(visible = showEmojiPicker) {
+            AnimatedVisibility(visible = showMessageActions) {
                 Surface(
-                    shape = RoundedCornerShape(20.dp),
+                    shape = RoundedCornerShape(18.dp),
                     color = BgElevated,
                     border = BorderStroke(1.dp, DividerColor),
                     shadowElevation = 10.dp,
                     modifier = Modifier.padding(bottom = 4.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    Column(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
+                        verticalArrangement = Arrangement.spacedBy(5.dp)
                     ) {
-                        listOf("👍", "❤️", "😮", "🔥", "🚨").forEach { emoji ->
-                            Text(
-                                emoji,
-                                fontSize = 22.sp,
-                                modifier = Modifier.clickable {
-                                    onReact(msg.id, emoji)
-                                    showEmojiPicker = false
+                        if (reactionsEnabled) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                listOf("👍", "❤️", "😮", "🔥", "🚨").forEach { emoji ->
+                                    Text(
+                                        emoji,
+                                        fontSize = 22.sp,
+                                        modifier = Modifier.clickable {
+                                            onReact(msg.id, emoji)
+                                            showMessageActions = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            MessageActionButton(
+                                icon = Icons.AutoMirrored.Filled.Reply,
+                                label = "Reply",
+                                onClick = {
+                                    onReply(msg)
+                                    showMessageActions = false
+                                }
+                            )
+                            MessageActionButton(
+                                icon = Icons.Default.ContentCopy,
+                                label = "Copy",
+                                onClick = {
+                                    onCopy(msg)
+                                    showMessageActions = false
                                 }
                             )
                         }
@@ -2526,7 +2636,7 @@ private fun ChatBubble(
                                 onClick = onToggleTime,
                                 onLongClick = {
                                     onToggleTime()
-                                    showEmojiPicker = !showEmojiPicker
+                                    showMessageActions = !showMessageActions
                                 }
                             ),
                             onView = { onOpenTip(tipPayload) }
@@ -2540,7 +2650,7 @@ private fun ChatBubble(
                                 onClick = onToggleTime,
                                 onLongClick = {
                                     onToggleTime()
-                                    showEmojiPicker = !showEmojiPicker
+                                    showMessageActions = !showMessageActions
                                 }
                             )
                         ) {
@@ -2556,11 +2666,19 @@ private fun ChatBubble(
                                     )
                                     Spacer(Modifier.height(2.dp))
                                 }
+                                replyPayload?.let { reply ->
+                                    ReplyBubbleQuote(
+                                        sender = reply.sender,
+                                        preview = reply.preview,
+                                        isOwn = isOwn
+                                    )
+                                    Spacer(Modifier.height(6.dp))
+                                }
                                 Text(
                                     text = if (msg.text.orEmpty().contains(TIP_MESSAGE_PREFIX)) {
                                         "Incident tip could not be displayed. Please update or resend it."
                                     } else {
-                                        msg.text.orEmpty()
+                                        replyPayload?.body ?: msg.text.orEmpty()
                                     },
                                     color = textColor,
                                     fontSize = 14.sp,
@@ -2583,7 +2701,7 @@ private fun ChatBubble(
                             },
                             onLongClick = {
                                 onToggleTime()
-                                showEmojiPicker = !showEmojiPicker
+                                showMessageActions = !showMessageActions
                             }
                         )
                     ) {
@@ -2647,7 +2765,7 @@ private fun ChatBubble(
                             },
                             onLongClick = {
                                 onToggleTime()
-                                showEmojiPicker = !showEmojiPicker
+                                showMessageActions = !showMessageActions
                             }
                         )
                     ) {
@@ -2709,7 +2827,7 @@ private fun ChatBubble(
                             onClick = onToggleTime,
                             onLongClick = {
                                 onToggleTime()
-                                showEmojiPicker = !showEmojiPicker
+                                showMessageActions = !showMessageActions
                             }
                         )
                     ) {
@@ -2758,7 +2876,9 @@ private fun ChatBubble(
                             shape = RoundedCornerShape(12.dp),
                             color = BgMuted,
                             border = BorderStroke(1.dp, DividerColor),
-                            modifier = Modifier.clickable { onReact(msg.id, emoji) }
+                            modifier = Modifier.clickable(enabled = reactionsEnabled) {
+                                onReact(msg.id, emoji)
+                            }
                         ) {
                             Text(
                                 "$emoji $count",
@@ -3149,7 +3269,7 @@ private fun CoordinationChannelStrip(
                     fontWeight = FontWeight.SemiBold
                 )
                 Text(
-                    "Share verified updates with $recipientLabel",
+                    "Long-press for Reply/Copy · $recipientLabel",
                     color = TextSecondary,
                     fontSize = 10.sp,
                     maxLines = 1,
@@ -4413,6 +4533,147 @@ private fun TipDetailBlock(
 // ─────────────────────────────────────────────────────────────────────────────
 //  QUICK REPLIES — fast, one-tap responses for responders on scene / driving
 // ─────────────────────────────────────────────────────────────────────────────
+private fun coordinationReplyPreview(message: ChatMessage): String {
+    parseCoordinationTip(message.text)?.let { tip ->
+        return buildString {
+            append(tip.incidentType.ifBlank { "Incident tip" })
+            tip.location.takeIf { it.isNotBlank() }?.let { append(" • ").append(it) }
+        }.take(ReplyMessageCodec.MAX_PREVIEW_LENGTH)
+    }
+
+    return when (message.type) {
+        MessageType.IMAGE -> "Image"
+        MessageType.FILE -> message.attachmentName?.takeIf { it.isNotBlank() } ?: "File"
+        MessageType.AUDIO -> "Voice message"
+        MessageType.SYSTEM -> "System update"
+        MessageType.TEXT -> ReplyMessageCodec.displayBody(message.text)
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .ifBlank { "Message" }
+            .take(ReplyMessageCodec.MAX_PREVIEW_LENGTH)
+    }
+}
+
+private fun coordinationCopyText(message: ChatMessage): String {
+    parseCoordinationTip(message.text)?.let { tip ->
+        return buildList {
+            add("${tip.incidentType.ifBlank { "Emergency" }} incident tip")
+            tip.priority.takeIf { it.isNotBlank() }?.let { add("Priority: $it") }
+            tip.location.takeIf { it.isNotBlank() }?.let { add("Location: $it") }
+            tip.description.takeIf { it.isNotBlank() }?.let(::add)
+            tip.tipId.takeIf { it.isNotBlank() }?.let { add("Reference: $it") }
+        }.joinToString("\n")
+    }
+
+    return when (message.type) {
+        MessageType.TEXT -> ReplyMessageCodec.displayBody(message.text)
+        MessageType.IMAGE -> message.text?.takeIf { it.isNotBlank() && it != "Image" } ?: "Image"
+        MessageType.FILE -> message.attachmentName?.takeIf { it.isNotBlank() } ?: "File"
+        MessageType.AUDIO -> "Voice message"
+        MessageType.SYSTEM -> message.text.orEmpty().ifBlank { "System update" }
+    }
+}
+
+@Composable
+private fun MessageActionButton(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = BgMuted,
+        modifier = Modifier.clickable(onClick = onClick)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            Icon(icon, contentDescription = null, tint = BrandGreen, modifier = Modifier.size(15.dp))
+            Text(label, color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+@Composable
+private fun ReplyBubbleQuote(sender: String, preview: String, isOwn: Boolean) {
+    Surface(
+        color = if (isOwn) Color.White.copy(alpha = 0.14f) else BgMuted,
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(modifier = Modifier.padding(horizontal = 9.dp, vertical = 7.dp)) {
+            Box(
+                modifier = Modifier
+                    .width(3.dp)
+                    .heightIn(min = 34.dp)
+                    .clip(RoundedCornerShape(99.dp))
+                    .background(if (isOwn) Color.White.copy(alpha = 0.8f) else BrandGreen)
+            )
+            Spacer(Modifier.width(7.dp))
+            Column {
+                Text(
+                    sender.ifBlank { "Responder" },
+                    color = if (isOwn) Color.White else BrandGreen,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    preview.ifBlank { "Message" },
+                    color = if (isOwn) Color.White.copy(alpha = 0.78f) else TextSecondary,
+                    fontSize = 11.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReplyComposerBanner(sender: String, preview: String, onCancel: () -> Unit) {
+    Surface(color = BgElevated, border = BorderStroke(1.dp, DividerColor)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 12.dp, end = 4.dp, top = 7.dp, bottom = 7.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(3.dp)
+                    .height(38.dp)
+                    .clip(RoundedCornerShape(99.dp))
+                    .background(BrandGreen)
+            )
+            Spacer(Modifier.width(9.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "Replying to ${sender.ifBlank { "Responder" }}",
+                    color = BrandGreen,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    preview,
+                    color = TextSecondary,
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            IconButton(onClick = onCancel, modifier = Modifier.size(36.dp)) {
+                Icon(Icons.Default.Close, contentDescription = "Cancel reply", tint = TextSecondary)
+            }
+        }
+    }
+}
+
 private val QuickReplies = listOf(
     "Copy",
     "En route",

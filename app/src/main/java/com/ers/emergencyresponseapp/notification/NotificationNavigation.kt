@@ -1,11 +1,14 @@
 package com.ers.emergencyresponseapp.notification
 
 import android.content.Intent
+import com.ers.emergencyresponseapp.routing.RouteMonitoringService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 sealed interface NotificationDestination {
+    object ActiveRoute : NotificationDestination
+
     data class PrivateChat(
         val peerId: String,
         val threadId: String
@@ -49,7 +52,9 @@ object NotificationNavigation {
 
     fun publishFromIntent(intent: Intent?) {
         val source = intent ?: return
-        val parsed = when (source.getStringExtra(EXTRA_DESTINATION)) {
+        val parsed = if (source.action == RouteMonitoringService.ACTION_OPEN_ACTIVE_ROUTE) {
+            NotificationDestination.ActiveRoute
+        } else when (source.getStringExtra(EXTRA_DESTINATION)) {
             DEST_PRIVATE_CHAT -> {
                 val peerId = source.getStringExtra(EXTRA_PEER_ID).orEmpty()
                 val threadId = source.getStringExtra(EXTRA_THREAD_ID).orEmpty()
@@ -89,6 +94,9 @@ object NotificationNavigation {
         source.removeExtra(EXTRA_BROADCAST_ID)
         source.removeExtra(EXTRA_INCIDENT_ID)
         source.removeExtra(EXTRA_ASSIGNMENT_ID)
+        if (source.action == RouteMonitoringService.ACTION_OPEN_ACTIVE_ROUTE) {
+            source.action = null
+        }
     }
 
     fun clear(expected: NotificationDestination? = null) {

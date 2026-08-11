@@ -66,6 +66,7 @@ import androidx.core.content.FileProvider
 import java.text.SimpleDateFormat
 import java.util.Date
 import androidx.compose.ui.graphics.graphicsLayer
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import com.ers.emergencyresponseapp.ui.components.AppPullToRefresh
@@ -268,6 +269,126 @@ private data class ReportHistoryMonth(
 )
 
 private fun normalizedIncidentId(raw: String): String = raw.removePrefix("#").trim()
+
+private const val AFTER_ACTION_DRAFT_PREFS = "after_action_report_drafts"
+
+private data class AfterActionDraftSnapshot(
+    val operationalOutcome: String,
+    val incidentSummary: String,
+    val actionsTaken: String,
+    val personsAssisted: String,
+    val injuries: String,
+    val fatalities: String,
+    val resourcesUsed: String,
+    val agenciesInvolved: String,
+    val handoffDetails: String,
+    val safetyIssues: String,
+    val followUpRequired: Boolean,
+    val followUpDetails: String,
+    val lessonsLearned: String
+)
+
+private data class StoredAfterActionDraft(
+    val savedAt: Long,
+    val step: Int,
+    val snapshot: AfterActionDraftSnapshot
+)
+
+private val afterActionDraftKeys = listOf(
+    "saved_at",
+    "step",
+    "operational_outcome",
+    "incident_summary",
+    "actions_taken",
+    "persons_assisted",
+    "injuries",
+    "fatalities",
+    "resources_used",
+    "agencies_involved",
+    "handoff_details",
+    "safety_issues",
+    "follow_up_required",
+    "follow_up_details",
+    "lessons_learned"
+)
+
+private fun afterActionDraftPrefix(responderId: Int, incidentId: String): String =
+    "responder_${responderId}_incident_${normalizedIncidentId(incidentId)}."
+
+private fun readAfterActionDraft(
+    context: Context,
+    responderId: Int,
+    incidentId: String
+): StoredAfterActionDraft? {
+    if (responderId <= 0) return null
+    val prefs = context.getSharedPreferences(AFTER_ACTION_DRAFT_PREFS, Context.MODE_PRIVATE)
+    val prefix = afterActionDraftPrefix(responderId, incidentId)
+    val savedAt = prefs.getLong("${prefix}saved_at", 0L)
+    if (savedAt <= 0L) return null
+
+    return StoredAfterActionDraft(
+        savedAt = savedAt,
+        step = prefs.getInt("${prefix}step", 1).coerceIn(1, 3),
+        snapshot = AfterActionDraftSnapshot(
+            operationalOutcome = prefs.getString("${prefix}operational_outcome", "Resolved")
+                ?: "Resolved",
+            incidentSummary = prefs.getString("${prefix}incident_summary", "").orEmpty(),
+            actionsTaken = prefs.getString("${prefix}actions_taken", "").orEmpty(),
+            personsAssisted = prefs.getString("${prefix}persons_assisted", "0") ?: "0",
+            injuries = prefs.getString("${prefix}injuries", "0") ?: "0",
+            fatalities = prefs.getString("${prefix}fatalities", "0") ?: "0",
+            resourcesUsed = prefs.getString("${prefix}resources_used", "").orEmpty(),
+            agenciesInvolved = prefs.getString("${prefix}agencies_involved", "").orEmpty(),
+            handoffDetails = prefs.getString("${prefix}handoff_details", "").orEmpty(),
+            safetyIssues = prefs.getString("${prefix}safety_issues", "").orEmpty(),
+            followUpRequired = prefs.getBoolean("${prefix}follow_up_required", false),
+            followUpDetails = prefs.getString("${prefix}follow_up_details", "").orEmpty(),
+            lessonsLearned = prefs.getString("${prefix}lessons_learned", "").orEmpty()
+        )
+    )
+}
+
+private fun saveAfterActionDraft(
+    context: Context,
+    responderId: Int,
+    incidentId: String,
+    step: Int,
+    snapshot: AfterActionDraftSnapshot
+) {
+    if (responderId <= 0) return
+    val prefix = afterActionDraftPrefix(responderId, incidentId)
+    context.getSharedPreferences(AFTER_ACTION_DRAFT_PREFS, Context.MODE_PRIVATE)
+        .edit()
+        .putLong("${prefix}saved_at", System.currentTimeMillis())
+        .putInt("${prefix}step", step.coerceIn(1, 3))
+        .putString("${prefix}operational_outcome", snapshot.operationalOutcome)
+        .putString("${prefix}incident_summary", snapshot.incidentSummary)
+        .putString("${prefix}actions_taken", snapshot.actionsTaken)
+        .putString("${prefix}persons_assisted", snapshot.personsAssisted)
+        .putString("${prefix}injuries", snapshot.injuries)
+        .putString("${prefix}fatalities", snapshot.fatalities)
+        .putString("${prefix}resources_used", snapshot.resourcesUsed)
+        .putString("${prefix}agencies_involved", snapshot.agenciesInvolved)
+        .putString("${prefix}handoff_details", snapshot.handoffDetails)
+        .putString("${prefix}safety_issues", snapshot.safetyIssues)
+        .putBoolean("${prefix}follow_up_required", snapshot.followUpRequired)
+        .putString("${prefix}follow_up_details", snapshot.followUpDetails)
+        .putString("${prefix}lessons_learned", snapshot.lessonsLearned)
+        .apply()
+}
+
+private fun clearAfterActionDraft(
+    context: Context,
+    responderId: Int,
+    incidentId: String
+) {
+    if (responderId <= 0) return
+    val prefix = afterActionDraftPrefix(responderId, incidentId)
+    val editor = context.getSharedPreferences(AFTER_ACTION_DRAFT_PREFS, Context.MODE_PRIVATE)
+        .edit()
+    afterActionDraftKeys.forEach { key -> editor.remove("$prefix$key") }
+    editor.apply()
+}
 
 private fun appendQuickTemplate(current: String, template: String): String {
     val existing = current.trimEnd()
@@ -2115,6 +2236,45 @@ private fun HubTabSwitcher(
 }
 
 @Composable
+private fun PostIncidentLoadErrorCard(
+    message: String,
+    onRetry: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = tonalSurface(RFColors.Warning)),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            RFColors.Warning.copy(alpha = 0.35f)
+        )
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 13.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Default.WarningAmber,
+                contentDescription = null,
+                tint = RFColors.Warning,
+                modifier = Modifier.size(19.dp)
+            )
+            Spacer(Modifier.width(9.dp))
+            Text(
+                message,
+                color = RFColors.Text,
+                fontSize = 11.sp,
+                lineHeight = 15.sp,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(onClick = onRetry) {
+                Text("Retry", color = RFColors.Warning, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
 private fun ReportHistoryHeader(
     historyCount: Int,
     latestMonthLabel: String?
@@ -2561,6 +2721,7 @@ private fun OperationalOutcomeSelector(
 @Composable
 private fun AfterActionReportDialog(
     incident: CompletedIncident,
+    responderId: Int,
     responderName: String,
     initialReport: AfterActionReport?,
     isSaving: Boolean,
@@ -2568,28 +2729,109 @@ private fun AfterActionReportDialog(
     onSave: (AfterActionReport) -> Unit,
     onExport: (AfterActionReport) -> Unit
 ) {
-    val stateKey = "${incident.id}_${initialReport?.updatedAt ?: 0L}"
-    var step by rememberSaveable(stateKey) { mutableIntStateOf(1) }
-    var operationalOutcome by rememberSaveable(stateKey) { mutableStateOf(initialReport?.operationalOutcome ?: "Resolved") }
-    var incidentSummary by rememberSaveable(stateKey) {
-        mutableStateOf(initialReport?.incidentSummary ?: incident.completionNotes.orEmpty())
-    }
-    var actionsTaken by rememberSaveable(stateKey) { mutableStateOf(initialReport?.actionsTaken.orEmpty()) }
-    var personsAssisted by rememberSaveable(stateKey) { mutableStateOf((initialReport?.personsAssisted ?: 0).toString()) }
-    var injuries by rememberSaveable(stateKey) { mutableStateOf((initialReport?.injuries ?: 0).toString()) }
-    var fatalities by rememberSaveable(stateKey) { mutableStateOf((initialReport?.fatalities ?: 0).toString()) }
-    var resourcesUsed by rememberSaveable(stateKey) { mutableStateOf(initialReport?.resourcesUsed.orEmpty()) }
-    var agenciesInvolved by rememberSaveable(stateKey) { mutableStateOf(initialReport?.agenciesInvolved.orEmpty()) }
-    var handoffDetails by rememberSaveable(stateKey) { mutableStateOf(initialReport?.handoffDetails.orEmpty()) }
-    var safetyIssues by rememberSaveable(stateKey) { mutableStateOf(initialReport?.safetyIssues.orEmpty()) }
-    var followUpRequired by rememberSaveable(stateKey) { mutableStateOf(initialReport?.followUpRequired ?: false) }
-    var followUpDetails by rememberSaveable(stateKey) { mutableStateOf(initialReport?.followUpDetails.orEmpty()) }
-    var lessonsLearned by rememberSaveable(stateKey) { mutableStateOf(initialReport?.lessonsLearned.orEmpty()) }
-    var certified by rememberSaveable(stateKey) { mutableStateOf(false) }
-    var attemptedNext by rememberSaveable(stateKey) { mutableStateOf(false) }
+    val context = LocalContext.current
     val isReadOnly = initialReport?.status == OperationalReportStatus.SUBMITTED ||
             initialReport?.status == OperationalReportStatus.APPROVED
+    val serverSnapshot = remember(incident, initialReport) {
+        AfterActionDraftSnapshot(
+            operationalOutcome = initialReport?.operationalOutcome ?: "Resolved",
+            incidentSummary = initialReport?.incidentSummary ?: incident.completionNotes.orEmpty(),
+            actionsTaken = initialReport?.actionsTaken.orEmpty(),
+            personsAssisted = (initialReport?.personsAssisted ?: 0).toString(),
+            injuries = (initialReport?.injuries ?: 0).toString(),
+            fatalities = (initialReport?.fatalities ?: 0).toString(),
+            resourcesUsed = initialReport?.resourcesUsed.orEmpty(),
+            agenciesInvolved = initialReport?.agenciesInvolved.orEmpty(),
+            handoffDetails = initialReport?.handoffDetails.orEmpty(),
+            safetyIssues = initialReport?.safetyIssues.orEmpty(),
+            followUpRequired = initialReport?.followUpRequired ?: false,
+            followUpDetails = initialReport?.followUpDetails.orEmpty(),
+            lessonsLearned = initialReport?.lessonsLearned.orEmpty()
+        )
+    }
+    val restoredDraft = remember(
+        responderId,
+        incident.id,
+        initialReport?.updatedAt,
+        isReadOnly
+    ) {
+        if (isReadOnly) {
+            null
+        } else {
+            readAfterActionDraft(context, responderId, incident.id)
+                ?.takeIf { it.savedAt > (initialReport?.updatedAt ?: 0L) }
+        }
+    }
+    val initialSnapshot = restoredDraft?.snapshot ?: serverSnapshot
+    val stateKey = "${normalizedIncidentId(incident.id)}_${initialReport?.updatedAt ?: 0L}_${restoredDraft?.savedAt ?: 0L}"
+    var step by rememberSaveable(stateKey) { mutableIntStateOf(restoredDraft?.step ?: 1) }
+    var operationalOutcome by rememberSaveable(stateKey) { mutableStateOf(initialSnapshot.operationalOutcome) }
+    var incidentSummary by rememberSaveable(stateKey) { mutableStateOf(initialSnapshot.incidentSummary) }
+    var actionsTaken by rememberSaveable(stateKey) { mutableStateOf(initialSnapshot.actionsTaken) }
+    var personsAssisted by rememberSaveable(stateKey) { mutableStateOf(initialSnapshot.personsAssisted) }
+    var injuries by rememberSaveable(stateKey) { mutableStateOf(initialSnapshot.injuries) }
+    var fatalities by rememberSaveable(stateKey) { mutableStateOf(initialSnapshot.fatalities) }
+    var resourcesUsed by rememberSaveable(stateKey) { mutableStateOf(initialSnapshot.resourcesUsed) }
+    var agenciesInvolved by rememberSaveable(stateKey) { mutableStateOf(initialSnapshot.agenciesInvolved) }
+    var handoffDetails by rememberSaveable(stateKey) { mutableStateOf(initialSnapshot.handoffDetails) }
+    var safetyIssues by rememberSaveable(stateKey) { mutableStateOf(initialSnapshot.safetyIssues) }
+    var followUpRequired by rememberSaveable(stateKey) { mutableStateOf(initialSnapshot.followUpRequired) }
+    var followUpDetails by rememberSaveable(stateKey) { mutableStateOf(initialSnapshot.followUpDetails) }
+    var lessonsLearned by rememberSaveable(stateKey) { mutableStateOf(initialSnapshot.lessonsLearned) }
+    var certified by rememberSaveable(stateKey) { mutableStateOf(false) }
+    var attemptedNext by rememberSaveable(stateKey) { mutableStateOf(false) }
+    var showClosePrompt by rememberSaveable(stateKey) { mutableStateOf(false) }
     val formEnabled = !isReadOnly && !isSaving
+
+    val currentSnapshot = AfterActionDraftSnapshot(
+        operationalOutcome = operationalOutcome,
+        incidentSummary = incidentSummary,
+        actionsTaken = actionsTaken,
+        personsAssisted = personsAssisted,
+        injuries = injuries,
+        fatalities = fatalities,
+        resourcesUsed = resourcesUsed,
+        agenciesInvolved = agenciesInvolved,
+        handoffDetails = handoffDetails,
+        safetyIssues = safetyIssues,
+        followUpRequired = followUpRequired,
+        followUpDetails = followUpDetails,
+        lessonsLearned = lessonsLearned
+    )
+    val isDirty = !isReadOnly && currentSnapshot != serverSnapshot
+
+    LaunchedEffect(
+        currentSnapshot,
+        serverSnapshot,
+        step,
+        isReadOnly,
+        isSaving,
+        responderId,
+        incident.id
+    ) {
+        if (isReadOnly || isSaving || responderId <= 0) return@LaunchedEffect
+        if (!isDirty) {
+            clearAfterActionDraft(context, responderId, incident.id)
+            return@LaunchedEffect
+        }
+        delay(350L)
+        saveAfterActionDraft(
+            context = context,
+            responderId = responderId,
+            incidentId = incident.id,
+            step = step,
+            snapshot = currentSnapshot
+        )
+    }
+
+    fun requestClose() {
+        if (isSaving) return
+        if (isDirty) {
+            showClosePrompt = true
+        } else {
+            onDismiss()
+        }
+    }
 
     val fieldColors = OutlinedTextFieldDefaults.colors(
         focusedContainerColor = RFColors.InputBg,
@@ -2647,7 +2889,7 @@ private fun AfterActionReportDialog(
             certified
 
     Dialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = ::requestClose,
         properties = DialogProperties(
             usePlatformDefaultWidth = false,
             decorFitsSystemWindows = false,
@@ -2703,7 +2945,7 @@ private fun AfterActionReportDialog(
                                     )
                                 }
                             }
-                            IconButton(onClick = onDismiss) {
+                            IconButton(onClick = ::requestClose) {
                                 Icon(Icons.Default.Close, contentDescription = "Close report", tint = RFColors.TextSecondary)
                             }
                         }
@@ -3151,6 +3393,61 @@ private fun AfterActionReportDialog(
                 }
             }
         }
+
+        if (showClosePrompt) {
+            AlertDialog(
+                onDismissRequest = { showClosePrompt = false },
+                icon = {
+                    Icon(
+                        Icons.Default.EditNote,
+                        contentDescription = null,
+                        tint = RFColors.Warning
+                    )
+                },
+                title = { Text("Close this report?") },
+                text = {
+                    Text(
+                        "Your unsaved changes are stored as a local draft on this device."
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            saveAfterActionDraft(
+                                context = context,
+                                responderId = responderId,
+                                incidentId = incident.id,
+                                step = step,
+                                snapshot = currentSnapshot
+                            )
+                            showClosePrompt = false
+                            onDismiss()
+                        }
+                    ) {
+                        Text("Keep Draft & Close", fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    Column(horizontalAlignment = Alignment.End) {
+                        TextButton(
+                            onClick = {
+                                clearAfterActionDraft(context, responderId, incident.id)
+                                showClosePrompt = false
+                                onDismiss()
+                            }
+                        ) {
+                            Text("Discard Draft", color = RFColors.Danger)
+                        }
+                        TextButton(onClick = { showClosePrompt = false }) {
+                            Text("Continue Editing")
+                        }
+                    }
+                },
+                containerColor = RFColors.Bg,
+                titleContentColor = RFColors.Text,
+                textContentColor = RFColors.TextSecondary
+            )
+        }
     }
 }
 
@@ -3181,6 +3478,12 @@ fun ReviewsFeedbackScreen() {
     }
     var parsedRequests by remember { mutableStateOf<List<SavedResourceRequest>>(emptyList()) }
     var afterActionReports by remember { mutableStateOf<List<AfterActionReport>>(emptyList()) }
+    var completedIncidentsLoadError by remember { mutableStateOf<String?>(null) }
+    var resourceRequestsLoadError by remember { mutableStateOf<String?>(null) }
+    var afterActionReportsLoadError by remember { mutableStateOf<String?>(null) }
+    var hasLoadedCompletedIncidents by remember { mutableStateOf(false) }
+    var hasLoadedResourceRequests by remember { mutableStateOf(false) }
+    var hasLoadedAfterActionReports by remember { mutableStateOf(false) }
     var isSavingAfterActionReport by remember { mutableStateOf(false) }
     var isPullRefreshing by remember { mutableStateOf(false) }
 
@@ -3195,47 +3498,93 @@ fun ReviewsFeedbackScreen() {
     var fullScreenImageUri by remember { mutableStateOf<String?>(null) }
 
     suspend fun refreshCompletedIncidents() {
-        if (responderId <= 0) return
-        serverCompletedIncidents = incidentRepository.getCompletedIncidents(responderId)
+        if (responderId <= 0) {
+            completedIncidentsLoadError = "Responder session is unavailable. Sign in again."
+            return
+        }
+        try {
+            val loadedIncidents = incidentRepository.getCompletedIncidents(responderId)
+            serverCompletedIncidents = loadedIncidents
+            hasLoadedCompletedIncidents = true
+            completedIncidentsLoadError = null
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Log.e("PostIncidentHub", "Completed incident load failed", error)
+            completedIncidentsLoadError = if (hasLoadedCompletedIncidents) {
+                "Unable to refresh completed incidents. Previous data is still shown."
+            } else {
+                "Unable to load completed incidents. Tap Retry."
+            }
+        }
     }
 
     suspend fun refreshResourceRequests() {
-        if (responderId <= 0) return
-        parsedRequests = incidentRepository.getMyResourceRequests(responderId)
-            .map { dto ->
-                val createdAt = parseServerTimestamp(dto.created_at)
-                val updatedAt = parseServerTimestamp(dto.updated_at).takeIf { it > 0L } ?: createdAt
-                SavedResourceRequest(
-                    id = dto.id.toString(),
-                    resourceName = dto.resource_name,
-                    category = dto.category,
-                    quantity = dto.quantity.toString(),
-                    urgency = dto.urgency,
-                    status = dto.status.replaceFirstChar { it.uppercase() },
-                    incidentId = dto.incident_id.orEmpty().trim(),
-                    location = dto.location.trim(),
-                    notes = dto.notes.orEmpty().trim(),
-                    createdAt = createdAt,
-                    updatedAt = updatedAt
+        if (responderId <= 0) {
+            resourceRequestsLoadError = "Responder session is unavailable. Sign in again."
+            return
+        }
+        try {
+            val loadedRequests = incidentRepository.getMyResourceRequests(responderId)
+                .map { dto ->
+                    val createdAt = parseServerTimestamp(dto.created_at)
+                    val updatedAt = parseServerTimestamp(dto.updated_at).takeIf { it > 0L }
+                        ?: createdAt
+                    SavedResourceRequest(
+                        id = dto.id.toString(),
+                        resourceName = dto.resource_name,
+                        category = dto.category,
+                        quantity = dto.quantity.toString(),
+                        urgency = dto.urgency,
+                        status = dto.status.replaceFirstChar { it.uppercase() },
+                        incidentId = dto.incident_id.orEmpty().trim(),
+                        location = dto.location.trim(),
+                        notes = dto.notes.orEmpty().trim(),
+                        createdAt = createdAt,
+                        updatedAt = updatedAt
+                    )
+                }
+                .sortedWith(
+                    compareByDescending<SavedResourceRequest> { it.createdAt }
+                        .thenByDescending { it.id.toLongOrNull() ?: 0L }
                 )
+            parsedRequests = loadedRequests
+            hasLoadedResourceRequests = true
+            resourceRequestsLoadError = null
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Log.e("PostIncidentHub", "Equipment request load failed", error)
+            resourceRequestsLoadError = if (hasLoadedResourceRequests) {
+                "Unable to refresh equipment requests. Previous data is still shown."
+            } else {
+                "Unable to load equipment requests. Tap Retry."
             }
-            .sortedWith(
-                compareByDescending<SavedResourceRequest> { it.createdAt }
-                    .thenByDescending { it.id.toLongOrNull() ?: 0L }
-            )
+        }
     }
 
     suspend fun refreshAfterActionReports() {
-        if (responderId <= 0) return
-        operationalRepository.getAfterActionReports(responderId)
-            .onSuccess { records ->
-                afterActionReports = records
-                    .map { it.toUiReport() }
-                    .sortedByDescending { it.updatedAt }
+        if (responderId <= 0) {
+            afterActionReportsLoadError = "Responder session is unavailable. Sign in again."
+            return
+        }
+        try {
+            val records = operationalRepository.getAfterActionReports(responderId).getOrThrow()
+            afterActionReports = records
+                .map { it.toUiReport() }
+                .sortedByDescending { it.updatedAt }
+            hasLoadedAfterActionReports = true
+            afterActionReportsLoadError = null
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Log.e("AfterActionReport", "Load failed", error)
+            afterActionReportsLoadError = if (hasLoadedAfterActionReports) {
+                "Unable to refresh after-action reports. Previous data is still shown."
+            } else {
+                "Unable to load after-action reports. Tap Retry."
             }
-            .onFailure { error ->
-                Log.e("AfterActionReport", "Load failed", error)
-            }
+        }
     }
 
     LaunchedEffect(responderId) { refreshCompletedIncidents() }
@@ -3438,6 +3787,37 @@ fun ReviewsFeedbackScreen() {
         }
     }
 
+    val incidentReportFirstLoadFailed =
+        (!hasLoadedCompletedIncidents && completedIncidentsLoadError != null) ||
+                (!hasLoadedAfterActionReports && afterActionReportsLoadError != null)
+    val selectedTabLoadError = when (hubTab) {
+        ReportHubTab.INCIDENTS -> when {
+            completedIncidentsLoadError != null && afterActionReportsLoadError != null ->
+                if (incidentReportFirstLoadFailed) {
+                    "Unable to load incident report data. Tap Retry."
+                } else {
+                    "Unable to refresh incident report data. Previous data is still shown."
+                }
+            completedIncidentsLoadError != null -> completedIncidentsLoadError
+            else -> afterActionReportsLoadError
+        }
+        ReportHubTab.HISTORY -> afterActionReportsLoadError
+        ReportHubTab.RESOURCES -> resourceRequestsLoadError
+    }
+    val selectedTabFirstLoadFailed = when (hubTab) {
+        ReportHubTab.INCIDENTS -> incidentReportFirstLoadFailed
+        ReportHubTab.HISTORY ->
+            !hasLoadedAfterActionReports && afterActionReportsLoadError != null
+        ReportHubTab.RESOURCES ->
+            !hasLoadedResourceRequests && resourceRequestsLoadError != null
+    }
+    val selectedTabHasSuccessfulLoad = when (hubTab) {
+        ReportHubTab.INCIDENTS ->
+            hasLoadedCompletedIncidents && hasLoadedAfterActionReports
+        ReportHubTab.HISTORY -> hasLoadedAfterActionReports
+        ReportHubTab.RESOURCES -> hasLoadedResourceRequests
+    }
+
     Scaffold(containerColor = RFColors.SurfaceBg) { paddingValues ->
         AppPullToRefresh(
             isRefreshing = isPullRefreshing,
@@ -3455,12 +3835,14 @@ fun ReviewsFeedbackScreen() {
             ) {
                 item { PostIncidentHeader() }
 
-                item {
-                    OperationalWorkflowCard(
-                        pendingCount = pendingReportCount,
-                        submittedCount = submittedReportCount,
-                        approvedCount = approvedReportCount
-                    )
+                if (hasLoadedCompletedIncidents && hasLoadedAfterActionReports) {
+                    item {
+                        OperationalWorkflowCard(
+                            pendingCount = pendingReportCount,
+                            submittedCount = submittedReportCount,
+                            approvedCount = approvedReportCount
+                        )
+                    }
                 }
 
                 item {
@@ -3477,7 +3859,40 @@ fun ReviewsFeedbackScreen() {
                     )
                 }
 
-                when (hubTab) {
+                selectedTabLoadError?.let { message ->
+                    item {
+                        PostIncidentLoadErrorCard(
+                            message = message,
+                            onRetry = ::refreshPostIncidentHub
+                        )
+                    }
+                }
+
+                if (!selectedTabHasSuccessfulLoad && selectedTabLoadError == null) {
+                    item {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 18.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                                color = RFColors.Primary
+                            )
+                            Spacer(Modifier.width(9.dp))
+                            Text(
+                                "Loading ${hubTab.label.lowercase(Locale.US)}...",
+                                color = RFColors.TextSecondary,
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+                }
+
+                if (selectedTabHasSuccessfulLoad && !selectedTabFirstLoadFailed) when (hubTab) {
                     ReportHubTab.INCIDENTS -> {
                         item {
                             Column(
@@ -3809,6 +4224,7 @@ fun ReviewsFeedbackScreen() {
         val initial = reportByIncident[normalizedIncidentId(incident.id)]
         AfterActionReportDialog(
             incident = incident,
+            responderId = responderId,
             responderName = responderName,
             initialReport = initial,
             isSaving = isSavingAfterActionReport,
@@ -3821,6 +4237,7 @@ fun ReviewsFeedbackScreen() {
                             operationalRepository.upsertAfterActionReport(
                                 report.toApiRequest(responderId)
                             ).onSuccess {
+                                clearAfterActionDraft(context, responderId, report.incidentId)
                                 refreshAfterActionReports()
                                 reportRefreshKey++
                                 reportTarget = null

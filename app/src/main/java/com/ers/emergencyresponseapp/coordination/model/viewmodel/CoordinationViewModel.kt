@@ -31,11 +31,13 @@ import com.ers.emergencyresponseapp.coordination.model.ChatMessage
 import com.ers.emergencyresponseapp.coordination.model.ChatThread
 import com.ers.emergencyresponseapp.coordination.model.MessageStatus
 import com.ers.emergencyresponseapp.coordination.model.MessageType
+import com.ers.emergencyresponseapp.coordination.model.ReplyMessageCodec
 import com.ers.emergencyresponseapp.coordination.model.ThreadType
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.MutableData
+import com.google.firebase.database.ServerValue
 import com.google.firebase.database.Transaction
 import com.google.firebase.database.ValueEventListener
 import kotlinx.coroutines.launch
@@ -57,6 +59,10 @@ import java.io.IOException
 import android.util.Log
 
 class CoordinationViewModel(application: Application) : AndroidViewModel(application) {
+
+    private companion object {
+        const val TYPING_INACTIVITY_TIMEOUT_MS = 2_500L
+    }
 
     // ── Repositories ─────────────────────────────────────────────────────────
     private val notificationRepository = NotificationRepository()
@@ -114,9 +120,15 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
     private var threadsListener: ValueEventListener? = null
     private var messagesListenerPath: String? = null
     private var respondersListener: ValueEventListener? = null
+    private var typingListener: ValueEventListener? = null
+    private var typingListenerPath: String? = null
+    private var typingStopJob: kotlinx.coroutines.Job? = null
+    private var typingWriteThreadId: String? = null
+    private var isLocalTyping = false
 
     private var activeGroupId: Int? = null
     private var groupPollingJob: kotlinx.coroutines.Job? = null
+    private var lastMarkedGroupRead: Pair<Int, Int>? = null
     private val groupMessagesRequestId = AtomicInteger(0)
     private val hasPrimedThread = mutableSetOf<String>()
     private val lastNotifiedMessageIdByThread = mutableMapOf<String, String>()
@@ -137,6 +149,8 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
     //  CONNECT — called once when CoordinationPortalScreen opens
     // ─────────────────────────────────────────────────────────────────────────
     fun connectRealtime(userId: String, userName: String, userRole: String) {
+        clearTyping()
+        stopListeningToTyping()
         myUserId   = userId
         myUserName = userName
         myRole     = userRole
@@ -410,9 +424,10 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                     if (!threadId.startsWith("pm_")) continue
 
                     latestSnapshot[threadId] = DirectThreadPreview(
-                        lastMessage = thread.child("lastMessage")
-                            .getValue(String::class.java)
-                            .orEmpty(),
+                        lastMessage = ReplyMessageCodec.displayBody(
+                            thread.child("lastMessage")
+                                .getValue(String::class.java)
+                        ),
                         lastMessageTime = thread.readLongChild("lastMessageTime")
                     )
 
@@ -491,7 +506,9 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
                     val isMember = item.optBoolean("isMember")
                     val requestPending = item.optBoolean("requestPending")
-                    val latestMessage = item.optString("lastMessage").trim()
+                    val latestMessage = ReplyMessageCodec
+                        .displayBody(item.optString("lastMessage"))
+                        .trim()
                     val latestMessageTime = item.optLong("lastMessageTime", 0L)
 
                     loadedGroups.add(
@@ -591,12 +608,15 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         // Remove only screen-scoped listeners. Presence belongs to the signed-in
         // app session and remains online during the background grace period.
         // Remove Firebase listeners to avoid memory leaks
+        clearTyping()
+        stopListeningToTyping()
         respondersListener?.let { db.child("users").removeEventListener(it) }
         threadsListener?.let { db.child("threads").removeEventListener(it) }
         stopListeningToMessages()
         groupPollingJob?.cancel()
         groupPollingJob = null
         activeGroupId = null
+        lastMarkedGroupRead = null
         directThreadPreviewByThreadId.clear()
         privateUnreadByThreadId.clear()
     }
@@ -607,7 +627,10 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
     // ─────────────────────────────────────────────────────────────────────────
     fun selectResponderAndLoadHistory(meId: String, responder: ResponderBrief) {
         // Leaving department chat: stop group polling immediately to avoid mixed messages.
+        clearTyping()
+        stopListeningToTyping()
         activeGroupId = null
+        lastMarkedGroupRead = null
         groupPollingJob?.cancel()
         groupPollingJob = null
 
@@ -626,6 +649,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
         // Start real-time message listener for this thread
         listenToMessages(thread.id)
+        listenToTyping(thread.id)
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -633,6 +657,8 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
     // ─────────────────────────────────────────────────────────────────────────
     fun selectDepartmentAndLoadHistory(dept: DepartmentInfo) {
         // Leaving private chat: remove old Firebase private listener.
+        clearTyping()
+        stopListeningToTyping()
         stopListeningToMessages()
 
         selectedDepartment.value = dept
@@ -640,6 +666,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         markDepartmentRead(dept.name)
 
         val groupId = dept.name.toIntOrNull() ?: return
+        lastMarkedGroupRead = null
 
         currentThread.value = ChatThread(
             id = "group_$groupId",
@@ -652,6 +679,111 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         loadInteragencyGroupMessages(groupId)
         activeGroupId = groupId
         startGroupPolling(groupId)
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    //  PRIVATE CHAT TYPING STATE
+    // ────────────────────────────────────────────────────────────────────────────
+    fun onComposerTextChanged(hasText: Boolean) {
+        val thread = currentThread.value
+        if (!hasText || thread?.type != ThreadType.PRIVATE || myUserId.isBlank()) {
+            clearTyping()
+            return
+        }
+
+        typingStopJob?.cancel()
+
+        if (!isLocalTyping || typingWriteThreadId != thread.id) {
+            clearTypingEntry(typingWriteThreadId)
+            typingWriteThreadId = thread.id
+            isLocalTyping = true
+
+            val typingRef = db.child("threads")
+                .child(thread.id)
+                .child("typing")
+                .child(myUserId)
+
+            typingRef.onDisconnect().removeValue()
+                .addOnFailureListener { error ->
+                    Log.w("CoordinationVM", "Failed to register typing cleanup", error)
+                }
+            typingRef.updateChildren(
+                mapOf(
+                    "name" to myUserName.ifBlank { myUserId },
+                    "updatedAt" to ServerValue.TIMESTAMP
+                )
+            ).addOnFailureListener { error ->
+                if (typingWriteThreadId == thread.id) {
+                    typingWriteThreadId = null
+                    isLocalTyping = false
+                }
+                Log.w("CoordinationVM", "Failed to publish typing state", error)
+            }
+        }
+
+        typingStopJob = viewModelScope.launch {
+            kotlinx.coroutines.delay(TYPING_INACTIVITY_TIMEOUT_MS)
+            clearTyping()
+        }
+    }
+
+    fun clearTyping() {
+        typingStopJob?.cancel()
+        typingStopJob = null
+
+        val threadId = typingWriteThreadId
+        typingWriteThreadId = null
+        isLocalTyping = false
+        clearTypingEntry(threadId)
+    }
+
+    private fun clearTypingEntry(threadId: String?) {
+        if (threadId.isNullOrBlank() || myUserId.isBlank()) return
+
+        db.child("threads")
+            .child(threadId)
+            .child("typing")
+            .child(myUserId)
+            .removeValue()
+            .addOnFailureListener { error ->
+                Log.w("CoordinationVM", "Failed to clear typing state", error)
+            }
+    }
+
+    private fun listenToTyping(threadId: String) {
+        stopListeningToTyping()
+        if (currentThread.value?.type != ThreadType.PRIVATE || myUserId.isBlank()) return
+
+        typingListenerPath = "threads/$threadId/typing"
+        typingListener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                if (currentThread.value?.id != threadId) return
+                isPeerTyping = snapshot.children.any { typingEntry ->
+                    typingEntry.key != myUserId
+                }
+            }
+
+            override fun onCancelled(error: DatabaseError) {
+                isPeerTyping = false
+                Log.w("CoordinationVM", "Typing listener was cancelled", error.toException())
+            }
+        }
+
+        db.child("threads")
+            .child(threadId)
+            .child("typing")
+            .addValueEventListener(typingListener!!)
+    }
+
+    private fun stopListeningToTyping() {
+        val path = typingListenerPath
+        val listener = typingListener
+        if (path != null && listener != null) {
+            db.child(path).removeEventListener(listener)
+        }
+        typingListener = null
+        typingListenerPath = null
+        isPeerTyping = false
     }
 
     private fun loadInteragencyGroupMessages(groupId: Int) {
@@ -735,8 +867,14 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                         messages.addAll((loaded + stillPendingLocal).sortedBy { it.createdAt })
 
                         // We're actively viewing this thread — mark the latest message as read
-                        loaded.maxOfOrNull { it.id.toIntOrNull() ?: 0 }?.let { maxId ->
-                            if (maxId > 0) markGroupThreadRead(groupId, maxId)
+                        if (
+                            AppState.isForeground &&
+                            AppScreenTracker.currentScreen == "COORDINATION" &&
+                            AppScreenTracker.currentThreadId == "group_$groupId"
+                        ) {
+                            loaded.maxOfOrNull { it.id.toIntOrNull() ?: 0 }?.let { maxId ->
+                                if (maxId > 0) markGroupThreadRead(groupId, maxId)
+                            }
                         }
                     }
                 }
@@ -767,6 +905,9 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
     private fun markGroupThreadRead(groupId: Int, lastReadId: Int) {
         if (lastReadId <= 0 || myUserId.isBlank()) return
+        val marker = groupId to lastReadId
+        if (lastMarkedGroupRead == marker) return
+        lastMarkedGroupRead = marker
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val formBody = okhttp3.FormBody.Builder()
@@ -782,6 +923,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
                 executeJson(request)
             } catch (e: Exception) {
+                if (lastMarkedGroupRead == marker) lastMarkedGroupRead = null
                 e.printStackTrace()
             }
         }
@@ -951,7 +1093,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
             message.type == MessageType.AUDIO -> "Sent a voice message"
             message.type == MessageType.IMAGE -> "Sent an image"
             message.type == MessageType.FILE -> "Sent a file"
-            !message.text.isNullOrBlank() -> message.text!!.trim()
+            !message.text.isNullOrBlank() -> ReplyMessageCodec.displayBody(message.text).trim()
             else -> "New message"
         }
 
@@ -1099,6 +1241,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
     ) {
         val cleanText = text.trim()
         if (cleanText.isBlank()) return
+        val conversationPreview = ReplyMessageCodec.displayBody(cleanText).trim()
 
         val now = System.currentTimeMillis()
         val messageId = db.child("messages").child(threadId).push().key
@@ -1118,11 +1261,11 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         )
 
         val previousPreview = directThreadPreviewByThreadId[threadId]
-        updateLocalThreadPreview(threadId, cleanText, now)
+        updateLocalThreadPreview(threadId, conversationPreview, now)
 
         val updates: Map<String, Any?> = mapOf(
             "messages/$threadId/$messageId" to data,
-            "threads/$threadId/lastMessage" to cleanText,
+            "threads/$threadId/lastMessage" to conversationPreview,
             "threads/$threadId/lastMessageTime" to now,
             "threads/$threadId/lastSenderId" to senderId,
             "threads/$threadId/lastSenderName" to senderName,
@@ -1140,7 +1283,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                     messageId = messageId,
                     senderName = senderName,
                     messageType = "text",
-                    preview = cleanText
+                    preview = conversationPreview
                 )
             }
             .addOnFailureListener { error ->
@@ -1640,6 +1783,12 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
     fun clearNotification() {
         latestNotification.value = null
+    }
+
+    override fun onCleared() {
+        clearTyping()
+        stopListeningToTyping()
+        super.onCleared()
     }
 
     // ─────────────────────────────────────────────────────────────────────────

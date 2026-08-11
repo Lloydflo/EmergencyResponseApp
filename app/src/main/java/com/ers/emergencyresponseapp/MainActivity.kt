@@ -1,6 +1,8 @@
 package com.ers.emergencyresponseapp
 
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import android.view.WindowManager
@@ -64,6 +66,8 @@ import com.ers.emergencyresponseapp.notification.NotificationDestination
 import com.ers.emergencyresponseapp.notification.NotificationNavigation
 import com.ers.emergencyresponseapp.notification.PushTokenManager
 import com.ers.emergencyresponseapp.presence.ResponderPresenceManager
+import com.ers.emergencyresponseapp.routing.ActiveRouteSessionStore
+import com.ers.emergencyresponseapp.routing.RouteMonitoringService
 import com.ers.emergencyresponseapp.ui.components.ConnectivityStatusBanner
 import com.ers.emergencyresponseapp.ui.theme.EmergencyResponseAppTheme
 import com.ers.emergencyresponseapp.ui.theme.ThemeController
@@ -168,6 +172,8 @@ class MainActivity : ComponentActivity() {
                     }
                     NotificationNavigation.clear()
                     AppNotificationManager.clearEventHistory(context.applicationContext)
+                    context.stopService(Intent(context, RouteMonitoringService::class.java))
+                    ActiveRouteSessionStore(context.applicationContext).clearSession()
                     authPrefs.edit().clear().apply()
                     userPrefs.edit().clear().apply()
                     context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
@@ -234,6 +240,20 @@ class MainActivity : ComponentActivity() {
                     if (!sessionValid) return@LaunchedEffect
 
                     val route = when (destination) {
+                        NotificationDestination.ActiveRoute -> {
+                            val session = ActiveRouteSessionStore(context.applicationContext)
+                                .read(sessionResponderId)
+                            if (session == null) {
+                                NotificationNavigation.clear(destination)
+                                return@LaunchedEffect
+                            }
+                            "live_map/${session.destinationLat}/${session.destinationLng}/" +
+                                    Uri.encode(session.destinationAddress) +
+                                    "?incidentId=${Uri.encode(session.incidentId)}" +
+                                    "&assignmentId=${Uri.encode(session.assignmentId.orEmpty())}" +
+                                    "&responderId=$sessionResponderId&viewOnly=false"
+                        }
+
                         is NotificationDestination.PrivateChat,
                         is NotificationDestination.DepartmentChat -> "coordination_portal"
 
@@ -245,6 +265,9 @@ class MainActivity : ComponentActivity() {
                         navController.navigate(route) {
                             launchSingleTop = true
                         }
+                    }
+                    if (destination == NotificationDestination.ActiveRoute) {
+                        NotificationNavigation.clear(destination)
                     }
                 }
                 val showBottomBar = currentRoute != null &&

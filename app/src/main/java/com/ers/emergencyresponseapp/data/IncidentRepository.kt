@@ -140,12 +140,12 @@ class IncidentRepository {
     }
 
     suspend fun getMyResourceRequests(responderId: Int): List<MyResourceRequestDto> {
-        return try {
-            val response = api.getMyResourceRequests(responderId)
-            if (response.success) response.requests ?: emptyList() else emptyList()
-        } catch (e: Exception) {
-            emptyList()
+        val response = api.getMyResourceRequests(responderId)
+        if (response.success) {
+            return response.requests ?: emptyList()
         }
+
+        throw Exception(response.message ?: "Unable to load equipment/supply requests")
     }
 
     suspend fun cancelResourceRequest(requestId: Int, responderId: Int): Result<Unit> {
@@ -186,26 +186,12 @@ class IncidentRepository {
     suspend fun getCompletedIncidents(
         responderId: Int
     ): List<com.ers.emergencyresponseapp.network.CompletedIncidentDto> {
-        return try {
-            val response = api.getCompletedIncidents(responderId)
-
-            if (response.success) {
-                response.incidents ?: emptyList()
-            } else {
-                Log.e(
-                    "IncidentRepository",
-                    "Server rejected completed incidents: ${response.message}"
-                )
-                emptyList()
-            }
-        } catch (e: Exception) {
-            Log.e(
-                "IncidentRepository",
-                "Failed to load completed incidents",
-                e
-            )
-            emptyList()
+        val response = api.getCompletedIncidents(responderId)
+        if (response.success) {
+            return response.incidents ?: emptyList()
         }
+
+        throw Exception(response.message ?: "Unable to load completed incidents")
     }
 
     suspend fun setUnitPresence(

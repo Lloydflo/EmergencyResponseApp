@@ -8,7 +8,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.location.Location
 import android.location.LocationManager
 import android.net.Uri
 import android.os.Build
@@ -59,6 +58,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -83,6 +83,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -103,7 +104,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -145,17 +145,22 @@ import com.ers.emergencyresponseapp.notification.NotificationNavigation
 import com.ers.emergencyresponseapp.ui.components.AppPullToRefresh
 import com.ers.emergencyresponseapp.features.assigned.toDomain
 import com.ers.emergencyresponseapp.home.Incident
+import com.ers.emergencyresponseapp.home.IncidentPrimaryAction
 import com.ers.emergencyresponseapp.home.IncidentPriority
+import com.ers.emergencyresponseapp.home.IncidentStatus
 import com.ers.emergencyresponseapp.home.IncidentType
+import com.ers.emergencyresponseapp.home.ResponderWorkflowPolicy
+import com.ers.emergencyresponseapp.home.composables.BackupIncidentOption
 import com.ers.emergencyresponseapp.home.composables.BackupRequest
 import com.ers.emergencyresponseapp.home.composables.DepartmentSelectionDialog
 import com.ers.emergencyresponseapp.network.ConnectivityStatus
-import com.ers.emergencyresponseapp.network.MarkRouteArrivedRequest
 import com.ers.emergencyresponseapp.network.RetrofitProvider
 import com.ers.emergencyresponseapp.network.stringToRequestBody
 import com.ers.emergencyresponseapp.network.uriStringToMultipartPart
 import com.ers.emergencyresponseapp.network.uriToProfileImagePart
 import com.ers.emergencyresponseapp.network.userIdToRequestBody
+import com.ers.emergencyresponseapp.routing.ActiveRouteSessionMetadata
+import com.ers.emergencyresponseapp.routing.ActiveRouteSessionStore
 import com.ers.emergencyresponseapp.routing.RouteMonitoringService
 import com.ers.emergencyresponseapp.ui.theme.ThemeController
 import com.google.android.gms.location.LocationCallback
@@ -170,6 +175,41 @@ import java.util.Locale
 import androidx.core.content.FileProvider
 import androidx.compose.material.icons.filled.Info
 
+
+private fun decodeSampledProofBitmap(context: Context, uriString: String): Bitmap? {
+    val uri = Uri.parse(uriString)
+
+    fun decode(options: BitmapFactory.Options): Bitmap? = if (uri.scheme == "file") {
+        uri.path?.let { BitmapFactory.decodeFile(it, options) }
+    } else {
+        context.contentResolver.openInputStream(uri)?.use { stream ->
+            BitmapFactory.decodeStream(stream, null, options)
+        }
+    }
+
+    return runCatching {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        decode(bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
+
+        val targetWidth = 1_280
+        val targetHeight = 720
+        var sampleSize = 1
+        while (
+            bounds.outWidth / (sampleSize * 2) >= targetWidth &&
+            bounds.outHeight / (sampleSize * 2) >= targetHeight
+        ) {
+            sampleSize *= 2
+        }
+
+        decode(
+            BitmapFactory.Options().apply {
+                inSampleSize = sampleSize
+                inPreferredConfig = Bitmap.Config.RGB_565
+            }
+        )
+    }.getOrNull()
+}
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -240,6 +280,16 @@ private fun crimeCardBrush(): Brush {
     return Brush.verticalGradient(listOf(accent.copy(alpha = 0.09f), AppColors.CardBg))
 }
 
+private fun disasterCardBrush(): Brush {
+    val accent = if (ThemeController.isDarkMode.value) Color(0xFFCE93D8) else Color(0xFF8E24AA)
+    return Brush.verticalGradient(listOf(accent.copy(alpha = 0.09f), AppColors.CardBg))
+}
+
+private fun generalCardBrush(): Brush {
+    val accent = if (ThemeController.isDarkMode.value) Color(0xFF90A4AE) else Color(0xFF546E7A)
+    return Brush.verticalGradient(listOf(accent.copy(alpha = 0.09f), AppColors.CardBg))
+}
+
 private fun fireBarBrush(): Brush {
     val accent = if (ThemeController.isDarkMode.value) Color(0xFFEF5350) else Color(0xFFE53935)
     return Brush.horizontalGradient(listOf(accent.copy(alpha = 0.4f), accent))
@@ -255,7 +305,13 @@ private fun crimeBarBrush(): Brush {
     return Brush.horizontalGradient(listOf(accent.copy(alpha = 0.4f), accent))
 }
 
-private fun cardBrushesStable() = listOf(fireCardBrush(), medicalCardBrush(), crimeCardBrush())
+private fun cardBrushesStable() = listOf(
+    fireCardBrush(),
+    medicalCardBrush(),
+    crimeCardBrush(),
+    disasterCardBrush(),
+    generalCardBrush()
+)
 private fun barBrushesStable()  = listOf(fireBarBrush(),  medicalBarBrush(),  crimeBarBrush())
 
 
@@ -270,6 +326,12 @@ private fun isDeviceLocationEnabled(context: Context): Boolean {
 }
 
 private enum class ResponderOnlineStatus { Online, Offline }
+
+private data class PendingRouteLaunch(
+    val incidentId: String,
+    val assignmentId: String?,
+    val updateStatusToEnRoute: Boolean
+)
 
 
 private fun saveUriToAppStorage(ctx: Context, uri: Uri, userId: Int): String? {
@@ -294,10 +356,12 @@ private fun startRouteUpdateMonitoring(
     destLat: Double?,
     destLng: Double?,
     destAddress: String?
-) {
+): Boolean {
+    if (!ResponderWorkflowPolicy.hasValidCoordinates(destLat, destLng)) {
+        return false
+    }
     Log.d("RouteMonitor", "Starting service for incident=$incidentId")
     Log.d("LiveGPS", "Calling startForegroundService incident=$incidentId")
-    Toast.makeText(context, "Starting monitor…", Toast.LENGTH_SHORT).show()
     val intent = Intent(context, RouteMonitoringService::class.java).apply {
         putExtra(RouteMonitoringService.EXTRA_INCIDENT_ID, incidentId)
         putExtra(RouteMonitoringService.EXTRA_ASSIGNMENT_ID, assignmentId.orEmpty())
@@ -305,7 +369,18 @@ private fun startRouteUpdateMonitoring(
         putExtra(RouteMonitoringService.EXTRA_DEST_LNG,      destLng ?: Double.NaN)
         putExtra(RouteMonitoringService.EXTRA_DEST_ADDRESS,  destAddress ?: "")
     }
-    ContextCompat.startForegroundService(context, intent)
+    return try {
+        ContextCompat.startForegroundService(context, intent)
+        true
+    } catch (error: Exception) {
+        Log.e("RouteMonitor", "Unable to start route monitoring", error)
+        Toast.makeText(
+            context,
+            "Unable to start live tracking: ${error.message ?: "service unavailable"}",
+            Toast.LENGTH_LONG
+        ).show()
+        false
+    }
 }
 
 private fun formatUnitStatus(status: String): String {
@@ -697,97 +772,129 @@ private fun AssignedIncidentEmptyState(
 @Composable
 private fun AssignedActionButtons(
     inc: Incident,
-    context: Context,
-    navController: NavHostController,
-    currentLatitude: Double?,
-    currentLongitude: Double?,
-    onSceneEnabled: Boolean,
-    setOnSceneEnabled: (Boolean) -> Unit,
-    setNavTarget: (id: String, lat: Double?, lng: Double?) -> Unit,
-    startOnSceneTracking: () -> Unit,
-    requestOnScenePermission: () -> Unit,
-    // AssignedActionButtons signature
-    navigateToLocation: (Double?, Double?, String?, String?, String?) -> Unit,
-    sendOnSceneReport: (Incident) -> Unit,
-    hasLocationPermission: Boolean,
+    dataFresh: Boolean,
     networkAvailable: Boolean,
+    hasStoredRoute: Boolean,
+    hasConflictingActiveRoute: Boolean,
+    isAnyRouteActionInProgress: Boolean,
+    isRouteActionInProgress: Boolean,
+    onStartResponse: (Incident) -> Unit,
+    onResumeNavigation: (Incident) -> Unit,
     openMarkDone: (Incident) -> Unit,
-    onNavigateStatusUpdate: (Incident) -> Unit
 ) {
     val completeColor = if (ThemeController.isDarkMode.value) Color(0xFF81C784) else Color(0xFF2E7D32)
+    val coordinatesAvailable = ResponderWorkflowPolicy.hasValidCoordinates(
+        inc.latitude,
+        inc.longitude
+    )
+    val action = ResponderWorkflowPolicy.primaryAction(inc.status)
+    val actionDataReady = if (
+        action == IncidentPrimaryAction.RESUME_NAVIGATION && !networkAvailable
+    ) {
+        hasStoredRoute
+    } else {
+        dataFresh
+    }
 
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Button(
-            enabled = networkAvailable,
-            onClick = {
-                context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
-                    .edit()
-                    .putString("last_nav_incident_id", inc.id)
-                    .apply()
+        when (action) {
+            IncidentPrimaryAction.START_RESPONSE,
+            IncidentPrimaryAction.RESUME_NAVIGATION -> {
+                val isStart = action == IncidentPrimaryAction.START_RESPONSE
+                Button(
+                    enabled = actionDataReady &&
+                            !hasConflictingActiveRoute &&
+                            coordinatesAvailable &&
+                            !isAnyRouteActionInProgress &&
+                            (!isStart || networkAvailable),
+                    onClick = {
+                        if (isStart) onStartResponse(inc) else onResumeNavigation(inc)
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = AppColors.Primary,
+                        contentColor = Color.White
+                    )
+                ) {
+                    if (isRouteActionInProgress) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = Color.White
+                        )
+                    } else {
+                        Icon(Icons.Default.LocationOn, contentDescription = null)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        when {
+                            isRouteActionInProgress -> "Preparing route…"
+                            isStart -> "Start Response"
+                            else -> "Resume Navigation"
+                        },
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
 
-                setOnSceneEnabled(false)
-                setNavTarget(inc.id, inc.latitude, inc.longitude)
+            IncidentPrimaryAction.COMPLETE_INCIDENT -> {
+                OutlinedButton(
+                    enabled = dataFresh &&
+                            networkAvailable &&
+                            !isAnyRouteActionInProgress,
+                    onClick = { openMarkDone(inc) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, completeColor.copy(alpha = 0.65f)),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = completeColor)
+                ) {
+                    Icon(Icons.Default.Done, contentDescription = null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Complete Incident", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
 
-                startRouteUpdateMonitoring(
-                    context,
-                    inc.id,
-                    inc.assignmentId,
-                    inc.latitude,
-                    inc.longitude,
-                    inc.location
+            IncidentPrimaryAction.NONE -> {
+                Text(
+                    text = if (inc.status == IncidentStatus.RESOLVED) {
+                        "This response is already closed."
+                    } else {
+                        "Dispatch status is unavailable. Refresh before taking action."
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = AppColors.TextSecondary,
+                    fontSize = 12.sp,
+                    textAlign = TextAlign.Center
                 )
-                onNavigateStatusUpdate(inc)
-                if (hasLocationPermission)
-                    startOnSceneTracking()
-                else
-                    requestOnScenePermission()
-                setOnSceneEnabled(false)
-
-                // inside AssignedActionButtons's "Navigate to Incident" onClick
-                navigateToLocation(inc.latitude, inc.longitude, inc.location, inc.id, inc.assignmentId)
-                context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
-                    .edit()
-                    .putBoolean("pending_en_route_check", true)
-                    .putString("pending_en_route_incident_id", inc.id)
-                    .commit()
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(48.dp),
-            shape = RoundedCornerShape(14.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = AppColors.Primary,
-                contentColor = Color.White
-            )
-        ) {
-            Icon(Icons.Default.LocationOn, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text("Navigate to Incident", fontWeight = FontWeight.SemiBold)
+            }
         }
 
-        OutlinedButton(
-            enabled = networkAvailable,
-            onClick = { openMarkDone(inc) },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(48.dp),
-            shape = RoundedCornerShape(14.dp),
-            border = BorderStroke(1.dp, completeColor.copy(alpha = 0.65f)),
-            colors = ButtonDefaults.outlinedButtonColors(
-                contentColor = completeColor
-            )
-        ) {
-            Icon(Icons.Default.Done, contentDescription = null)
-            Spacer(Modifier.width(6.dp))
-            Text("Complete Incident", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        val actionWarning = when {
+            hasConflictingActiveRoute && action in setOf(
+                IncidentPrimaryAction.START_RESPONSE,
+                IncidentPrimaryAction.RESUME_NAVIGATION
+            ) -> "Another incident route is active. Finish or cancel it before switching responses."
+            !actionDataReady -> "Refreshing this assignment with dispatch. Actions are temporarily disabled."
+            !coordinatesAvailable && action in setOf(
+                IncidentPrimaryAction.START_RESPONSE,
+                IncidentPrimaryAction.RESUME_NAVIGATION
+            ) -> "Dispatch has not provided valid map coordinates for this incident."
+            !networkAvailable && action != IncidentPrimaryAction.RESUME_NAVIGATION ->
+                "Reconnect before changing this assignment's status."
+            else -> null
         }
 
-        if (!networkAvailable) {
+        actionWarning?.let { warning ->
             Text(
-                text = "Reconnect to update the assignment, navigate, or complete this incident.",
+                text = warning,
                 modifier = Modifier.fillMaxWidth(),
                 color = AppColors.DangerText,
                 fontSize = 11.sp,
@@ -1065,6 +1172,9 @@ fun HomeScreen(
     val homeDataCache = remember(context.applicationContext) {
         HomeDataCache(context.applicationContext)
     }
+    val activeRouteStore = remember(context.applicationContext) {
+        ActiveRouteSessionStore(context.applicationContext)
+    }
     var cachedAssignedSnapshot by remember(responderId) {
         mutableStateOf(homeDataCache.readAssigned(responderId))
     }
@@ -1227,11 +1337,6 @@ fun HomeScreen(
     }
     var lastNotifiedIncidentId        by remember { mutableStateOf(prefs.getString("last_notified_incident_id", null)) }
     var lastAssignedIncidentId        by remember { mutableStateOf(prefs.getString("last_assigned_incident_id", null)) }
-    var navDestinationIncidentId      by remember { mutableStateOf<String?>(null) }
-    var navDestinationLat             by remember { mutableStateOf<Double?>(null) }
-    var navDestinationLng             by remember { mutableStateOf<Double?>(null) }
-    val onSceneEnabledMap             = remember { mutableStateMapOf<String, Boolean>() }
-
     // ── DIALOG FLAGS ──
     var showDepartmentSelection by remember { mutableStateOf(false) }
     var showSettingsDialog      by remember { mutableStateOf(false) }
@@ -1334,12 +1439,19 @@ fun HomeScreen(
     var markTargetIncidentInc  by remember { mutableStateOf<Incident?>(null) }
     var proofNotes             by remember { mutableStateOf("") }
     var selectedProofUri       by remember { mutableStateOf<String?>(null) }
+    var isSubmittingCompletion by remember { mutableStateOf(false) }
+    var completionError        by remember { mutableStateOf<String?>(null) }
+    var pendingRouteLaunch     by remember { mutableStateOf<PendingRouteLaunch?>(null) }
+    var isRouteActionIncidentId by remember { mutableStateOf<String?>(null) }
 
     var pendingCameraUri by remember {
         mutableStateOf<Uri?>(null)
     }
 
     var pendingCameraFile by remember {
+        mutableStateOf<File?>(null)
+    }
+    var selectedProofFile by remember {
         mutableStateOf<File?>(null)
     }
 
@@ -1363,7 +1475,13 @@ fun HomeScreen(
                 val file = pendingCameraFile
 
                 if (file != null && file.exists() && file.length() > 0L) {
+                    selectedProofFile
+                        ?.takeIf { previous -> previous != file }
+                        ?.delete()
+                    selectedProofFile = file
                     selectedProofUri = Uri.fromFile(file).toString()
+                    pendingCameraFile = null
+                    pendingCameraUri = null
 
                     Log.d(
                         "CompletionPhoto",
@@ -1372,7 +1490,9 @@ fun HomeScreen(
                                 "size=${file.length()} bytes"
                     )
                 } else {
-                    selectedProofUri = null
+                    file?.delete()
+                    pendingCameraFile = null
+                    pendingCameraUri = null
 
                     Toast.makeText(
                         context,
@@ -1487,6 +1607,56 @@ fun HomeScreen(
                             backupLoading ||
                             !hasCompletedBackupRequest
                     )
+
+    val assignedSnapshotAgeMillis = assignedUi.assignedLastSuccessMillis?.let {
+        System.currentTimeMillis() - it
+    }
+    val assignedActionsFresh =
+        !isUsingCachedAssigned &&
+                !confirmingAssignedEmpty &&
+                assignedUi.assignedLastSuccessMillis != null &&
+                assignedSnapshotAgeMillis != null &&
+                assignedSnapshotAgeMillis in 0..30_000L &&
+                assignedUi.assignedError.isNullOrBlank()
+
+    LaunchedEffect(
+        displayedAssignedDtos,
+        assignedUi.assignedLastSuccessMillis,
+        assignedActionsFresh,
+        responderId
+    ) {
+        if (!assignedActionsFresh || responderId <= 0) return@LaunchedEffect
+
+        val activeSession = activeRouteStore.read(responderId)
+            ?: return@LaunchedEffect
+        val matchingIncident = displayedAssignedDtos
+            .asSequence()
+            .map { it.toDomain() }
+            .firstOrNull { incident ->
+                ActiveRouteSessionStore.identityFor(
+                    incidentId = incident.id,
+                    assignmentId = incident.assignmentId
+                ) == activeSession.sessionId
+            }
+        val responseEnded = matchingIncident == null ||
+                matchingIncident.status == IncidentStatus.ON_SCENE ||
+                matchingIncident.status == IncidentStatus.RESOLVED
+        if (!responseEnded) return@LaunchedEffect
+
+        context.stopService(Intent(context, RouteMonitoringService::class.java))
+        val navPrefs = context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
+        if (
+            navPrefs.getString("pending_en_route_session_id", null) ==
+            activeSession.sessionId
+        ) {
+            navPrefs.edit()
+                .putBoolean("pending_en_route_check", false)
+                .remove("pending_en_route_incident_id")
+                .remove("pending_en_route_session_id")
+                .apply()
+        }
+        activeRouteStore.clearSession(responderId, activeSession.sessionId)
+    }
 
     val activeIncidents = displayedActiveDtos.map { it.toDomain() }
     var isRefreshing by remember { mutableStateOf(false) }
@@ -1745,8 +1915,6 @@ fun HomeScreen(
             showLocationRationale = true
         }
     }
-    var currentLatitude  by remember { mutableStateOf<Double?>(null) }
-    var currentLongitude by remember { mutableStateOf<Double?>(null) }
     val fusedClient       = remember { LocationServices.getFusedLocationProviderClient(context) }
     val latestNetworkAvailable by rememberUpdatedState(isNetworkAvailable)
 
@@ -1754,9 +1922,6 @@ fun HomeScreen(
         object : LocationCallback() {
             override fun onLocationResult(r: LocationResult) {
                 r.lastLocation?.let { loc ->
-                    currentLatitude = loc.latitude
-                    currentLongitude = loc.longitude
-
                     // Only push idle presence when NOT actively en route —
                     // RouteMonitoringService already owns the node during navigation.
                     if (
@@ -1797,20 +1962,6 @@ fun HomeScreen(
             }
         }
     }
-    val onSceneLocationCallback = remember {
-        object : LocationCallback() {
-            override fun onLocationResult(r: LocationResult) {
-                val destLat = navDestinationLat ?: return
-                val destLng = navDestinationLng ?: return
-                val destId  = navDestinationIncidentId?.takeIf { it.isNotBlank() } ?: return
-                val current = r.lastLocation ?: return
-                val res     = FloatArray(1)
-                Location.distanceBetween(current.latitude, current.longitude, destLat, destLng, res)
-                onSceneEnabledMap[destId] = res[0] <= 50f
-            }
-        }
-    }
-
     DisposableEffect(lifecycleOwner) {
 
         val observer = LifecycleEventObserver { _, event ->
@@ -1818,6 +1969,41 @@ fun HomeScreen(
             if (event == Lifecycle.Event.ON_RESUME) {
 
                 resumedFromBackground = true
+
+                val preciseLocationGranted = ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.ACCESS_FINE_LOCATION
+                ) == PackageManager.PERMISSION_GRANTED
+                hasLocationPermission = preciseLocationGranted
+                if (!preciseLocationGranted) {
+                    val routeTrackerWasRunning = RouteMonitoringService.isRunning
+                    isLocationShared = false
+                    isLocationMonitoringEnabled = false
+                    prefs.edit().putBoolean(locationMonitoringEnabledKey, false).apply()
+                    fusedClient.removeLocationUpdates(locationCallback)
+                    // Keep the locked route session for Resume, but stop the
+                    // foreground tracker so its notification/location cannot
+                    // claim to be live after permission was revoked.
+                    context.stopService(
+                        Intent(context, RouteMonitoringService::class.java)
+                    )
+                    if (
+                        !routeTrackerWasRunning &&
+                        responderId > 0 &&
+                        latestNetworkAvailable
+                    ) {
+                        com.google.firebase.database.FirebaseDatabase.getInstance()
+                            .getReference("live_locations")
+                            .child("responder_$responderId")
+                            .updateChildren(
+                                mapOf(
+                                    "connectionState" to "disconnected",
+                                    "updatedAt" to com.google.firebase.database
+                                        .ServerValue.TIMESTAMP
+                                )
+                            )
+                    }
+                }
 
                 if (!isDeviceLocationEnabled(context)) {
 
@@ -1849,15 +2035,7 @@ fun HomeScreen(
         } catch (se: SecurityException) { Log.d("HomeScreen", "Location updates failed: ${se.message}") }
     }
 
-    @Suppress("DEPRECATION")
-    fun startOnSceneTracking() {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return
-        try {
-            fusedClient.requestLocationUpdates(LocationRequest.Builder(5000).setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY).build(), onSceneLocationCallback, null)
-        } catch (se: SecurityException) { Log.d("HomeScreen", "On-scene tracking failed: ${se.message}") }
-    }
-
-    fun stopLocationUpdates() { fusedClient.removeLocationUpdates(locationCallback); currentLatitude = null; currentLongitude = null }
+    fun stopLocationUpdates() { fusedClient.removeLocationUpdates(locationCallback) }
 
     fun hasAlwaysLocationPermission() = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
             ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
@@ -1918,131 +2096,90 @@ fun HomeScreen(
         incidentId: String? = null,
         assignmentId: String? = null,
         viewOnly: Boolean = false
-    ) {
+    ): Boolean {
         val navPrefs = context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
 
-        if (lat != null && lng != null) {
+        if (!ResponderWorkflowPolicy.hasValidCoordinates(lat, lng)) {
+            Toast.makeText(
+                context,
+                "This incident does not have valid navigation coordinates.",
+                Toast.LENGTH_LONG
+            ).show()
+            return false
+        }
+
+        if (!viewOnly) {
             navPrefs.edit()
+                .putString("last_nav_incident_id", incidentId.orEmpty())
+                .putString("last_nav_assignment_id", assignmentId.orEmpty())
                 .putString("last_nav_lat", lat.toString())
                 .putString("last_nav_lng", lng.toString())
-                .putString("last_nav_addr", address)
+                .putString("last_nav_addr", address.orEmpty())
+                .putInt("last_nav_responder_id", responderId)
                 .apply()
-            navController.navigate(
-                "live_map/$lat/$lng/${Uri.encode(address ?: "")}" +
-                        "?incidentId=${Uri.encode(incidentId ?: "")}" +
-                        "&assignmentId=${Uri.encode(assignmentId ?: "")}" +
-                        "&responderId=$responderId&viewOnly=$viewOnly"
-            )
-            return
         }
 
-        val rLat = navPrefs.getString("last_nav_lat", "")?.toDoubleOrNull()
-        val rLng = navPrefs.getString("last_nav_lng", "")?.toDoubleOrNull()
-        val rAddr = address ?: navPrefs.getString("last_nav_addr", null)
-
-        if (rLat != null && rLng != null) {
-            navController.navigate(
-                "live_map/$rLat/$rLng/${Uri.encode(rAddr ?: "")}" +
-                        "?incidentId=${Uri.encode(incidentId ?: "")}" +
-                        "&assignmentId=${Uri.encode(assignmentId ?: "")}" +
-                        "&responderId=$responderId&viewOnly=$viewOnly"
-            )
-            return
+        navController.navigate(
+            "live_map/$lat/$lng/${Uri.encode(address.orEmpty())}" +
+                    "?incidentId=${Uri.encode(incidentId.orEmpty())}" +
+                    "&assignmentId=${Uri.encode(assignmentId.orEmpty())}" +
+                    "&responderId=$responderId&viewOnly=$viewOnly"
+        ) {
+            launchSingleTop = true
         }
-
-        Toast.makeText(context, "No location available for navigation", Toast.LENGTH_SHORT).show()
+        return true
     }
 
-    fun sendOnSceneReport(incident: Incident) {
+    fun markIncidentDone(
+        incident: Incident,
+        notes: String,
+        proofUri: String?,
+        onResult: (success: Boolean, message: String?) -> Unit
+    ) {
         if (!isNetworkAvailable) {
-            Toast.makeText(
-                context,
-                "You’re offline. Reconnect before reporting on-scene status.",
-                Toast.LENGTH_SHORT
-            ).show()
+            onResult(false, "You’re offline. Reconnect before completing this incident.")
             return
         }
 
-        try {
-            // sendOnSceneReport(incident)
-            assignedVm.updateStatus(
-                assignmentId = incident.assignmentId ?: incident.id,
-                status = "on_scene",
-                responderId = responderId
-            )
-            context.stopService(
-                Intent(context, RouteMonitoringService::class.java)
-            )
-
-            context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
-                .edit()
-                .putBoolean("pending_en_route_check", false)
-                .remove("pending_en_route_incident_id")
-                .commit()
-
-            assignedVm.load(responderId)
-            assignedVm.loadActive(responderId)
-            scope.launch {
-                try {
-                    val response = RetrofitProvider.incidentApi.markRouteArrived(
-                        MarkRouteArrivedRequest(
-                            incident_id = incident.id.toIntOrNull() ?: 0,
-                            assignment_id = incident.assignmentId?.toIntOrNull(),
-                            responder_id = responderId
-                        )
-                    )
-
-                    Log.d(
-                        "LiveGPS",
-                        "Route arrived save: success=${response.success}, message=${response.message}"
-                    )
-
-                    Toast.makeText(
-                        context,
-                        if (response.success) "On-scene reported to command"
-                        else response.message ?: "Arrival already recorded",
-                        Toast.LENGTH_SHORT
-                    ).show()
-
-                } catch (e: Exception) {
-                    Log.e("LiveGPS", "Route arrived save failed: ${e.message}")
+        val completionSessionId = ActiveRouteSessionStore.identityFor(
+            incidentId = incident.id,
+            assignmentId = incident.assignmentId
+        )
+        val latestIncident = completionSessionId?.let { expectedSessionId ->
+            displayedAssignedDtos
+                .asSequence()
+                .map { it.toDomain() }
+                .firstOrNull { latest ->
+                    ActiveRouteSessionStore.identityFor(
+                        incidentId = latest.id,
+                        assignmentId = latest.assignmentId
+                    ) == expectedSessionId
                 }
-            }
-
-            context.stopService(
-                Intent(context, RouteMonitoringService::class.java)
+        }
+        if (
+            !assignedActionsFresh ||
+            latestIncident == null ||
+            ResponderWorkflowPolicy.primaryAction(latestIncident.status) !=
+            IncidentPrimaryAction.COMPLETE_INCIDENT
+        ) {
+            onResult(
+                false,
+                "This assignment changed. Refresh before submitting completion proof."
             )
-
-            context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
-                .edit()
-                .putBoolean("pending_en_route_check", false)
-                .remove("pending_en_route_incident_id")
-                .commit()
-
-            fusedClient.removeLocationUpdates(onSceneLocationCallback)
-
-        } catch (e: Exception) { Toast.makeText(context, "Failed to send on-scene report", Toast.LENGTH_SHORT).show() }
-    }
-
-    fun markIncidentDone(incident: Incident, notes: String, proofUri: String?) {
-        if (!isNetworkAvailable) {
-            Toast.makeText(
-                context,
-                "You’re offline. Reconnect before completing this incident.",
-                Toast.LENGTH_SHORT
-            ).show()
             return
         }
 
         if (proofUri == null) {
-            Toast.makeText(context, "Photo proof is required", Toast.LENGTH_SHORT).show()
+            onResult(false, "Photo proof is required.")
             return
         }
 
         scope.launch {
             try {
                 // markIncidentDone(...)
-                val assignmentIdBody = stringToRequestBody(incident.assignmentId ?: incident.id)
+                val assignmentIdBody = stringToRequestBody(
+                    latestIncident.assignmentId ?: latestIncident.id
+                )
                 val responderIdBody = stringToRequestBody(responderId.toString())
                 val notesBody = stringToRequestBody(notes)
                 val imagePart = uriStringToMultipartPart(context, "proof_image", "completion_proof", proofUri)
@@ -2052,33 +2189,58 @@ fun HomeScreen(
                 )
 
                 if (response.success) {
-                    context.stopService(Intent(context, RouteMonitoringService::class.java))
+                    val navPrefs = context.getSharedPreferences(
+                        "nav_prefs",
+                        Context.MODE_PRIVATE
+                    )
+                    val activeSession = activeRouteStore.read(responderId)
+                    val pendingSessionId = navPrefs.getString(
+                        "pending_en_route_session_id",
+                        null
+                    )
+                    val completionOwnsActiveRoute =
+                        activeSession?.sessionId == completionSessionId ||
+                                (activeSession == null &&
+                                        pendingSessionId == completionSessionId)
 
-                    context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
-                        .edit()
-                        .putBoolean("pending_en_route_check", false)
-                        .remove("pending_en_route_incident_id")
-                        .commit()
+                    // Completing incident A must never terminate incident B's
+                    // foreground tracking or discard B's locked route.
+                    if (completionOwnsActiveRoute) {
+                        context.stopService(
+                            Intent(context, RouteMonitoringService::class.java)
+                        )
+                        navPrefs.edit()
+                            .putBoolean("pending_en_route_check", false)
+                            .remove("pending_en_route_incident_id")
+                            .remove("pending_en_route_session_id")
+                            .commit()
+                        activeSession
+                            ?.takeIf { it.sessionId == completionSessionId }
+                            ?.let {
+                                activeRouteStore.clearSession(responderId, it.sessionId)
+                            }
+                    }
 
-                    assignedVm.load(responderId)
-                    assignedVm.loadActive(responderId)
+                    assignedVm.load(responderId, force = true)
+                    assignedVm.loadActive(responderId, force = true)
 
-                    if (lastNotifiedIncidentId == incident.id) {
+                    if (lastNotifiedIncidentId == latestIncident.id) {
                         lastNotifiedIncidentId = null
                         prefs.edit().remove("last_notified_incident_id").apply()
                     }
-                    if (lastAssignedIncidentId == incident.id) {
+                    if (lastAssignedIncidentId == latestIncident.id) {
                         lastAssignedIncidentId = null
                         prefs.edit().remove("last_assigned_incident_id").apply()
                     }
 
                     Toast.makeText(context, "Incident marked completed", Toast.LENGTH_SHORT).show()
+                    onResult(true, null)
                 } else {
-                    Toast.makeText(context, response.message ?: "Failed to mark complete", Toast.LENGTH_SHORT).show()
+                    onResult(false, response.message ?: "Dispatch rejected the completion update.")
                 }
             } catch (e: Exception) {
                 Log.e("HomeScreen", "Mark complete failed: ${e.message}")
-                Toast.makeText(context, "Failed to mark complete", Toast.LENGTH_SHORT).show()
+                onResult(false, e.message ?: "Unable to submit completion proof.")
             }
         }
     }
@@ -2134,11 +2296,22 @@ fun HomeScreen(
                     .apply()
 
                 startLocationUpdates()
+            } else if (pendingRouteLaunch != null) {
+                pendingRouteLaunch = null
+                Toast.makeText(
+                    context,
+                    "Turn on device location before starting navigation.",
+                    Toast.LENGTH_LONG
+                ).show()
             }
         }
 
-    val locationPermLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) {
+    val locationPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { grants ->
+        val preciseLocationGranted =
+            grants[Manifest.permission.ACCESS_FINE_LOCATION] == true
+        if (preciseLocationGranted) {
             hasLocationPermission = true
             if (!isDeviceLocationEnabled(context)) {
                 // Location service is NOT enabled - ask user to enable it
@@ -2158,14 +2331,200 @@ fun HomeScreen(
             hasLocationPermission = false
             isLocationShared = false
             isLocationMonitoringEnabled = false
+            pendingRouteLaunch = null
             prefs.edit().putBoolean(locationMonitoringEnabledKey, false).apply()
             Toast.makeText(context, "Location permission denied - GPS features will not work", Toast.LENGTH_LONG).show()
         }
     }
 
-    val onScenePermLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) startOnSceneTracking()
-        else Toast.makeText(context, "Location permission denied", Toast.LENGTH_SHORT).show()
+    fun activateRoute(incident: Incident): Boolean {
+        val latitude = incident.latitude
+        val longitude = incident.longitude
+        if (!ResponderWorkflowPolicy.hasValidCoordinates(latitude, longitude)) {
+            Toast.makeText(
+                context,
+                "Dispatch has not provided valid coordinates for this incident.",
+                Toast.LENGTH_LONG
+            ).show()
+            return false
+        }
+
+        val requestedSessionId = ActiveRouteSessionStore.identityFor(
+            incidentId = incident.id,
+            assignmentId = incident.assignmentId
+        )
+        val existingSession = activeRouteStore.read(responderId)
+        if (
+            existingSession != null &&
+            existingSession.sessionId != requestedSessionId
+        ) {
+            Toast.makeText(
+                context,
+                "Another incident route is active. Finish or cancel it before switching responses.",
+                Toast.LENGTH_LONG
+            ).show()
+            return false
+        }
+
+        val session = activeRouteStore.beginSession(
+            ActiveRouteSessionMetadata(
+                incidentId = incident.id,
+                assignmentId = incident.assignmentId,
+                responderId = responderId,
+                destinationLat = latitude!!,
+                destinationLng = longitude!!,
+                destinationAddress = incident.location
+            )
+        )
+        if (session == null) {
+            Toast.makeText(
+                context,
+                "Unable to create a safe route session for this incident.",
+                Toast.LENGTH_LONG
+            ).show()
+            return false
+        }
+
+        val serviceStarted = startRouteUpdateMonitoring(
+            context = context,
+            incidentId = session.incidentId,
+            assignmentId = session.assignmentId,
+            destLat = session.destinationLat,
+            destLng = session.destinationLng,
+            destAddress = session.destinationAddress
+        )
+        if (!serviceStarted) {
+            if (existingSession == null) {
+                activeRouteStore.clearSession(responderId, session.sessionId)
+            }
+            return false
+        }
+
+        context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("pending_en_route_check", true)
+            .putString("pending_en_route_incident_id", session.incidentId)
+            .putString("pending_en_route_session_id", session.sessionId)
+            .apply()
+
+        return navigateToLocation(
+            lat = session.destinationLat,
+            lng = session.destinationLng,
+            address = session.destinationAddress,
+            incidentId = session.incidentId,
+            assignmentId = session.assignmentId
+        )
+    }
+
+    LaunchedEffect(
+        pendingRouteLaunch,
+        hasLocationPermission,
+        deviceLocationEnabled
+    ) {
+        val pending = pendingRouteLaunch ?: return@LaunchedEffect
+        val requestedSessionId = ActiveRouteSessionStore.identityFor(
+            incidentId = pending.incidentId,
+            assignmentId = pending.assignmentId
+        )
+        val incident = requestedSessionId?.let { sessionId ->
+            displayedAssignedDtos
+                .asSequence()
+                .map { it.toDomain() }
+                .firstOrNull { latest ->
+                    ActiveRouteSessionStore.identityFor(
+                        incidentId = latest.id,
+                        assignmentId = latest.assignmentId
+                    ) == sessionId
+                }
+        }
+        val expectedAction = if (pending.updateStatusToEnRoute) {
+            IncidentPrimaryAction.START_RESPONSE
+        } else {
+            IncidentPrimaryAction.RESUME_NAVIGATION
+        }
+        val currentActiveRoute = activeRouteStore.read(responderId)
+        val hasMatchingStoredRoute =
+            currentActiveRoute?.sessionId == requestedSessionId
+        val hasConflictingActiveRoute =
+            currentActiveRoute != null &&
+                    currentActiveRoute.sessionId != requestedSessionId
+        val routeActionAllowed = when (expectedAction) {
+            IncidentPrimaryAction.START_RESPONSE ->
+                assignedActionsFresh &&
+                        isNetworkAvailable &&
+                        !hasConflictingActiveRoute
+
+            IncidentPrimaryAction.RESUME_NAVIGATION ->
+                if (hasConflictingActiveRoute) {
+                    false
+                } else if (isNetworkAvailable) {
+                    assignedActionsFresh
+                } else {
+                    hasMatchingStoredRoute
+                }
+
+            else -> false
+        }
+
+        if (
+            incident == null ||
+            ResponderWorkflowPolicy.primaryAction(incident.status) != expectedAction ||
+            !routeActionAllowed
+        ) {
+            pendingRouteLaunch = null
+            Toast.makeText(
+                context,
+                "This assignment changed while navigation was being prepared. Refresh and try again.",
+                Toast.LENGTH_LONG
+            ).show()
+            return@LaunchedEffect
+        }
+
+        if (!ResponderWorkflowPolicy.hasValidCoordinates(incident.latitude, incident.longitude)) {
+            pendingRouteLaunch = null
+            Toast.makeText(
+                context,
+                "Dispatch has not provided valid coordinates for this incident.",
+                Toast.LENGTH_LONG
+            ).show()
+            return@LaunchedEffect
+        }
+
+        if (!hasLocationPermission) {
+            hasPromptedLocationOnce = true
+            prefs.edit().putBoolean("location_permission_prompted", true).apply()
+            locationPermLauncher.launch(
+                arrayOf(
+                    Manifest.permission.ACCESS_COARSE_LOCATION,
+                    Manifest.permission.ACCESS_FINE_LOCATION
+                )
+            )
+            return@LaunchedEffect
+        }
+
+        if (!deviceLocationEnabled) {
+            locationSettingsLauncher.launch(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+            return@LaunchedEffect
+        }
+
+        pendingRouteLaunch = null
+        isRouteActionIncidentId = incident.id
+
+        if (pending.updateStatusToEnRoute) {
+            assignedVm.updateStatus(
+                assignmentId = incident.assignmentId ?: incident.id,
+                status = "en_route",
+                responderId = responderId
+            ) { success, _ ->
+                if (success) {
+                    activateRoute(incident)
+                }
+                isRouteActionIncidentId = null
+            }
+        } else {
+            activateRoute(incident)
+            isRouteActionIncidentId = null
+        }
     }
 
 
@@ -2176,6 +2535,41 @@ fun HomeScreen(
                 context,
                 "You’re offline. Reconnect before requesting backup.",
                 Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
+        if (!assignedActionsFresh) {
+            Toast.makeText(
+                context,
+                "Refresh assignments before requesting incident backup.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+
+        if (request.fromIncidentId.isBlank()) {
+            Toast.makeText(
+                context,
+                "Select an active incident before requesting backup.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+
+        val currentIncident = displayedAssignedDtos
+            .asSequence()
+            .map { it.toDomain() }
+            .firstOrNull { it.id == request.fromIncidentId }
+        if (
+            currentIncident == null ||
+            ResponderWorkflowPolicy.primaryAction(currentIncident.status) ==
+            IncidentPrimaryAction.NONE
+        ) {
+            Toast.makeText(
+                context,
+                "That incident is no longer an active assignment. Refresh and select again.",
+                Toast.LENGTH_LONG
             ).show()
             return
         }
@@ -2368,7 +2762,12 @@ fun HomeScreen(
                                 showLocationRationale = false
                                 hasPromptedLocationOnce = true
                                 prefs.edit().putBoolean("location_permission_prompted", true).apply()
-                                locationPermLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                                locationPermLauncher.launch(
+                                    arrayOf(
+                                        Manifest.permission.ACCESS_COARSE_LOCATION,
+                                        Manifest.permission.ACCESS_FINE_LOCATION
+                                    )
+                                )
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F))
                         ) { Text("Enable GPS Now", color = Color.White) }
@@ -2393,12 +2792,23 @@ fun HomeScreen(
             val fireCount    = remember(activeIncidents) { activeIncidents.count { it.type == IncidentType.FIRE } }
             val medicalCount = remember(activeIncidents) { activeIncidents.count { it.type == IncidentType.MEDICAL } }
             val crimeCount   = remember(activeIncidents) { activeIncidents.count { it.type == IncidentType.CRIME } }
+            val disasterCount = remember(activeIncidents) { activeIncidents.count { it.type == IncidentType.DISASTER } }
+            val generalCount = remember(activeIncidents) { activeIncidents.count { it.type == IncidentType.GENERAL } }
 
 
             val assignedListForRole =
                 displayedAssignedDtos.map { it.toDomain() }
 
-            assignedListForRole.firstOrNull()?.id?.let { id -> if (!onSceneEnabledMap.containsKey(id)) onSceneEnabledMap[id] = false }
+            val backupIncidentOptions = remember(assignedListForRole) {
+                assignedListForRole
+                    .filter { it.status !in setOf(IncidentStatus.RESOLVED, IncidentStatus.UNKNOWN) }
+                    .map { incident ->
+                        BackupIncidentOption(
+                            incidentId = incident.id,
+                            label = "#${incident.id} • ${incident.type.displayName} • ${incident.location}"
+                        )
+                    }
+            }
 
             LaunchedEffect(assignedUi.incidents.firstOrNull()?.id) {
                 val incident = assignedUi.incidents.firstOrNull() ?: return@LaunchedEffect
@@ -2810,6 +3220,16 @@ fun HomeScreen(
                             }
                             assignedListForRole.forEach { inc ->
                                 val timeLabel = timeAgoLabel(inc.timeReported)
+                                val incidentSessionId = ActiveRouteSessionStore.identityFor(
+                                    incidentId = inc.id,
+                                    assignmentId = inc.assignmentId
+                                )
+                                val activeSessionForActions = activeRouteStore.read(responderId)
+                                val hasStoredRoute = incidentSessionId != null &&
+                                        activeSessionForActions?.sessionId == incidentSessionId
+                                val hasConflictingActiveRoute =
+                                    activeSessionForActions != null &&
+                                            activeSessionForActions.sessionId != incidentSessionId
 
                                 val isDarkTheme = ThemeController.isDarkMode.value
                                 val priorityColor = when (inc.priority) {
@@ -3104,49 +3524,40 @@ fun HomeScreen(
 
                                         AssignedActionButtons(
                                             inc = inc,
-                                            context = context,
-                                            navController = navController,
-                                            currentLatitude = currentLatitude,
-                                            currentLongitude = currentLongitude,
-                                            hasLocationPermission = hasLocationPermission,
+                                            dataFresh = assignedActionsFresh,
                                             networkAvailable = isNetworkAvailable,
-                                            onSceneEnabled = (onSceneEnabledMap[inc.id] == true),
-                                            setOnSceneEnabled = { enabled ->
-                                                onSceneEnabledMap[inc.id] = enabled
-                                            },
-                                            setNavTarget = { id, lat, lng ->
-                                                navDestinationIncidentId = id
-                                                navDestinationLat = lat
-                                                navDestinationLng = lng
-                                            },
-                                            startOnSceneTracking = { startOnSceneTracking() },
-                                            requestOnScenePermission = {
-                                                onScenePermLauncher.launch(
-                                                    Manifest.permission.ACCESS_FINE_LOCATION
+                                            hasStoredRoute = hasStoredRoute,
+                                            hasConflictingActiveRoute =
+                                                hasConflictingActiveRoute,
+                                            isAnyRouteActionInProgress =
+                                                pendingRouteLaunch != null ||
+                                                    isRouteActionIncidentId != null,
+                                            isRouteActionInProgress =
+                                                pendingRouteLaunch?.incidentId == inc.id ||
+                                                    isRouteActionIncidentId == inc.id,
+                                            onStartResponse = { incident ->
+                                                pendingRouteLaunch = PendingRouteLaunch(
+                                                    incidentId = incident.id,
+                                                    assignmentId = incident.assignmentId,
+                                                    updateStatusToEnRoute = true
                                                 )
                                             },
-                                            navigateToLocation = { lat, lng, addr, incId, assignId ->
-                                                navigateToLocation(
-                                                    lat,
-                                                    lng,
-                                                    addr,
-                                                    incidentId = incId,
-                                                    assignmentId = assignId
+                                            onResumeNavigation = { incident ->
+                                                pendingRouteLaunch = PendingRouteLaunch(
+                                                    incidentId = incident.id,
+                                                    assignmentId = incident.assignmentId,
+                                                    updateStatusToEnRoute = false
                                                 )
                                             },
-                                            sendOnSceneReport = { sendOnSceneReport(it) },
                                             openMarkDone = {
+                                                selectedProofFile?.delete()
+                                                selectedProofFile = null
                                                 markTargetIncidentInc = it
                                                 proofNotes = ""
                                                 selectedProofUri = null
+                                                isSubmittingCompletion = false
+                                                completionError = null
                                                 showMarkCompleteDialog = true
-                                            },
-                                            onNavigateStatusUpdate = {
-                                                assignedVm.updateStatus(
-                                                    assignmentId = it.assignmentId ?: it.id,
-                                                    status = "en_route",
-                                                    responderId = responderId
-                                                )
                                             }
                                         )
                                     }
@@ -3201,7 +3612,9 @@ fun HomeScreen(
                             // Action buttons row
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Button(
-                                    enabled = isNetworkAvailable,
+                                    enabled = isNetworkAvailable &&
+                                            assignedActionsFresh &&
+                                            backupIncidentOptions.isNotEmpty(),
                                     onClick = { showDepartmentSelection = true },
                                     modifier = Modifier.weight(1f).height(38.dp),
                                     shape = RoundedCornerShape(10.dp),
@@ -3399,7 +3812,7 @@ fun HomeScreen(
                     // FIX 8: Single derivation with correct keys (activeIncidents + activeFilter).
                     // Previously this was computed twice — once as a stale outer var and once here.
                     val activeListVisible = remember(activeIncidents, activeFilter) {
-                        activeIncidents.filter { it.type != IncidentType.DISASTER }.filter { inc ->
+                        activeIncidents.filter { inc ->
                             when (activeFilter) {
                                 ActivePriorityFilter.ALL    -> true
                                 ActivePriorityFilter.HIGH   -> inc.priority == IncidentPriority.HIGH
@@ -3677,25 +4090,54 @@ fun HomeScreen(
                     // FIX 9: Static label/icon/accent lists moved to remember{} so they are not
                     // re-allocated on every recomposition of this item.
                     val isDarkTheme = ThemeController.isDarkMode.value
-                    val typeLabels = remember { listOf("Fire", "Medical", "Crime") }
+                    val typeLabels = remember { listOf("Fire", "Medical", "Crime", "Disaster", "General") }
                     val typeAccents = remember(isDarkTheme) {
                         if (isDarkTheme) {
-                            listOf(Color(0xFFEF5350), Color(0xFF64B5F6), Color(0xFFBCAAA4))
+                            listOf(
+                                Color(0xFFEF5350),
+                                Color(0xFF64B5F6),
+                                Color(0xFFBCAAA4),
+                                Color(0xFFCE93D8),
+                                Color(0xFF90A4AE)
+                            )
                         } else {
-                            listOf(Color(0xFFE53935), Color(0xFF1E88E5), Color(0xFF6D4C41))
+                            listOf(
+                                Color(0xFFE53935),
+                                Color(0xFF1E88E5),
+                                Color(0xFF6D4C41),
+                                Color(0xFF8E24AA),
+                                Color(0xFF546E7A)
+                            )
                         }
                     }
                     val typeIcons = remember {
-                        listOf(Icons.Default.LocalFireDepartment, Icons.Default.LocalHospital, Icons.Default.Security)
+                        listOf(
+                            Icons.Default.LocalFireDepartment,
+                            Icons.Default.LocalHospital,
+                            Icons.Default.Security,
+                            Icons.Default.Warning,
+                            Icons.Default.Info
+                        )
                     }
                     // typeCounts references derived state; no extra remember is needed.
-                    val typeCounts = listOf(fireCount, medicalCount, crimeCount)
+                    val typeCounts = listOf(
+                        fireCount,
+                        medicalCount,
+                        crimeCount,
+                        disasterCount,
+                        generalCount
+                    )
                     val cardBrushes = remember(isDarkTheme) { cardBrushesStable() }
 
-                    Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        typeAccents.forEachIndexed { i, accent ->
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(typeAccents.size) { i ->
+                            val accent = typeAccents[i]
                             Card(
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.width(132.dp),
                                 shape = RoundedCornerShape(22.dp),
                                 elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
                                 colors = CardDefaults.cardColors(containerColor = AppColors.CardBg),
@@ -3761,7 +4203,7 @@ fun HomeScreen(
                     text = {
                         LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             items(
-                                items = activeIncidents.filter { it.type != IncidentType.DISASTER },
+                                items = activeIncidents,
                                 key = { it.id }  // FIX 11: stable keys
                             ) { inc ->
                                 val isDarkTheme = ThemeController.isDarkMode.value
@@ -3924,8 +4366,18 @@ fun HomeScreen(
 
                 AlertDialog(
                     onDismissRequest = {
-                        showMarkCompleteDialog = false
-                        markTargetIncidentInc = null
+                        if (!isSubmittingCompletion) {
+                            pendingCameraFile?.delete()
+                            selectedProofFile?.delete()
+                            pendingCameraFile = null
+                            selectedProofFile = null
+                            pendingCameraUri = null
+                            showMarkCompleteDialog = false
+                            markTargetIncidentInc = null
+                            proofNotes = ""
+                            selectedProofUri = null
+                            completionError = null
+                        }
                     },
                     containerColor = AppColors.CardBg,
                     titleContentColor = AppColors.Text,
@@ -3951,6 +4403,7 @@ fun HomeScreen(
                             OutlinedTextField(
                                 value = proofNotes,
                                 onValueChange = { proofNotes = it },
+                                enabled = !isSubmittingCompletion,
                                 label = { Text("Completion notes (optional)") },
                                 modifier = Modifier.fillMaxWidth(),
                                 minLines = 3,
@@ -3961,6 +4414,7 @@ fun HomeScreen(
                                 onClick = {
                                     openCompletionCamera()
                                 },
+                                enabled = !isSubmittingCompletion,
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(14.dp),
                                 colors = ButtonDefaults.buttonColors(
@@ -3987,23 +4441,25 @@ fun HomeScreen(
                                 )
                             }
 
-                            selectedProofUri?.let { uriStr ->
-                                val bitmap = try {
-                                    val opts = BitmapFactory.Options().apply {
-                                        inPreferredConfig = Bitmap.Config.ARGB_8888
-                                    }
+                            completionError?.let { message ->
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = AppColors.DangerSurface
+                                ) {
+                                    Text(
+                                        text = "$message Your photo and notes were kept; you can retry.",
+                                        modifier = Modifier.padding(12.dp),
+                                        color = AppColors.DangerText,
+                                        fontSize = 12.sp,
+                                        lineHeight = 17.sp
+                                    )
+                                }
+                            }
 
-                                    if (uriStr.startsWith("file://")) {
-                                        Uri.parse(uriStr).path?.let {
-                                            BitmapFactory.decodeFile(it, opts)
-                                        }
-                                    } else {
-                                        context.contentResolver
-                                            .openInputStream(Uri.parse(uriStr))
-                                            ?.use { BitmapFactory.decodeStream(it, null, opts) }
-                                    }
-                                } catch (_: Exception) {
-                                    null
+                            selectedProofUri?.let { uriStr ->
+                                val bitmap = remember(uriStr) {
+                                    decodeSampledProofBitmap(context, uriStr)
                                 }
 
                                 if (bitmap != null) {
@@ -4036,31 +4492,62 @@ fun HomeScreen(
                             onClick = {
                                 val inc = markTargetIncidentInc
                                 if (inc != null) {
+                                    isSubmittingCompletion = true
+                                    completionError = null
                                     markIncidentDone(
                                         inc,
                                         proofNotes,
                                         selectedProofUri
-                                    )
+                                    ) { success, message ->
+                                        isSubmittingCompletion = false
+                                        if (success) {
+                                            pendingCameraFile?.delete()
+                                            selectedProofFile?.delete()
+                                            pendingCameraFile = null
+                                            selectedProofFile = null
+                                            pendingCameraUri = null
+                                            showMarkCompleteDialog = false
+                                            markTargetIncidentInc = null
+                                            proofNotes = ""
+                                            selectedProofUri = null
+                                            completionError = null
+                                        } else {
+                                            completionError = message
+                                                ?: "Unable to complete this incident."
+                                        }
+                                    }
                                 }
-
-                                showMarkCompleteDialog = false
-                                markTargetIncidentInc = null
-                                proofNotes = ""
-                                selectedProofUri = null
                             },
-                            enabled = hasProof,
+                            enabled = hasProof && !isSubmittingCompletion,
                             shape = RoundedCornerShape(14.dp)
                         ) {
-                            Text("Submit")
+                            if (isSubmittingCompletion) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    color = Color.White
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text("Submitting…")
+                            } else {
+                                Text(if (completionError == null) "Submit" else "Retry")
+                            }
                         }
                     },
                     dismissButton = {
                         TextButton(
+                            enabled = !isSubmittingCompletion,
                             onClick = {
+                                pendingCameraFile?.delete()
+                                selectedProofFile?.delete()
+                                pendingCameraFile = null
+                                selectedProofFile = null
+                                pendingCameraUri = null
                                 showMarkCompleteDialog = false
                                 markTargetIncidentInc = null
                                 proofNotes = ""
                                 selectedProofUri = null
+                                completionError = null
                             }
                         ) {
                             Text("Cancel")
@@ -4481,6 +4968,7 @@ fun HomeScreen(
             if (showDepartmentSelection) {
                 DepartmentSelectionDialog(
                     onDismiss = { showDepartmentSelection = false },
+                    incidentOptions = backupIncidentOptions,
                     onDepartmentSelected = { _: String -> showDepartmentSelection = false },
                     onBackupRequestReady = { request: BackupRequest ->
                         sendBackupRequest(request)
@@ -4860,6 +5348,13 @@ private fun AccountSettingsDialog(
                         )
                     }
                 }
+                Text(
+                    text = "Emergency Response App ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    color = AppColors.TextSecondary,
+                    fontSize = 11.sp,
+                    textAlign = TextAlign.Center
+                )
                 Card(shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = AppColors.CardBg), border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(0.35f))) {
                     Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                         Column { Text("Logout", fontWeight = FontWeight.SemiBold, color = AppColors.Text); Text("Sign out of this device", fontSize = 12.sp, color = AppColors.TextSecondary) }

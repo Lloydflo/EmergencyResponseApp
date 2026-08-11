@@ -13,8 +13,8 @@ android {
         applicationId = "com.ers.emergencyresponseapp"
         minSdk = 23
         targetSdk = 34
-        versionCode = 26
-        versionName = "17.3"
+        versionCode = 28
+        versionName = "17.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -27,11 +27,6 @@ android {
             "String",
             "MAPTILER_API_KEY",
             "\"${project.findProperty("MAPTILER_API_KEY") ?: ""}\""
-        )
-        buildConfigField(
-            "String",
-            "ORS_API_KEY",
-            "\"${project.findProperty("ORS_API_KEY") ?: ""}\""
         )
     }
 

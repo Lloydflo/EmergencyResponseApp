@@ -97,6 +97,11 @@ data class BackupRequest(
     val timestamp: Long = System.currentTimeMillis()
 )
 
+data class BackupIncidentOption(
+    val incidentId: String,
+    val label: String
+)
+
 
 // ─────────────────────────────────────────────
 //  DEPARTMENT SELECTION DIALOG
@@ -107,14 +112,74 @@ data class BackupRequest(
 @Composable
 fun DepartmentSelectionDialog(
     onDismiss: () -> Unit,
+    incidentOptions: List<BackupIncidentOption> = emptyList(),
     // ★ NEW: receives the full structured request with dept + resources
     onBackupRequestReady: (BackupRequest) -> Unit = {},
     // Legacy string-key callback kept for backward-compat
     onDepartmentSelected: (departmentKey: String) -> Unit = {}
 ) {
     var selectedDepartment by remember { mutableStateOf<BackupDepartment?>(null) }
+    var selectedIncidentId by remember(incidentOptions) {
+        mutableStateOf(incidentOptions.singleOrNull()?.incidentId)
+    }
+    LaunchedEffect(selectedIncidentId) {
+        if (selectedIncidentId == null) {
+            selectedDepartment = null
+        }
+    }
 
-    if (selectedDepartment == null) {
+    if (incidentOptions.isEmpty()) {
+        AlertDialog(
+            onDismissRequest = onDismiss,
+            shape = RoundedCornerShape(24.dp),
+            containerColor = Color(0xFFF8F9FB),
+            title = { Text("No Active Incident", fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "A backup request must be linked to an active assigned incident.",
+                    color = Color(0xFF575757)
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = onDismiss) { Text("Close") }
+            }
+        )
+    } else if (selectedIncidentId == null) {
+        AlertDialog(
+            onDismissRequest = onDismiss,
+            shape = RoundedCornerShape(24.dp),
+            containerColor = Color(0xFFF8F9FB),
+            title = { Text("Select Incident", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "Choose which response needs backup.",
+                        color = Color(0xFF575757),
+                        fontSize = 13.sp
+                    )
+                    incidentOptions.forEach { option ->
+                        OutlinedButton(
+                            onClick = { selectedIncidentId = option.incidentId },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Icon(Icons.Default.Warning, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = option.label,
+                                modifier = Modifier.weight(1f),
+                                textAlign = TextAlign.Start
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            }
+        )
+    } else if (selectedDepartment == null) {
         // ── Step 1: pick a department ──
         AlertDialog(
             onDismissRequest = onDismiss,
@@ -139,7 +204,7 @@ fun DepartmentSelectionDialog(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
-                        "Select a department to request assistance from.",
+                        "Incident #$selectedIncidentId • Select a department to request assistance from.",
                         color = Color(0xFF575757),
                         fontSize = 13.sp
                     )
@@ -153,13 +218,24 @@ fun DepartmentSelectionDialog(
             },
             confirmButton = {},
             dismissButton = {
-                TextButton(onClick = onDismiss) { Text("Cancel") }
+                TextButton(
+                    onClick = {
+                        if (incidentOptions.size > 1) {
+                            selectedIncidentId = null
+                        } else {
+                            onDismiss()
+                        }
+                    }
+                ) {
+                    Text(if (incidentOptions.size > 1) "Back" else "Cancel")
+                }
             }
         )
     } else {
         // ── Step 2: response-unit/capability picker sheet ──
         BackupResourceSheet(
             department = selectedDepartment!!,
+            incidentId = selectedIncidentId.orEmpty(),
             onDismiss  = onDismiss,
             onSend     = { request ->
                 // Fire the full payload callback (used by HomeScreen)

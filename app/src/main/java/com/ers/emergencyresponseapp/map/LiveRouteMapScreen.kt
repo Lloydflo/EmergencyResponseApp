@@ -9,6 +9,7 @@ import android.graphics.Canvas
 import android.graphics.Color as AndroidColor
 import android.graphics.Paint
 import android.graphics.Path
+import android.os.SystemClock
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -68,10 +69,14 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.ers.emergencyresponseapp.BuildConfig
 import com.ers.emergencyresponseapp.data.IncidentRepository
+import com.ers.emergencyresponseapp.home.ResponderWorkflowPolicy
 import com.ers.emergencyresponseapp.network.AlternativeRouteRequestBody
 import com.ers.emergencyresponseapp.network.MarkRouteArrivedRequest
 import com.ers.emergencyresponseapp.network.RetrofitProvider
 import com.ers.emergencyresponseapp.routing.RouteMonitoringService
+import com.ers.emergencyresponseapp.routing.ActiveRouteMode
+import com.ers.emergencyresponseapp.routing.ActiveRouteSessionMetadata
+import com.ers.emergencyresponseapp.routing.ActiveRouteSessionStore
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
@@ -85,6 +90,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONArray
 import org.json.JSONObject
 import org.maplibre.android.MapLibre
 import org.maplibre.android.camera.CameraPosition
@@ -145,11 +151,80 @@ fun LiveRouteMapScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     val incidentRepository = remember { IncidentRepository() }
     val scope = rememberCoroutineScope()
+    val activeRouteStore = remember(context.applicationContext) {
+        ActiveRouteSessionStore(context.applicationContext)
+    }
+    val expectedSessionId = remember(incidentId, assignmentId) {
+        ActiveRouteSessionStore.identityFor(
+            incidentId = incidentId.orEmpty(),
+            assignmentId = assignmentId
+        )
+    }
+    val restoredSession = remember(
+        responderId,
+        expectedSessionId,
+        destinationLat,
+        destinationLng,
+        destinationAddress,
+        viewOnly
+    ) {
+        if (viewOnly || responderId <= 0 || expectedSessionId == null) {
+            null
+        } else {
+            activeRouteStore.read(responderId, expectedSessionId)
+                ?: if (
+                    destinationLat != null &&
+                    destinationLng != null &&
+                    ResponderWorkflowPolicy.hasValidCoordinates(destinationLat, destinationLng)
+                ) {
+                    activeRouteStore.beginSession(
+                        ActiveRouteSessionMetadata(
+                            incidentId = incidentId.orEmpty(),
+                            assignmentId = assignmentId,
+                            responderId = responderId,
+                            destinationLat = destinationLat,
+                            destinationLng = destinationLng,
+                            destinationAddress = destinationAddress.orEmpty()
+                        )
+                    )
+                } else {
+                    null
+                }
+        }
+    }
+    val routeSessionId = restoredSession?.sessionId
+    val routeDestinationLat = restoredSession?.destinationLat ?: destinationLat
+    val routeDestinationLng = restoredSession?.destinationLng ?: destinationLng
+    val routeDestinationAddress = restoredSession?.destinationAddress
+        ?.takeIf { it.isNotBlank() }
+        ?: destinationAddress
+    val routeIncidentId = restoredSession?.incidentId ?: incidentId
+    val routeAssignmentId = if (restoredSession != null) {
+        restoredSession.assignmentId
+    } else {
+        assignmentId
+    }
+    val restoredOriginalRoute = remember(restoredSession?.originalRouteJson) {
+        routeResultFromJson(restoredSession?.originalRouteJson)
+            ?: RouteResult.EMPTY
+    }
+    val restoredApprovedRoute = remember(restoredSession?.approvedRouteJson) {
+        routeResultFromJson(restoredSession?.approvedRouteJson)
+            ?: RouteResult.EMPTY
+    }
+    val restoredAlternativeSelected =
+        restoredSession?.selectedMode == ActiveRouteMode.ALTERNATIVE &&
+                restoredApprovedRoute.points.isNotEmpty()
 
     // Live GPS state.
     var currentLat by remember { mutableStateOf<Double?>(null) }
     var currentLng by remember { mutableStateOf<Double?>(null) }
     var currentBearing by remember { mutableFloatStateOf(0f) }
+    var currentAccuracyMeters by remember { mutableStateOf<Float?>(null) }
+    var hasLiveLocationFix by remember { mutableStateOf(false) }
+    var lastUsableLiveFixElapsedRealtimeMs by remember {
+        mutableStateOf<Long?>(null)
+    }
     val fusedClient = remember(context) {
         LocationServices.getFusedLocationProviderClient(context)
     }
@@ -166,23 +241,53 @@ fun LiveRouteMapScreen(
     }
 
     // Routing/navigation state.
-    var routeResult by remember { mutableStateOf(RouteResult.EMPTY) }
+    var originalRouteResult by remember(routeSessionId) {
+        mutableStateOf(restoredOriginalRoute)
+    }
+    var routeResult by remember(routeSessionId) {
+        mutableStateOf(
+            if (restoredAlternativeSelected) {
+                restoredApprovedRoute
+            } else {
+                restoredOriginalRoute
+            }
+        )
+    }
     var isFetchingRoute by remember { mutableStateOf(false) }
-    var lastFetchLat by remember { mutableStateOf<Double?>(null) }
-    var lastFetchLng by remember { mutableStateOf<Double?>(null) }
-    var currentStepIndex by remember { mutableIntStateOf(0) }
+    var initialOriginLat by remember(routeSessionId) {
+        mutableStateOf(restoredSession?.initialOriginLat)
+    }
+    var initialOriginLng by remember(routeSessionId) {
+        mutableStateOf(restoredSession?.initialOriginLng)
+    }
+    var currentStepIndex by remember(routeSessionId) {
+        mutableIntStateOf(
+            restoredSession?.currentStepIndex
+                ?.coerceAtMost(routeResult.steps.lastIndex.coerceAtLeast(0))
+                ?: 0
+        )
+    }
     var isFollowingUser by remember { mutableStateOf(true) }
 
     // Alternative-route state. The request ID and waiting flag survive a
     // configuration change, allowing status polling to resume after rotation.
-    var alternativeRequestId by rememberSaveable {
-        mutableStateOf<Long?>(null)
+    var alternativeRequestId by rememberSaveable(routeSessionId) {
+        mutableStateOf(restoredSession?.pendingAlternativeRequestId)
     }
-    var isWaitingForAlternative by rememberSaveable {
-        mutableStateOf(false)
+    var alternativeRequestStartedAtMillis by rememberSaveable(routeSessionId) {
+        mutableStateOf(restoredSession?.pendingAlternativeRequestedAtMillis)
     }
-    var usingAlternativeRoute by remember {
-        mutableStateOf(false)
+    var isWaitingForAlternative by rememberSaveable(routeSessionId) {
+        mutableStateOf(restoredSession?.pendingAlternativeRequestId != null)
+    }
+    var alternativeRequestStartLat by rememberSaveable(routeSessionId) {
+        mutableStateOf(restoredSession?.pendingAlternativeStartLat)
+    }
+    var alternativeRequestStartLng by rememberSaveable(routeSessionId) {
+        mutableStateOf(restoredSession?.pendingAlternativeStartLng)
+    }
+    var usingAlternativeRoute by remember(routeSessionId) {
+        mutableStateOf(restoredAlternativeSelected)
     }
 
     // On-scene and dialog state.
@@ -218,6 +323,29 @@ fun LiveRouteMapScreen(
                 result.lastLocation?.let { location ->
                     currentLat = location.latitude
                     currentLng = location.longitude
+                    val accuracyMeters = location.accuracy
+                        .takeIf { location.hasAccuracy() && it.isFinite() && it > 0f }
+                    val fixAgeMillis = (
+                            SystemClock.elapsedRealtimeNanos() -
+                                    location.elapsedRealtimeNanos
+                            ).coerceAtLeast(0L) / 1_000_000L
+                    val usableLiveFix =
+                        ResponderWorkflowPolicy.hasValidCoordinates(
+                            location.latitude,
+                            location.longitude
+                        ) &&
+                                accuracyMeters != null &&
+                                accuracyMeters <= ResponderWorkflowPolicy
+                                    .MAX_ACCEPTABLE_ACCURACY_METERS &&
+                                fixAgeMillis <= MAX_LIVE_FIX_AGE_MS
+
+                    currentAccuracyMeters = accuracyMeters
+                    hasLiveLocationFix = usableLiveFix
+                    lastUsableLiveFixElapsedRealtimeMs = if (usableLiveFix) {
+                        location.elapsedRealtimeNanos / 1_000_000L
+                    } else {
+                        null
+                    }
 
                     if (
                         location.hasBearing() &&
@@ -233,10 +361,15 @@ fun LiveRouteMapScreen(
         if (hasPermission) {
             @Suppress("MissingPermission")
             fusedClient.lastLocation.addOnSuccessListener { location ->
-                if (!active || location == null) return@addOnSuccessListener
+                if (!active || location == null || hasLiveLocationFix) {
+                    return@addOnSuccessListener
+                }
 
                 currentLat = location.latitude
                 currentLng = location.longitude
+                // A cached fix may be old. It can position the marker, but arrival
+                // and the frozen route origin wait for a live callback above.
+                currentAccuracyMeters = null
 
                 if (
                     location.hasBearing() &&
@@ -337,23 +470,50 @@ fun LiveRouteMapScreen(
     }
 
     fun requestAlternativeRoute() {
-        val safeIncidentId = incidentId?.trim().orEmpty()
+        val safeIncidentId = routeIncidentId?.trim().orEmpty()
         val responderLat = currentLat
         val responderLng = currentLng
-        val incidentLat = destinationLat
-        val incidentLng = destinationLng
+        val incidentLat = routeDestinationLat
+        val incidentLng = routeDestinationLng
+        val liveFixAgeMs = lastUsableLiveFixElapsedRealtimeMs?.let { timestamp ->
+            SystemClock.elapsedRealtime() - timestamp
+        }
+        val hasUsableLiveFix = hasLiveLocationFix &&
+                currentAccuracyMeters?.let { accuracy ->
+                    accuracy.isFinite() &&
+                            accuracy > 0f &&
+                            accuracy <= ResponderWorkflowPolicy
+                                .MAX_ACCEPTABLE_ACCURACY_METERS
+                } == true &&
+                liveFixAgeMs != null &&
+                liveFixAgeMs in 0..MAX_LIVE_FIX_AGE_MS
+
+        if (
+            isFetchingRoute ||
+            originalRouteResult.points.isEmpty() ||
+            routeResult.points.isEmpty()
+        ) {
+            Toast.makeText(
+                context,
+                "Wait for the original route to lock before requesting another route.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
 
         if (
             safeIncidentId.isBlank() ||
             responderId <= 0 ||
+            routeSessionId == null ||
             responderLat == null ||
             responderLng == null ||
             incidentLat == null ||
-            incidentLng == null
+            incidentLng == null ||
+            !hasUsableLiveFix
         ) {
             Toast.makeText(
                 context,
-                "Responder or incident location is unavailable.",
+                "Wait for an accurate live GPS fix before requesting another route.",
                 Toast.LENGTH_LONG
             ).show()
             return
@@ -368,7 +528,7 @@ fun LiveRouteMapScreen(
                 val response = RetrofitProvider.incidentApi.requestAlternativeRoute(
                     AlternativeRouteRequestBody(
                         incidentId = safeIncidentId,
-                        assignmentId = assignmentId
+                        assignmentId = routeAssignmentId
                             ?.trim()
                             ?.takeIf { it.isNotBlank() },
                         responderId = responderId,
@@ -380,6 +540,28 @@ fun LiveRouteMapScreen(
                 )
 
                 if (response.success && response.requestId != null) {
+                    val requestedAtMillis = System.currentTimeMillis()
+                    val requestStored = activeRouteStore.savePendingAlternative(
+                        responderId = responderId,
+                        sessionId = routeSessionId,
+                        requestId = response.requestId,
+                        startLat = responderLat,
+                        startLng = responderLng,
+                        requestedAtMillis = requestedAtMillis
+                    )
+                    if (!requestStored) {
+                        isWaitingForAlternative = false
+                        Toast.makeText(
+                            context,
+                            "The active response changed. Request the route again.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        return@launch
+                    }
+
+                    alternativeRequestStartLat = responderLat
+                    alternativeRequestStartLng = responderLng
+                    alternativeRequestStartedAtMillis = requestedAtMillis
                     alternativeRequestId = response.requestId
 
                     Toast.makeText(
@@ -389,6 +571,9 @@ fun LiveRouteMapScreen(
                     ).show()
                 } else {
                     isWaitingForAlternative = false
+                    alternativeRequestStartedAtMillis = null
+                    alternativeRequestStartLat = null
+                    alternativeRequestStartLng = null
 
                     Toast.makeText(
                         context,
@@ -400,6 +585,9 @@ fun LiveRouteMapScreen(
                 throw cancelled
             } catch (error: Exception) {
                 isWaitingForAlternative = false
+                alternativeRequestStartedAtMillis = null
+                alternativeRequestStartLat = null
+                alternativeRequestStartLng = null
 
                 Log.e(
                     ALTERNATIVE_ROUTE_LOG_TAG,
@@ -416,20 +604,103 @@ fun LiveRouteMapScreen(
         }
     }
 
-    fun returnToAutomaticRoute() {
+    fun restoreOriginalRoute() {
+        if (originalRouteResult.points.isEmpty()) return
+
         usingAlternativeRoute = false
-        routeResult = RouteResult.EMPTY
-        currentStepIndex = 0
-        lastFetchLat = null
-        lastFetchLng = null
+        routeResult = originalRouteResult
+        currentStepIndex = closestRelevantStepIndex(
+            route = originalRouteResult,
+            currentLat = currentLat,
+            currentLng = currentLng
+        )
+        routeSessionId?.let { sessionId ->
+            activeRouteStore.selectMode(
+                responderId = responderId,
+                sessionId = sessionId,
+                mode = ActiveRouteMode.ORIGINAL
+            )
+            activeRouteStore.saveStepIndex(
+                responderId = responderId,
+                sessionId = sessionId,
+                stepIndex = currentStepIndex
+            )
+        }
+    }
+
+    fun ownsCurrentRouteSession(): Boolean {
+        val sessionId = routeSessionId ?: return false
+        return activeRouteStore.read(responderId, sessionId) != null
+    }
+
+    fun stopAndClearOwnedRoute(): Boolean {
+        val sessionId = routeSessionId ?: return false
+        if (activeRouteStore.read(responderId, sessionId) == null) return false
+
+        context.stopService(Intent(context, RouteMonitoringService::class.java))
+        val navPrefs = context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
+        if (navPrefs.getString("pending_en_route_session_id", null) == sessionId) {
+            navPrefs.edit()
+                .putBoolean("pending_en_route_check", false)
+                .remove("pending_en_route_incident_id")
+                .remove("pending_en_route_session_id")
+                .apply()
+        }
+        return activeRouteStore.clearSession(responderId, sessionId)
     }
 
     fun confirmOnScene() {
         if (onSceneSubmitted) return
 
-        val assignmentKey = assignmentId?.takeIf { it.isNotBlank() }
-            ?: incidentId?.takeIf { it.isNotBlank() }
-        val routeRecordId = incidentId?.toIntOrNull()
+        if (!ownsCurrentRouteSession()) {
+            Toast.makeText(
+                context,
+                "This map is no longer the active response route.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+
+        val latitude = currentLat
+        val longitude = currentLng
+        val destinationLatitude = routeDestinationLat
+        val destinationLongitude = routeDestinationLng
+        val lastFixTimestamp = lastUsableLiveFixElapsedRealtimeMs
+        val fixAgeMs = lastFixTimestamp?.let {
+            SystemClock.elapsedRealtime() - it
+        }
+        val permittedRadius = ResponderWorkflowPolicy.arrivalExitRadiusMeters(
+            currentAccuracyMeters
+        )
+        val stillAtIncident =
+            isNearDestination &&
+                    hasLiveLocationFix &&
+                    fixAgeMs != null &&
+                    fixAgeMs in 0..MAX_LIVE_FIX_AGE_MS &&
+                    permittedRadius != null &&
+                    latitude != null &&
+                    longitude != null &&
+                    destinationLatitude != null &&
+                    destinationLongitude != null &&
+                    haversineDistanceMeters(
+                        latitude,
+                        longitude,
+                        destinationLatitude,
+                        destinationLongitude
+                    ) <= permittedRadius
+        if (!stillAtIncident) {
+            isNearDestination = false
+            Toast.makeText(
+                context,
+                "Wait for a fresh, accurate GPS fix at the incident before reporting on-scene.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+
+        val assignmentKey = routeAssignmentId?.takeIf { it.isNotBlank() }
+            ?: routeIncidentId?.takeIf { it.isNotBlank() }
+        val routeRecordId = routeIncidentId?.toIntOrNull()
 
         if (assignmentKey == null || responderId <= 0) {
             Toast.makeText(
@@ -469,7 +740,7 @@ fun LiveRouteMapScreen(
                     val response = RetrofitProvider.incidentApi.markRouteArrived(
                         MarkRouteArrivedRequest(
                             incident_id = routeRecordId,
-                            assignment_id = assignmentId?.toIntOrNull(),
+                            assignment_id = routeAssignmentId?.toIntOrNull(),
                             responder_id = responderId
                         )
                     )
@@ -493,12 +764,7 @@ fun LiveRouteMapScreen(
                 "On-scene reported; no route reference was available for analytics"
             }
 
-            context.stopService(Intent(context, RouteMonitoringService::class.java))
-            context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
-                .edit()
-                .putBoolean("pending_en_route_check", false)
-                .remove("pending_en_route_incident_id")
-                .apply()
+            stopAndClearOwnedRoute()
 
             Toast.makeText(context, routeSummaryMessage, Toast.LENGTH_LONG).show()
             onBack()
@@ -508,8 +774,17 @@ fun LiveRouteMapScreen(
     fun cancelLiveRoute() {
         if (isCancellingRoute) return
 
-        val assignmentKey = assignmentId?.takeIf { it.isNotBlank() }
-            ?: incidentId?.takeIf { it.isNotBlank() }
+        if (!ownsCurrentRouteSession()) {
+            Toast.makeText(
+                context,
+                "This map is no longer the active response route.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+
+        val assignmentKey = routeAssignmentId?.takeIf { it.isNotBlank() }
+            ?: routeIncidentId?.takeIf { it.isNotBlank() }
         if (assignmentKey == null || responderId <= 0) {
             Toast.makeText(
                 context,
@@ -528,12 +803,7 @@ fun LiveRouteMapScreen(
                     status = "received"
                 )
 
-                context.stopService(Intent(context, RouteMonitoringService::class.java))
-                context.getSharedPreferences("nav_prefs", Context.MODE_PRIVATE)
-                    .edit()
-                    .putBoolean("pending_en_route_check", false)
-                    .remove("pending_en_route_incident_id")
-                    .apply()
+                stopAndClearOwnedRoute()
 
                 showExitConfirmDialog = false
                 onCancelRoute()
@@ -564,12 +834,68 @@ fun LiveRouteMapScreen(
             return@LaunchedEffect
         }
 
-        while (true) {
+        fun clearPendingAlternative(message: String? = null) {
+            isWaitingForAlternative = false
+            alternativeRequestId = null
+            alternativeRequestStartedAtMillis = null
+            alternativeRequestStartLat = null
+            alternativeRequestStartLng = null
+            routeSessionId?.let { sessionId ->
+                activeRouteStore.clearPendingAlternative(
+                    responderId,
+                    sessionId,
+                    requestId
+                )
+            }
+            message?.let {
+                Toast.makeText(context, it, Toast.LENGTH_LONG).show()
+            }
+        }
+
+        val requestedAtMillis = alternativeRequestStartedAtMillis
+        val initialRequestAgeMillis = requestedAtMillis?.let {
+            System.currentTimeMillis() - it
+        }
+        if (
+            requestedAtMillis == null ||
+            initialRequestAgeMillis == null ||
+            initialRequestAgeMillis !in 0..ALTERNATIVE_ROUTE_TIMEOUT_MS
+        ) {
+            clearPendingAlternative(
+                "The alternative-route request expired. Your current route was kept."
+            )
+            return@LaunchedEffect
+        }
+
+        var pollAttempts = 0
+        while (
+            pollAttempts < ALTERNATIVE_ROUTE_MAX_POLL_ATTEMPTS &&
+            System.currentTimeMillis() - requestedAtMillis in
+                0..ALTERNATIVE_ROUTE_TIMEOUT_MS
+        ) {
+            pollAttempts += 1
             try {
                 val response = RetrofitProvider.incidentApi.getAlternativeRouteStatus(
                     requestId = requestId,
                     responderId = responderId
                 )
+
+                if (
+                    System.currentTimeMillis() - requestedAtMillis !in
+                    0..ALTERNATIVE_ROUTE_TIMEOUT_MS
+                ) {
+                    clearPendingAlternative(
+                        "The alternative-route request expired. Your current route was kept."
+                    )
+                    return@LaunchedEffect
+                }
+
+                if (!response.success || response.requestId != requestId) {
+                    clearPendingAlternative(
+                        "The returned route did not match this request. Your current route was kept."
+                    )
+                    return@LaunchedEffect
+                }
 
                 when (response.status.lowercase()) {
                     "ready" -> {
@@ -582,50 +908,88 @@ fun LiveRouteMapScreen(
                         )
 
                         if (normalizedPoints.size < 2) {
-                            isWaitingForAlternative = false
-                            alternativeRequestId = null
-
-                            Toast.makeText(
-                                context,
+                            clearPendingAlternative(
                                 "Received route has insufficient or invalid coordinates.",
-                                Toast.LENGTH_LONG
-                            ).show()
+                            )
                             return@LaunchedEffect
                         }
 
+                        val expectedStartLat = alternativeRequestStartLat
+                        val expectedStartLng = alternativeRequestStartLng
+                        val expectedEndLat = routeDestinationLat
+                        val expectedEndLng = routeDestinationLng
+                        if (
+                            expectedStartLat == null ||
+                            expectedStartLng == null ||
+                            expectedEndLat == null ||
+                            expectedEndLng == null
+                        ) {
+                            clearPendingAlternative(
+                                "The route request no longer matches this response. Your current route was kept."
+                            )
+                            return@LaunchedEffect
+                        }
+
+                        val expectedStart = expectedStartLat to expectedStartLng
+                        val expectedEnd = expectedEndLat to expectedEndLng
+
                         val orientedPoints = orientRoutePoints(
                             points = normalizedPoints,
-                            start = if (currentLat != null && currentLng != null) {
-                                currentLat!! to currentLng!!
-                            } else {
-                                null
-                            },
-                            end = if (destinationLat != null && destinationLng != null) {
-                                destinationLat to destinationLng
-                            } else {
-                                null
-                            }
+                            start = expectedStart,
+                            end = expectedEnd
                         )
-
-                        val drawablePoints = if (
-                            currentLat != null &&
-                            currentLng != null &&
-                            destinationLat != null &&
-                            destinationLng != null
+                        val startGapMeters = haversineDistanceMeters(
+                            expectedStart.first,
+                            expectedStart.second,
+                            orientedPoints.first().first,
+                            orientedPoints.first().second
+                        )
+                        val endGapMeters = haversineDistanceMeters(
+                            expectedEnd.first,
+                            expectedEnd.second,
+                            orientedPoints.last().first,
+                            orientedPoints.last().second
+                        )
+                        if (
+                            startGapMeters > MAX_PLAUSIBLE_OFFROAD_CONNECTOR_METERS ||
+                            endGapMeters > MAX_PLAUSIBLE_OFFROAD_CONNECTOR_METERS
                         ) {
-                            connectToEndpoints(
-                                routePoints = orientedPoints,
-                                start = currentLat!! to currentLng!!,
-                                end = destinationLat to destinationLng,
-                                maxConnectorMeters = MAX_PLAUSIBLE_OFFROAD_CONNECTOR_METERS
+                            clearPendingAlternative(
+                                "The returned route does not connect to this responder and incident. Your current route was kept."
                             )
-                        } else {
-                            orientedPoints
+                            return@LaunchedEffect
                         }
+
+                        val drawablePoints = connectToEndpoints(
+                            routePoints = orientedPoints,
+                            start = expectedStart,
+                            end = expectedEnd,
+                            maxConnectorMeters = MAX_PLAUSIBLE_OFFROAD_CONNECTOR_METERS
+                        )
 
                         val calculatedDistance = calculatePolylineDistanceMeters(
                             drawablePoints
                         )
+                        val directDistance = haversineDistanceMeters(
+                            expectedStart.first,
+                            expectedStart.second,
+                            expectedEnd.first,
+                            expectedEnd.second
+                        )
+                        val maximumPlausibleDistance = maxOf(
+                            directDistance * 5.0,
+                            MIN_MAXIMUM_ALTERNATIVE_DISTANCE_METERS
+                        )
+                        if (
+                            !calculatedDistance.isFinite() ||
+                            calculatedDistance <= 0.0 ||
+                            calculatedDistance > maximumPlausibleDistance
+                        ) {
+                            clearPendingAlternative(
+                                "The returned route length is not plausible for this incident. Your current route was kept."
+                            )
+                            return@LaunchedEffect
+                        }
 
                         val distance = response.distanceMeters
                             ?.takeIf { it.isFinite() && it > 0.0 }
@@ -635,31 +999,43 @@ fun LiveRouteMapScreen(
                             ?.takeIf { it.isFinite() && it > 0.0 }
                             ?: estimateDurationSeconds(distance)
 
-                        val finalTarget = if (
-                            destinationLat != null && destinationLng != null
-                        ) {
-                            destinationLat to destinationLng
-                        } else {
-                            drawablePoints.last()
-                        }
-
-                        usingAlternativeRoute = true
-                        routeResult = RouteResult(
+                        val approvedResult = RouteResult(
                             points = drawablePoints,
                             steps = listOf(
                                 RouteStep(
                                     instruction = "Alternative route active — follow the highlighted route",
                                     distanceMeters = distance,
-                                    targetLat = finalTarget.first,
-                                    targetLng = finalTarget.second
+                                    targetLat = expectedEnd.first,
+                                    targetLng = expectedEnd.second
                                 )
                             ),
                             totalDistanceMeters = distance,
                             totalDurationSeconds = duration,
                             isFallback = false
                         )
+                        val sessionId = routeSessionId
+                        if (
+                            sessionId == null ||
+                            !activeRouteStore.acceptApprovedAlternative(
+                                responderId = responderId,
+                                sessionId = sessionId,
+                                requestId = requestId,
+                                routeJson = routeResultToJson(approvedResult)
+                            )
+                        ) {
+                            clearPendingAlternative(
+                                "The active response changed. Your current route was kept."
+                            )
+                            return@LaunchedEffect
+                        }
+
+                        usingAlternativeRoute = true
+                        routeResult = approvedResult
                         currentStepIndex = 0
                         isWaitingForAlternative = false
+                        alternativeRequestStartLat = null
+                        alternativeRequestStartLng = null
+                        alternativeRequestStartedAtMillis = null
 
                         Toast.makeText(
                             context,
@@ -672,21 +1048,14 @@ fun LiveRouteMapScreen(
                     }
 
                     "failed" -> {
-                        isWaitingForAlternative = false
-
-                        Toast.makeText(
-                            context,
-                            response.message ?: "No alternative route was found.",
-                            Toast.LENGTH_LONG
-                        ).show()
-
-                        alternativeRequestId = null
+                        clearPendingAlternative(
+                            response.message ?: "No alternative route was found."
+                        )
                         return@LaunchedEffect
                     }
 
                     "cancelled" -> {
-                        isWaitingForAlternative = false
-                        alternativeRequestId = null
+                        clearPendingAlternative()
                         return@LaunchedEffect
                     }
 
@@ -705,6 +1074,10 @@ fun LiveRouteMapScreen(
 
             delay(ALTERNATIVE_ROUTE_POLL_INTERVAL_MS)
         }
+
+        clearPendingAlternative(
+            "The alternative-route request timed out. Your current route was kept."
+        )
     }
 
     // Always redraw the current RouteResult after the style becomes available.
@@ -762,8 +1135,11 @@ fun LiveRouteMapScreen(
     LaunchedEffect(
         currentLat,
         currentLng,
-        destinationLat,
-        destinationLng,
+        currentAccuracyMeters,
+        hasLiveLocationFix,
+        lastUsableLiveFixElapsedRealtimeMs,
+        routeDestinationLat,
+        routeDestinationLng,
         viewOnly
     ) {
         if (viewOnly) {
@@ -773,8 +1149,18 @@ fun LiveRouteMapScreen(
 
         val lat = currentLat ?: return@LaunchedEffect
         val lng = currentLng ?: return@LaunchedEffect
-        val destLat = destinationLat ?: return@LaunchedEffect
-        val destLng = destinationLng ?: return@LaunchedEffect
+        val destLat = routeDestinationLat ?: return@LaunchedEffect
+        val destLng = routeDestinationLng ?: return@LaunchedEffect
+        val enterRadius = ResponderWorkflowPolicy.arrivalEnterRadiusMeters(
+            currentAccuracyMeters
+        )
+        val exitRadius = ResponderWorkflowPolicy.arrivalExitRadiusMeters(
+            currentAccuracyMeters
+        )
+        if (enterRadius == null || exitRadius == null) {
+            isNearDestination = false
+            return@LaunchedEffect
+        }
 
         val distance = haversineDistanceMeters(
             lat,
@@ -784,16 +1170,16 @@ fun LiveRouteMapScreen(
         )
 
         isNearDestination = when {
-            distance <= ON_SCENE_ENTER_DISTANCE_METERS -> true
-            distance > ON_SCENE_EXIT_DISTANCE_METERS -> false
+            distance <= enterRadius -> true
+            distance > exitRadius -> false
             else -> isNearDestination
         }
     }
 
     // Destination marker and view-only camera.
     LaunchedEffect(
-        destinationLat,
-        destinationLng,
+        routeDestinationLat,
+        routeDestinationLng,
         mapLibreMap,
         styleReady,
         viewOnly
@@ -801,8 +1187,8 @@ fun LiveRouteMapScreen(
         val map = mapLibreMap ?: return@LaunchedEffect
         if (!styleReady) return@LaunchedEffect
 
-        val lat = destinationLat ?: return@LaunchedEffect
-        val lng = destinationLng ?: return@LaunchedEffect
+        val lat = routeDestinationLat ?: return@LaunchedEffect
+        val lng = routeDestinationLng ?: return@LaunchedEffect
 
         map.style?.let { style ->
             updateDestinationMarker(style, lat, lng)
@@ -816,81 +1202,102 @@ fun LiveRouteMapScreen(
         }
     }
 
-    // Normal OSRM route. This effect is disabled while an external alternative
-    // route is active so it cannot overwrite the received geometry.
+    // Freeze the first live GPS origin for this response. Later movement only
+    // moves the responder marker; it never silently changes the dispatched route.
     LaunchedEffect(
+        routeSessionId,
+        hasLiveLocationFix,
+        lastUsableLiveFixElapsedRealtimeMs,
+        currentAccuracyMeters,
         currentLat,
         currentLng,
-        destinationLat,
-        destinationLng,
-        mapLibreMap,
-        styleReady,
-        viewOnly,
-        usingAlternativeRoute
+        viewOnly
     ) {
-        if (viewOnly) {
-            routeResult = RouteResult.EMPTY
-            return@LaunchedEffect
-        }
+        if (viewOnly || !hasLiveLocationFix) return@LaunchedEffect
+        if (initialOriginLat != null && initialOriginLng != null) return@LaunchedEffect
 
-        if (usingAlternativeRoute) {
-            isFetchingRoute = false
-            return@LaunchedEffect
-        }
-
-        val map = mapLibreMap ?: return@LaunchedEffect
-        if (!styleReady) return@LaunchedEffect
-
-        val cLat = currentLat
-        val cLng = currentLng
-        val destLat = destinationLat
-        val destLng = destinationLng
-
+        val lastFixTimestamp = lastUsableLiveFixElapsedRealtimeMs
+            ?: return@LaunchedEffect
+        val fixAgeMs = SystemClock.elapsedRealtime() - lastFixTimestamp
         if (
-            cLat == null ||
-            cLng == null ||
-            destLat == null ||
-            destLng == null
+            fixAgeMs !in 0..MAX_LIVE_FIX_AGE_MS ||
+            ResponderWorkflowPolicy.arrivalEnterRadiusMeters(
+                currentAccuracyMeters
+            ) == null
         ) {
-            routeResult = RouteResult.EMPTY
             return@LaunchedEffect
         }
 
-        val previousLat = lastFetchLat
-        val previousLng = lastFetchLng
-        val movedEnough = previousLat == null ||
-                previousLng == null ||
-                haversineDistanceMeters(
-                    previousLat,
-                    previousLng,
-                    cLat,
-                    cLng
-                ) > ROUTE_RECALCULATION_DISTANCE_METERS
+        val latitude = currentLat ?: return@LaunchedEffect
+        val longitude = currentLng ?: return@LaunchedEffect
+        if (!ResponderWorkflowPolicy.hasValidCoordinates(latitude, longitude)) {
+            return@LaunchedEffect
+        }
 
-        if (!movedEnough && routeResult.points.isNotEmpty()) {
+        val sessionId = routeSessionId ?: return@LaunchedEffect
+        val originSaved = activeRouteStore.saveInitialOrigin(
+            responderId = responderId,
+            sessionId = sessionId,
+            latitude = latitude,
+            longitude = longitude
+        )
+        if (originSaved) {
+            initialOriginLat = latitude
+            initialOriginLng = longitude
+        } else {
+            // Another instance may have already frozen the same response.
+            // Re-read that authoritative first origin instead of overwriting it.
+            activeRouteStore.read(responderId, sessionId)?.let { session ->
+                initialOriginLat = session.initialOriginLat
+                initialOriginLng = session.initialOriginLng
+            }
+        }
+    }
+
+    // Establish the original OSRM route once from the frozen origin. It remains
+    // unchanged until the other group returns a valid, approved alternative.
+    LaunchedEffect(
+        routeSessionId,
+        initialOriginLat,
+        initialOriginLng,
+        routeDestinationLat,
+        routeDestinationLng,
+        viewOnly,
+        originalRouteResult.points.isNotEmpty()
+    ) {
+        if (viewOnly || originalRouteResult.points.isNotEmpty()) return@LaunchedEffect
+
+        val originLat = initialOriginLat ?: return@LaunchedEffect
+        val originLng = initialOriginLng ?: return@LaunchedEffect
+        val destLat = routeDestinationLat ?: return@LaunchedEffect
+        val destLng = routeDestinationLng ?: return@LaunchedEffect
+        if (!ResponderWorkflowPolicy.hasValidCoordinates(originLat, originLng) ||
+            !ResponderWorkflowPolicy.hasValidCoordinates(destLat, destLng)
+        ) {
             return@LaunchedEffect
         }
 
         val result = try {
             isFetchingRoute = true
             fetchRoadRoute(
-                startLat = cLat,
-                startLng = cLng,
+                startLat = originLat,
+                startLng = originLng,
                 endLat = destLat,
                 endLng = destLng
             )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Log.e("LiveRouteMap", "Initial road route failed", error)
+            RouteResult.EMPTY
         } finally {
             isFetchingRoute = false
         }
 
-        // The effect can be cancelled/restarted while the network request is in
-        // flight. Do not commit a normal route after an external route activates.
-        if (usingAlternativeRoute) return@LaunchedEffect
-
         val finalResult = if (result.points.isNotEmpty()) {
             val startGap = haversineDistanceMeters(
-                cLat,
-                cLng,
+                originLat,
+                originLng,
                 result.points.first().first,
                 result.points.first().second
             )
@@ -903,13 +1310,23 @@ fun LiveRouteMapScreen(
 
             val drawablePoints = connectToEndpoints(
                 routePoints = result.points,
-                start = cLat to cLng,
+                start = originLat to originLng,
                 end = destLat to destLng,
                 maxConnectorMeters = MAX_PLAUSIBLE_OFFROAD_CONNECTOR_METERS
             )
 
             result.copy(
                 points = drawablePoints,
+                steps = result.steps.ifEmpty {
+                    listOf(
+                        RouteStep(
+                            instruction = "Continue on the highlighted route",
+                            distanceMeters = result.totalDistanceMeters,
+                            targetLat = destLat,
+                            targetLng = destLng
+                        )
+                    )
+                },
                 startSnapDistanceMeters = maxOf(
                     result.startSnapDistanceMeters,
                     startGap
@@ -921,14 +1338,14 @@ fun LiveRouteMapScreen(
             )
         } else {
             val straightDistance = haversineDistanceMeters(
-                cLat,
-                cLng,
+                originLat,
+                originLng,
                 destLat,
                 destLng
             )
 
             RouteResult(
-                points = listOf(cLat to cLng, destLat to destLng),
+                points = listOf(originLat to originLng, destLat to destLng),
                 steps = listOf(
                     RouteStep(
                         instruction = "Head toward destination (straight-line estimate — live routing unavailable)",
@@ -943,15 +1360,57 @@ fun LiveRouteMapScreen(
             )
         }
 
-        routeResult = finalResult
-        lastFetchLat = cLat
-        lastFetchLng = cLng
-        currentStepIndex = 0
+        val sessionId = routeSessionId ?: return@LaunchedEffect
+        val routeSaved = activeRouteStore.saveOriginalRoute(
+            responderId = responderId,
+            sessionId = sessionId,
+            routeJson = routeResultToJson(finalResult)
+        )
+        val authoritativeResult = if (routeSaved) {
+            finalResult
+        } else {
+            routeResultFromJson(
+                activeRouteStore.read(responderId, sessionId)?.originalRouteJson
+            ) ?: return@LaunchedEffect
+        }
+        if (authoritativeResult.points.isEmpty()) return@LaunchedEffect
+
+        originalRouteResult = authoritativeResult
+
+        if (!usingAlternativeRoute) {
+            routeResult = authoritativeResult
+            currentStepIndex = 0
+            routeSessionId?.let { sessionId ->
+                activeRouteStore.selectMode(responderId, sessionId, ActiveRouteMode.ORIGINAL)
+                activeRouteStore.saveStepIndex(responderId, sessionId, 0)
+            }
+        }
     }
 
-    // Advance the current OSRM instruction as the responder approaches it.
-    LaunchedEffect(currentLat, currentLng, routeResult, viewOnly) {
-        if (viewOnly) return@LaunchedEffect
+    // Reconcile monotonically against nearby later maneuvers. This catches up
+    // after the map was closed and avoids getting stuck when a 3-second GPS
+    // interval skips over a narrow maneuver radius.
+    LaunchedEffect(
+        currentLat,
+        currentLng,
+        currentAccuracyMeters,
+        hasLiveLocationFix,
+        lastUsableLiveFixElapsedRealtimeMs,
+        routeResult,
+        viewOnly
+    ) {
+        if (viewOnly || !hasLiveLocationFix) return@LaunchedEffect
+        val lastFixTimestamp = lastUsableLiveFixElapsedRealtimeMs
+            ?: return@LaunchedEffect
+        if (
+            SystemClock.elapsedRealtime() - lastFixTimestamp !in
+            0..MAX_LIVE_FIX_AGE_MS ||
+            ResponderWorkflowPolicy.arrivalEnterRadiusMeters(
+                currentAccuracyMeters
+            ) == null
+        ) {
+            return@LaunchedEffect
+        }
 
         val lat = currentLat ?: return@LaunchedEffect
         val lng = currentLng ?: return@LaunchedEffect
@@ -966,11 +1425,41 @@ fun LiveRouteMapScreen(
             currentStep.targetLng
         )
 
-        if (
+        val lookAheadLastIndex = minOf(steps.lastIndex, currentStepIndex + 6)
+        val closestLaterIndex = (currentStepIndex..lookAheadLastIndex)
+            .minByOrNull { index ->
+                val step = steps[index]
+                haversineDistanceMeters(
+                    lat,
+                    lng,
+                    step.targetLat,
+                    step.targetLng
+                )
+            }
+            ?: currentStepIndex
+        val proximityIndex = if (
             distanceToStep < MANEUVER_ADVANCE_DISTANCE_METERS &&
             currentStepIndex < steps.lastIndex
         ) {
-            currentStepIndex += 1
+            currentStepIndex + 1
+        } else {
+            currentStepIndex
+        }
+        val reconciledIndex = maxOf(
+            currentStepIndex,
+            closestLaterIndex,
+            proximityIndex
+        )
+
+        if (reconciledIndex != currentStepIndex) {
+            currentStepIndex = reconciledIndex
+            routeSessionId?.let { sessionId ->
+                activeRouteStore.saveStepIndex(
+                    responderId = responderId,
+                    sessionId = sessionId,
+                    stepIndex = currentStepIndex
+                )
+            }
         }
     }
 
@@ -1105,10 +1594,21 @@ fun LiveRouteMapScreen(
                     onClick = ::requestAlternativeRoute,
                     enabled =
                     !isWaitingForAlternative &&
+                            !isFetchingRoute &&
+                            originalRouteResult.points.isNotEmpty() &&
+                            routeResult.points.isNotEmpty() &&
+                            hasLiveLocationFix &&
+                            lastUsableLiveFixElapsedRealtimeMs?.let { timestamp ->
+                                SystemClock.elapsedRealtime() - timestamp in
+                                        0..MAX_LIVE_FIX_AGE_MS
+                            } == true &&
+                            ResponderWorkflowPolicy.arrivalEnterRadiusMeters(
+                                currentAccuracyMeters
+                            ) != null &&
                             currentLat != null &&
                             currentLng != null &&
-                            destinationLat != null &&
-                            destinationLng != null,
+                            routeDestinationLat != null &&
+                            routeDestinationLng != null,
                     modifier = Modifier
                         .padding(horizontal = 16.dp)
                         .fillMaxWidth()
@@ -1154,14 +1654,14 @@ fun LiveRouteMapScreen(
 
                 if (usingAlternativeRoute) {
                     OutlinedButton(
-                        onClick = ::returnToAutomaticRoute,
+                        onClick = ::restoreOriginalRoute,
                         modifier = Modifier
                             .padding(horizontal = 16.dp)
                             .fillMaxWidth()
                             .height(46.dp),
                         shape = RoundedCornerShape(14.dp)
                     ) {
-                        Text("Return to Automatic Route")
+                        Text("Restore Original Route")
                     }
                 }
             }
@@ -1224,7 +1724,7 @@ fun LiveRouteMapScreen(
                     viewOnly -> {
                         Column {
                             Text(
-                                text = destinationAddress ?: "Pinned location",
+                                text = routeDestinationAddress ?: "Pinned location",
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Medium
                             )
@@ -1272,12 +1772,28 @@ fun LiveRouteMapScreen(
 
                             if (usingAlternativeRoute) {
                                 Text(
-                                    text = "Alternative route active",
+                                    text = "Approved alternative route active • route locked",
                                     fontSize = 12.sp,
                                     color = Color(0xFFEF6C00),
                                     fontWeight = FontWeight.SemiBold
                                 )
+                            } else {
+                                Text(
+                                    text = "Original route locked",
+                                    fontSize = 12.sp,
+                                    color = Color(0xFF2E7D32),
+                                    fontWeight = FontWeight.SemiBold
+                                )
                             }
+
+                            Text(
+                                text = currentAccuracyMeters
+                                    ?.takeIf { it.isFinite() && it > 0f }
+                                    ?.let { "GPS accuracy ±${it.toInt()} m" }
+                                    ?: "Waiting for a live GPS fix for arrival verification",
+                                fontSize = 11.sp,
+                                color = Color(0xFF757575)
+                            )
 
                             when {
                                 routeResult.isFallback -> {
@@ -1321,7 +1837,7 @@ fun LiveRouteMapScreen(
 
                     else -> {
                         Text(
-                            text = destinationAddress ?: "Waiting for GPS…",
+                            text = routeDestinationAddress ?: "Waiting for GPS…",
                             fontSize = 14.sp
                         )
                     }
@@ -1386,12 +1902,28 @@ fun LiveRouteMapScreen(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "You're about to leave live navigation.\nAre you still responding to this incident?",
+                        text = "You can leave the map while live tracking continues. Use Resume Navigation on Home or tap the tracking notification to return.",
                         textAlign = TextAlign.Center,
                         color = Color.Gray,
                         fontSize = 15.sp
                     )
                     Spacer(modifier = Modifier.height(24.dp))
+
+                    Button(
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !isCancellingRoute && !onSceneSubmitted,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF0F766E)
+                        ),
+                        onClick = {
+                            showExitConfirmDialog = false
+                            onBack()
+                        }
+                    ) {
+                        Text("Exit Map — Keep Responding")
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -1408,22 +1940,17 @@ fun LiveRouteMapScreen(
                                     strokeWidth = 2.dp
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Cancelling...")
+                                Text("Cancelling…")
                             } else {
-                                Text("Cancel Route")
+                                Text("Cancel Response")
                             }
                         }
 
-                        Button(
+                        OutlinedButton(
                             modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFF0F766E)
-                            ),
-                            onClick = {
-                                showExitConfirmDialog = false
-                            }
+                            onClick = { showExitConfirmDialog = false }
                         ) {
-                            Text("Continue")
+                            Text("Stay on Map")
                         }
                     }
                 }
@@ -1458,17 +1985,131 @@ private data class RouteResult(
     }
 }
 
+private fun routeResultToJson(route: RouteResult): String {
+    val points = JSONArray()
+    route.points.forEach { (latitude, longitude) ->
+        points.put(JSONArray().put(latitude).put(longitude))
+    }
+
+    val steps = JSONArray()
+    route.steps.forEach { step ->
+        steps.put(
+            JSONObject()
+                .put("instruction", step.instruction)
+                .put("distanceMeters", step.distanceMeters)
+                .put("targetLat", step.targetLat)
+                .put("targetLng", step.targetLng)
+        )
+    }
+
+    return JSONObject()
+        .put("points", points)
+        .put("steps", steps)
+        .put("totalDistanceMeters", route.totalDistanceMeters)
+        .put("totalDurationSeconds", route.totalDurationSeconds)
+        .put("isFallback", route.isFallback)
+        .put("startSnapDistanceMeters", route.startSnapDistanceMeters)
+        .put("endSnapDistanceMeters", route.endSnapDistanceMeters)
+        .toString()
+}
+
+private fun routeResultFromJson(raw: String?): RouteResult? {
+    if (raw.isNullOrBlank()) return null
+
+    return runCatching {
+        val root = JSONObject(raw)
+        val pointArray = root.getJSONArray("points")
+        val points = buildList {
+            for (index in 0 until pointArray.length()) {
+                val pair = pointArray.getJSONArray(index)
+                val latitude = pair.getDouble(0)
+                val longitude = pair.getDouble(1)
+                require(ResponderWorkflowPolicy.hasValidCoordinates(latitude, longitude))
+                add(latitude to longitude)
+            }
+        }
+        require(points.size >= 2)
+
+        val stepArray = root.getJSONArray("steps")
+        val steps = buildList {
+            for (index in 0 until stepArray.length()) {
+                val item = stepArray.getJSONObject(index)
+                val distance = item.getDouble("distanceMeters")
+                val targetLat = item.getDouble("targetLat")
+                val targetLng = item.getDouble("targetLng")
+                require(distance.isFinite() && distance >= 0.0)
+                require(ResponderWorkflowPolicy.hasValidCoordinates(targetLat, targetLng))
+                add(
+                    RouteStep(
+                        instruction = item.getString("instruction").take(500),
+                        distanceMeters = distance,
+                        targetLat = targetLat,
+                        targetLng = targetLng
+                    )
+                )
+            }
+        }
+        val totalDistance = root.getDouble("totalDistanceMeters")
+        val totalDuration = root.getDouble("totalDurationSeconds")
+        val startSnap = root.optDouble("startSnapDistanceMeters", 0.0)
+        val endSnap = root.optDouble("endSnapDistanceMeters", 0.0)
+        require(totalDistance.isFinite() && totalDistance >= 0.0)
+        require(totalDuration.isFinite() && totalDuration >= 0.0)
+        require(startSnap.isFinite() && startSnap >= 0.0)
+        require(endSnap.isFinite() && endSnap >= 0.0)
+
+        val restoredSteps = steps.ifEmpty {
+            val target = points.last()
+            listOf(
+                RouteStep(
+                    instruction = "Continue on the saved route",
+                    distanceMeters = totalDistance,
+                    targetLat = target.first,
+                    targetLng = target.second
+                )
+            )
+        }
+
+        RouteResult(
+            points = points,
+            steps = restoredSteps,
+            totalDistanceMeters = totalDistance,
+            totalDurationSeconds = totalDuration,
+            isFallback = root.optBoolean("isFallback", false),
+            startSnapDistanceMeters = startSnap,
+            endSnapDistanceMeters = endSnap
+        )
+    }.getOrNull()
+}
+
+private fun closestRelevantStepIndex(
+    route: RouteResult,
+    currentLat: Double?,
+    currentLng: Double?
+): Int {
+    if (route.steps.isEmpty() || currentLat == null || currentLng == null) return 0
+    return route.steps.indices.minByOrNull { index ->
+        val step = route.steps[index]
+        haversineDistanceMeters(
+            currentLat,
+            currentLng,
+            step.targetLat,
+            step.targetLng
+        )
+    } ?: 0
+}
+
 private const val LOCATION_UPDATE_INTERVAL_MS = 3_000L
 private const val LOCATION_MIN_UPDATE_INTERVAL_MS = 1_000L
+private const val MAX_LIVE_FIX_AGE_MS = 15_000L
 private const val MIN_BEARING_SPEED_MPS = 0.5f
 private const val DEFAULT_NAVIGATION_ZOOM = 16.0
-private const val ON_SCENE_ENTER_DISTANCE_METERS = 10.0
-private const val ON_SCENE_EXIT_DISTANCE_METERS = 25.0
 private const val MANEUVER_ADVANCE_DISTANCE_METERS = 25.0
-private const val ROUTE_RECALCULATION_DISTANCE_METERS = 25.0
 private const val MAX_PLAUSIBLE_OFFROAD_CONNECTOR_METERS = 60.0
 private const val ASSUMED_FALLBACK_SPEED_METERS_PER_SECOND = 40_000.0 / 3_600.0
 private const val ALTERNATIVE_ROUTE_POLL_INTERVAL_MS = 3_000L
+private const val ALTERNATIVE_ROUTE_MAX_POLL_ATTEMPTS = 40
+private const val ALTERNATIVE_ROUTE_TIMEOUT_MS = 120_000L
 private const val ALTERNATIVE_ROUTE_LOG_TAG = "AlternativeRoute"
 
 private fun setupRouteSource(style: Style) {
@@ -1782,6 +2423,8 @@ private fun buildInstruction(
 private fun normalizeReceivedRoutePoints(
     points: List<Pair<Double, Double>>
 ): List<Pair<Double, Double>> {
+    if (points.size !in 2..MAX_ALTERNATIVE_ROUTE_POINTS) return emptyList()
+
     val normalized = mutableListOf<Pair<Double, Double>>()
 
     points.forEach { point ->
@@ -1794,7 +2437,9 @@ private fun normalizeReceivedRoutePoints(
             lat !in -90.0..90.0 ||
             lng !in -180.0..180.0
         ) {
-            return@forEach
+            // Never silently repair a server-supplied operational route. One
+            // invalid coordinate invalidates the whole returned payload.
+            return emptyList()
         }
 
         val previous = normalized.lastOrNull()
@@ -2008,6 +2653,8 @@ private fun updateDestinationMarker(
 }
 
 private const val MIN_ROUTE_POINT_SPACING_METERS = 0.5
+private const val MAX_ALTERNATIVE_ROUTE_POINTS = 20_000
+private const val MIN_MAXIMUM_ALTERNATIVE_DISTANCE_METERS = 10_000.0
 private const val MIN_CONNECTOR_DISTANCE_METERS = 15.0
 private const val ROUTE_SOURCE_ID = "route-source"
 private const val ROUTE_LAYER_ID = "route-layer"
