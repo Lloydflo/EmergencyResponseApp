@@ -1,15 +1,15 @@
 # Full responder-workflow update
 
-This project contains the completed Android-side implementation requested for responder alerts, backup requests, Coordination, and Reports.
+This project contains the completed Android-side implementation requested for responder alerts, backup requests, Coordination, and Reviews.
 
 ## Included
 
 - Background/cold-process Firebase Cloud Messaging handling for private chat, department chat, emergency broadcasts, and newly assigned incidents.
 - Dedicated high-importance Android notification channels, event-specific vibration patterns, notification permission handling, duplicate suppression, and destination routing.
 - Operational backup selection on Home, with exact response team/unit/capability choices and a quantity or dispatch-details field.
-- Equipment-and-supply-only requests under Reports; responder personnel, response teams, and emergency vehicles are directed to Home > Backup Requests.
+- Equipment-and-supply-only requests under Reviews; responder personnel, response teams, and emergency vehicles are directed to Home > Backup Requests.
 - Coordination Portal with Chats and Departments as the two persistent tabs; the pencil button opens the searchable responder directory in a bottom sheet.
-- Local per-field quick text templates for After-Action Reports and equipment/supply request notes. Templates can be applied, added, edited, deleted, and restored.
+- Local per-field quick text templates for After-Action Reports, service reviews, and equipment/supply request notes. Templates can be applied, added, edited, deleted, and restored.
 
 The Login/OTP source was not modified as part of this update.
 
@@ -26,9 +26,9 @@ No Firebase service-account credential belongs in this Android project or APK.
 3. Swipe the app away and repeat. Verify each notification vibrates and opens the intended destination.
 4. Confirm no alert is duplicated when FCM and active-app polling receive the same event.
 5. Create an operational backup request from Home and verify its exact unit/capability and details appear in request history.
-6. Create an equipment/supply request from Reports and confirm no responder or emergency-vehicle categories appear.
+6. Create an equipment/supply request from Reviews and confirm no responder or emergency-vehicle categories appear.
 7. Open Coordination, tap the pencil button, search for a responder, and open a private chat.
-8. In every narrative Reports field, apply a default template, add a custom template, edit it, and restore defaults.
+8. In every narrative Reviews field, apply a default template, add a custom template, edit it, and restore defaults.
 
 Android does not deliver FCM to a manually Force-stopped app until the user opens it again. Users and device manufacturers may also disable or delay notifications and vibration through system settings or battery-management policies.
 

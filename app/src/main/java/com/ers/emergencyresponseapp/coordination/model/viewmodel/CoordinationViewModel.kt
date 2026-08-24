@@ -31,13 +31,11 @@ import com.ers.emergencyresponseapp.coordination.model.ChatMessage
 import com.ers.emergencyresponseapp.coordination.model.ChatThread
 import com.ers.emergencyresponseapp.coordination.model.MessageStatus
 import com.ers.emergencyresponseapp.coordination.model.MessageType
-import com.ers.emergencyresponseapp.coordination.model.ReplyMessageCodec
 import com.ers.emergencyresponseapp.coordination.model.ThreadType
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.MutableData
-import com.google.firebase.database.ServerValue
 import com.google.firebase.database.Transaction
 import com.google.firebase.database.ValueEventListener
 import kotlinx.coroutines.launch
@@ -59,10 +57,6 @@ import java.io.IOException
 import android.util.Log
 
 class CoordinationViewModel(application: Application) : AndroidViewModel(application) {
-
-    private companion object {
-        const val TYPING_INACTIVITY_TIMEOUT_MS = 2_500L
-    }
 
     // ── Repositories ─────────────────────────────────────────────────────────
     private val notificationRepository = NotificationRepository()
@@ -120,15 +114,9 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
     private var threadsListener: ValueEventListener? = null
     private var messagesListenerPath: String? = null
     private var respondersListener: ValueEventListener? = null
-    private var typingListener: ValueEventListener? = null
-    private var typingListenerPath: String? = null
-    private var typingStopJob: kotlinx.coroutines.Job? = null
-    private var typingWriteThreadId: String? = null
-    private var isLocalTyping = false
 
     private var activeGroupId: Int? = null
     private var groupPollingJob: kotlinx.coroutines.Job? = null
-    private var lastMarkedGroupRead: Pair<Int, Int>? = null
     private val groupMessagesRequestId = AtomicInteger(0)
     private val hasPrimedThread = mutableSetOf<String>()
     private val lastNotifiedMessageIdByThread = mutableMapOf<String, String>()
@@ -149,8 +137,6 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
     //  CONNECT — called once when CoordinationPortalScreen opens
     // ─────────────────────────────────────────────────────────────────────────
     fun connectRealtime(userId: String, userName: String, userRole: String) {
-        clearTyping()
-        stopListeningToTyping()
         myUserId   = userId
         myUserName = userName
         myRole     = userRole
@@ -424,10 +410,9 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                     if (!threadId.startsWith("pm_")) continue
 
                     latestSnapshot[threadId] = DirectThreadPreview(
-                        lastMessage = ReplyMessageCodec.displayBody(
-                            thread.child("lastMessage")
-                                .getValue(String::class.java)
-                        ),
+                        lastMessage = thread.child("lastMessage")
+                            .getValue(String::class.java)
+                            .orEmpty(),
                         lastMessageTime = thread.readLongChild("lastMessageTime")
                     )
 
@@ -506,9 +491,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
                     val isMember = item.optBoolean("isMember")
                     val requestPending = item.optBoolean("requestPending")
-                    val latestMessage = ReplyMessageCodec
-                        .displayBody(item.optString("lastMessage"))
-                        .trim()
+                    val latestMessage = item.optString("lastMessage").trim()
                     val latestMessageTime = item.optLong("lastMessageTime", 0L)
 
                     loadedGroups.add(
@@ -608,15 +591,12 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         // Remove only screen-scoped listeners. Presence belongs to the signed-in
         // app session and remains online during the background grace period.
         // Remove Firebase listeners to avoid memory leaks
-        clearTyping()
-        stopListeningToTyping()
         respondersListener?.let { db.child("users").removeEventListener(it) }
         threadsListener?.let { db.child("threads").removeEventListener(it) }
         stopListeningToMessages()
         groupPollingJob?.cancel()
         groupPollingJob = null
         activeGroupId = null
-        lastMarkedGroupRead = null
         directThreadPreviewByThreadId.clear()
         privateUnreadByThreadId.clear()
     }
@@ -627,10 +607,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
     // ─────────────────────────────────────────────────────────────────────────
     fun selectResponderAndLoadHistory(meId: String, responder: ResponderBrief) {
         // Leaving department chat: stop group polling immediately to avoid mixed messages.
-        clearTyping()
-        stopListeningToTyping()
         activeGroupId = null
-        lastMarkedGroupRead = null
         groupPollingJob?.cancel()
         groupPollingJob = null
 
@@ -649,7 +626,6 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
         // Start real-time message listener for this thread
         listenToMessages(thread.id)
-        listenToTyping(thread.id)
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -657,8 +633,6 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
     // ─────────────────────────────────────────────────────────────────────────
     fun selectDepartmentAndLoadHistory(dept: DepartmentInfo) {
         // Leaving private chat: remove old Firebase private listener.
-        clearTyping()
-        stopListeningToTyping()
         stopListeningToMessages()
 
         selectedDepartment.value = dept
@@ -666,7 +640,6 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         markDepartmentRead(dept.name)
 
         val groupId = dept.name.toIntOrNull() ?: return
-        lastMarkedGroupRead = null
 
         currentThread.value = ChatThread(
             id = "group_$groupId",
@@ -679,111 +652,6 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         loadInteragencyGroupMessages(groupId)
         activeGroupId = groupId
         startGroupPolling(groupId)
-    }
-
-    // ──────────────────────────────────────────────────────────────────────────
-    //  PRIVATE CHAT TYPING STATE
-    // ────────────────────────────────────────────────────────────────────────────
-    fun onComposerTextChanged(hasText: Boolean) {
-        val thread = currentThread.value
-        if (!hasText || thread?.type != ThreadType.PRIVATE || myUserId.isBlank()) {
-            clearTyping()
-            return
-        }
-
-        typingStopJob?.cancel()
-
-        if (!isLocalTyping || typingWriteThreadId != thread.id) {
-            clearTypingEntry(typingWriteThreadId)
-            typingWriteThreadId = thread.id
-            isLocalTyping = true
-
-            val typingRef = db.child("threads")
-                .child(thread.id)
-                .child("typing")
-                .child(myUserId)
-
-            typingRef.onDisconnect().removeValue()
-                .addOnFailureListener { error ->
-                    Log.w("CoordinationVM", "Failed to register typing cleanup", error)
-                }
-            typingRef.updateChildren(
-                mapOf(
-                    "name" to myUserName.ifBlank { myUserId },
-                    "updatedAt" to ServerValue.TIMESTAMP
-                )
-            ).addOnFailureListener { error ->
-                if (typingWriteThreadId == thread.id) {
-                    typingWriteThreadId = null
-                    isLocalTyping = false
-                }
-                Log.w("CoordinationVM", "Failed to publish typing state", error)
-            }
-        }
-
-        typingStopJob = viewModelScope.launch {
-            kotlinx.coroutines.delay(TYPING_INACTIVITY_TIMEOUT_MS)
-            clearTyping()
-        }
-    }
-
-    fun clearTyping() {
-        typingStopJob?.cancel()
-        typingStopJob = null
-
-        val threadId = typingWriteThreadId
-        typingWriteThreadId = null
-        isLocalTyping = false
-        clearTypingEntry(threadId)
-    }
-
-    private fun clearTypingEntry(threadId: String?) {
-        if (threadId.isNullOrBlank() || myUserId.isBlank()) return
-
-        db.child("threads")
-            .child(threadId)
-            .child("typing")
-            .child(myUserId)
-            .removeValue()
-            .addOnFailureListener { error ->
-                Log.w("CoordinationVM", "Failed to clear typing state", error)
-            }
-    }
-
-    private fun listenToTyping(threadId: String) {
-        stopListeningToTyping()
-        if (currentThread.value?.type != ThreadType.PRIVATE || myUserId.isBlank()) return
-
-        typingListenerPath = "threads/$threadId/typing"
-        typingListener = object : ValueEventListener {
-            override fun onDataChange(snapshot: DataSnapshot) {
-                if (currentThread.value?.id != threadId) return
-                isPeerTyping = snapshot.children.any { typingEntry ->
-                    typingEntry.key != myUserId
-                }
-            }
-
-            override fun onCancelled(error: DatabaseError) {
-                isPeerTyping = false
-                Log.w("CoordinationVM", "Typing listener was cancelled", error.toException())
-            }
-        }
-
-        db.child("threads")
-            .child(threadId)
-            .child("typing")
-            .addValueEventListener(typingListener!!)
-    }
-
-    private fun stopListeningToTyping() {
-        val path = typingListenerPath
-        val listener = typingListener
-        if (path != null && listener != null) {
-            db.child(path).removeEventListener(listener)
-        }
-        typingListener = null
-        typingListenerPath = null
-        isPeerTyping = false
     }
 
     private fun loadInteragencyGroupMessages(groupId: Int) {
@@ -808,7 +676,6 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                     val messageType = when (typeText.uppercase()) {
                         "IMAGE" -> MessageType.IMAGE
                         "FILE" -> MessageType.FILE
-                        "AUDIO", "VOICE" -> MessageType.AUDIO
                         else -> MessageType.TEXT
                     }
 
@@ -834,16 +701,8 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                             createdAt = item.optLong("createdAt"),
                             status = messageStatus,   // <-- was hardcoded MessageStatus.SENT
                             isOwn = senderId == myUserId || senderName.equals(myUserName, ignoreCase = true),
-                            attachmentUri = item.optString("attachmentUri")
-                                .takeIf { it.isNotBlank() && it != "null" },
-                            attachmentName = item.optString("attachmentName")
-                                .takeIf { it.isNotBlank() && it != "null" },
-                            attachmentMimeType = item.optString("attachmentMimeType")
-                                .takeIf { it.isNotBlank() && it != "null" },
-                            attachmentSize = item.optLong("attachmentSize", 0L)
-                                .coerceAtLeast(0L),
-                            audioDurationMs = item.optLong("audioDurationMs", 0L)
-                                .coerceAtLeast(0L)
+                            attachmentUri = item.optString("attachmentUri").takeIf { it.isNotBlank() && it != "null" },
+                            attachmentName = item.optString("attachmentName").takeIf { it.isNotBlank() && it != "null" }
                         )
                     )
                 }
@@ -867,14 +726,8 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                         messages.addAll((loaded + stillPendingLocal).sortedBy { it.createdAt })
 
                         // We're actively viewing this thread — mark the latest message as read
-                        if (
-                            AppState.isForeground &&
-                            AppScreenTracker.currentScreen == "COORDINATION" &&
-                            AppScreenTracker.currentThreadId == "group_$groupId"
-                        ) {
-                            loaded.maxOfOrNull { it.id.toIntOrNull() ?: 0 }?.let { maxId ->
-                                if (maxId > 0) markGroupThreadRead(groupId, maxId)
-                            }
+                        loaded.maxOfOrNull { it.id.toIntOrNull() ?: 0 }?.let { maxId ->
+                            if (maxId > 0) markGroupThreadRead(groupId, maxId)
                         }
                     }
                 }
@@ -905,9 +758,6 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
     private fun markGroupThreadRead(groupId: Int, lastReadId: Int) {
         if (lastReadId <= 0 || myUserId.isBlank()) return
-        val marker = groupId to lastReadId
-        if (lastMarkedGroupRead == marker) return
-        lastMarkedGroupRead = marker
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val formBody = okhttp3.FormBody.Builder()
@@ -923,7 +773,6 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
                 executeJson(request)
             } catch (e: Exception) {
-                if (lastMarkedGroupRead == marker) lastMarkedGroupRead = null
                 e.printStackTrace()
             }
         }
@@ -957,16 +806,11 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                     val msgType = when (typeText.uppercase()) {
                         "IMAGE" -> MessageType.IMAGE
                         "FILE" -> MessageType.FILE
-                        "AUDIO", "VOICE" -> MessageType.AUDIO
                         else -> MessageType.TEXT
                     }
 
                     val attachmentUri = child.child("attachmentUri").getValue(String::class.java)
                     val attachmentName = child.child("attachmentName").getValue(String::class.java)
-                    val attachmentMimeType = child.child("attachmentMimeType")
-                        .getValue(String::class.java)
-                    val attachmentSize = child.readLongChild("attachmentSize")
-                    val audioDurationMs = child.readLongChild("audioDurationMs")
                     val statusText = child.child("status").getValue(String::class.java) ?: "sent"
 
                     val messageStatus = when (statusText.lowercase()) {
@@ -1002,9 +846,6 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                             isOwn = senderId == myUserId,
                             attachmentUri = attachmentUri,
                             attachmentName = attachmentName,
-                            attachmentMimeType = attachmentMimeType,
-                            attachmentSize = attachmentSize,
-                            audioDurationMs = audioDurationMs,
                             reactions = reactions
                         )
                     )
@@ -1090,10 +931,9 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         val context = getApplication<Application>()
         val content = when {
             message.text.orEmpty().contains("ERS_COORDINATION_TIP_") -> "Incident tip shared"
-            message.type == MessageType.AUDIO -> "Sent a voice message"
+            !message.text.isNullOrBlank() -> message.text!!.trim()
             message.type == MessageType.IMAGE -> "Sent an image"
             message.type == MessageType.FILE -> "Sent a file"
-            !message.text.isNullOrBlank() -> ReplyMessageCodec.displayBody(message.text).trim()
             else -> "New message"
         }
 
@@ -1211,8 +1051,6 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
             preview.contains("ERS_COORDINATION_TIP_") -> "Incident tip shared"
             messageType.equals("image", ignoreCase = true) -> "Sent an image"
             messageType.equals("file", ignoreCase = true) -> "Sent a file: ${preview.take(100)}"
-            messageType.equals("audio", ignoreCase = true) ||
-                    messageType.equals("voice", ignoreCase = true) -> "Sent a voice message"
             else -> preview.trim().take(240)
         }
 
@@ -1241,7 +1079,6 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
     ) {
         val cleanText = text.trim()
         if (cleanText.isBlank()) return
-        val conversationPreview = ReplyMessageCodec.displayBody(cleanText).trim()
 
         val now = System.currentTimeMillis()
         val messageId = db.child("messages").child(threadId).push().key
@@ -1261,11 +1098,11 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         )
 
         val previousPreview = directThreadPreviewByThreadId[threadId]
-        updateLocalThreadPreview(threadId, conversationPreview, now)
+        updateLocalThreadPreview(threadId, cleanText, now)
 
         val updates: Map<String, Any?> = mapOf(
             "messages/$threadId/$messageId" to data,
-            "threads/$threadId/lastMessage" to conversationPreview,
+            "threads/$threadId/lastMessage" to cleanText,
             "threads/$threadId/lastMessageTime" to now,
             "threads/$threadId/lastSenderId" to senderId,
             "threads/$threadId/lastSenderName" to senderName,
@@ -1283,7 +1120,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                     messageId = messageId,
                     senderName = senderName,
                     messageType = "text",
-                    preview = conversationPreview
+                    preview = cleanText
                 )
             }
             .addOnFailureListener { error ->
@@ -1381,88 +1218,8 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
-    /** Uploads an app-owned recording and always removes the cache file. */
-    private fun uploadVoiceFileToServer(
-        recordingFile: File,
-        declaredMimeType: String,
-        onSuccess: (
-            fileUrl: String,
-            uploadedName: String,
-            fileSize: Long,
-            mimeType: String
-        ) -> Unit,
-        onError: (String) -> Unit
-    ) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                if (!recordingFile.exists() || recordingFile.length() <= 0L) {
-                    throw IOException("The voice recording is empty")
-                }
-                if (recordingFile.length() > 15L * 1024L * 1024L) {
-                    throw IOException("The voice recording exceeds the 15 MB limit")
-                }
-
-                val safeName = safeAttachmentName(recordingFile.name)
-                val extension = safeName.substringAfterLast('.', "").lowercase()
-                val fallbackMimeType = when (extension) {
-                    "wav" -> "audio/wav"
-                    "m4a", "mp4" -> "audio/mp4"
-                    "aac" -> "audio/aac"
-                    "3gp" -> "audio/3gpp"
-                    "ogg", "opus" -> "audio/ogg"
-                    "mp3" -> "audio/mpeg"
-                    else -> "application/octet-stream"
-                }
-                val uploadMimeType = declaredMimeType
-                    .trim()
-                    .takeIf { it.startsWith("audio/", ignoreCase = true) }
-                    ?: fallbackMimeType
-                val mediaType = uploadMimeType.toMediaTypeOrNull()
-                val uploaderUserId = myUserId.toIntOrNull()
-                    ?: throw IllegalStateException("Responder session is unavailable")
-                val requestBody = recordingFile.asRequestBody(mediaType)
-                val multipartBody = MultipartBody.Builder()
-                    .setType(MultipartBody.FORM)
-                    .addFormDataPart("uploader_user_id", uploaderUserId.toString())
-                    .addFormDataPart("file", safeName, requestBody)
-                    .build()
-
-                val request = Request.Builder()
-                    .url(apiUrl("upload_chat_file.php"))
-                    .post(multipartBody)
-                    .build()
-
-                val json = executeJson(request)
-                val uploadedUrl = json.optString("file_url").trim()
-                val uploadedName = json.optString("file_name", safeName)
-                    .trim()
-                    .ifBlank { safeName }
-                val uploadedSize = json.optLong("file_size", recordingFile.length())
-                    .takeIf { it > 0L }
-                    ?: recordingFile.length()
-                val uploadedMime = json.optString("mime_type", uploadMimeType)
-                    .trim()
-                    .ifBlank { uploadMimeType }
-
-                if (!json.optBoolean("success") || uploadedUrl.isBlank()) {
-                    throw IOException(json.optString("message", "Voice upload failed"))
-                }
-
-                withContext(Dispatchers.Main) {
-                    onSuccess(uploadedUrl, uploadedName, uploadedSize, uploadedMime)
-                }
-            } catch (error: Exception) {
-                withContext(Dispatchers.Main) {
-                    onError(error.message ?: "Voice upload error")
-                }
-            } finally {
-                recordingFile.delete()
-            }
-        }
-    }
-
     // ─────────────────────────────────────────────────────────────────────────
-    //  FILE / IMAGE / VOICE SENDING
+    //  FILE / IMAGE SENDING
     // ─────────────────────────────────────────────────────────────────────────
     fun sendFileMessage(
         meId: String,
@@ -1527,78 +1284,6 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         )
     }
 
-    fun sendVoiceMessage(
-        meId: String,
-        peer: ResponderBrief,
-        recordingFile: File,
-        durationMs: Long,
-        mimeType: String
-    ) {
-        val threadId = buildChatId(meId, peer.id)
-        val safeDuration = durationMs.coerceIn(0L, 120_000L)
-
-        uploadVoiceFileToServer(
-            recordingFile = recordingFile,
-            declaredMimeType = mimeType,
-            onSuccess = { fileUrl, uploadedName, fileSize, uploadedMimeType ->
-                pushFileMessageToFirebase(
-                    threadId = threadId,
-                    senderId = meId,
-                    senderName = myUserName.ifBlank { meId },
-                    role = myRole,
-                    recipientId = peer.id,
-                    fileUrl = fileUrl,
-                    fileName = uploadedName,
-                    fileSize = fileSize,
-                    mimeType = uploadedMimeType,
-                    isImage = false,
-                    isAudio = true,
-                    audioDurationMs = safeDuration
-                )
-            },
-            onError = { error ->
-                latestNotification.value = "Voice message failed: $error"
-            }
-        )
-    }
-
-    fun sendVoiceToDepartment(
-        meId: String,
-        department: String,
-        recordingFile: File,
-        durationMs: Long,
-        mimeType: String
-    ) {
-        val groupId = department.toIntOrNull()
-        if (groupId == null) {
-            recordingFile.delete()
-            latestNotification.value = "Department channel is unavailable"
-            return
-        }
-        val safeDuration = durationMs.coerceIn(0L, 120_000L)
-
-        uploadVoiceFileToServer(
-            recordingFile = recordingFile,
-            declaredMimeType = mimeType,
-            onSuccess = { fileUrl, uploadedName, fileSize, uploadedMimeType ->
-                sendGroupAttachmentToSql(
-                    groupId = groupId,
-                    senderUserId = meId,
-                    fileUrl = fileUrl,
-                    fileName = uploadedName,
-                    fileSize = fileSize,
-                    mimeType = uploadedMimeType,
-                    isImage = false,
-                    isAudio = true,
-                    audioDurationMs = safeDuration
-                )
-            },
-            onError = { error ->
-                latestNotification.value = "Voice message failed: $error"
-            }
-        )
-    }
-
     private fun sendGroupAttachmentToSql(
         groupId: Int,
         senderUserId: String,
@@ -1606,9 +1291,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         fileName: String,
         fileSize: Long,
         mimeType: String,
-        isImage: Boolean,
-        isAudio: Boolean = false,
-        audioDurationMs: Long = 0L
+        isImage: Boolean
     ) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -1619,9 +1302,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                     .add("file_name", fileName)
                     .add("mime_type", mimeType)
                     .add("file_size", fileSize.coerceAtLeast(0L).toString())
-                    .add("is_image", if (isImage && !isAudio) "1" else "0")
-                    .add("is_audio", if (isAudio) "1" else "0")
-                    .add("audio_duration_ms", audioDurationMs.coerceAtLeast(0L).toString())
+                    .add("is_image", if (isImage) "1" else "0")
                     .build()
 
                 val request = Request.Builder()
@@ -1659,9 +1340,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
         fileName: String,
         fileSize: Long,
         mimeType: String,
-        isImage: Boolean,
-        isAudio: Boolean = false,
-        audioDurationMs: Long = 0L
+        isImage: Boolean
     ) {
         val now = System.currentTimeMillis()
         val messageId = db.child("messages").child(threadId).push().key
@@ -1670,32 +1349,17 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
             return
         }
 
-        val messageType = when {
-            isAudio -> "AUDIO"
-            isImage -> "IMAGE"
-            else -> "FILE"
-        }
-        val previewText = when {
-            isAudio -> "🎙 Voice message"
-            isImage -> "📷 Image"
-            else -> "📎 $fileName"
-        }
-        val messageText = when {
-            isAudio -> "Voice message"
-            isImage -> "Image"
-            else -> fileName
-        }
+        val previewText = if (isImage) "📷 Image" else "📎 $fileName"
         val data = mapOf(
             "senderId" to senderId,
             "senderName" to senderName,
             "role" to role,
-            "text" to messageText,
-            "type" to messageType,
+            "text" to if (isImage) "Image" else fileName,
+            "type" to if (isImage) "IMAGE" else "FILE",
             "attachmentUri" to fileUrl,
             "attachmentName" to fileName,
             "attachmentSize" to fileSize.coerceAtLeast(0L),
             "attachmentMimeType" to mimeType,
-            "audioDurationMs" to if (isAudio) audioDurationMs.coerceAtLeast(0L) else 0L,
             "createdAt" to now,
             "status" to "sent"
         )
@@ -1722,12 +1386,8 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                     threadId = threadId,
                     messageId = messageId,
                     senderName = senderName,
-                    messageType = when {
-                        isAudio -> "audio"
-                        isImage -> "image"
-                        else -> "file"
-                    },
-                    preview = messageText
+                    messageType = if (isImage) "image" else "file",
+                    preview = if (isImage) "Image" else fileName
                 )
             }
             .addOnFailureListener { error ->
@@ -1783,12 +1443,6 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
 
     fun clearNotification() {
         latestNotification.value = null
-    }
-
-    override fun onCleared() {
-        clearTyping()
-        stopListeningToTyping()
-        super.onCleared()
     }
 
     // ─────────────────────────────────────────────────────────────────────────

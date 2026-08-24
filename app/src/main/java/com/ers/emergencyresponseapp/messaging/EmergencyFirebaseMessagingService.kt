@@ -5,9 +5,6 @@ import com.ers.emergencyresponseapp.AppScreenTracker
 import com.ers.emergencyresponseapp.AppState
 import com.ers.emergencyresponseapp.notification.AppNotificationManager
 import com.ers.emergencyresponseapp.notification.PushTokenManager
-import com.google.firebase.database.FirebaseDatabase
-import com.google.firebase.database.MutableData
-import com.google.firebase.database.Transaction
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import kotlinx.coroutines.CoroutineScope
@@ -89,12 +86,11 @@ class EmergencyFirebaseMessagingService : FirebaseMessagingService() {
                 if (intendedRecipient != null && intendedRecipient != responderId) return
 
                 val threadId = firstNonBlank(data, "thread_id", "threadId")
+                if (isViewingThread(threadId)) return
+
                 val senderId = firstNonBlank(data, "sender_id", "senderId", "peer_id")
                 val messageId = firstNonBlank(data, "message_id", "messageId")
                     .ifBlank { message.messageId.orEmpty() }
-                markPrivateMessageDelivered(threadId, messageId)
-                if (isViewingThread(threadId)) return
-
                 val eventKey = "private:${threadId.ifBlank { senderId }}:${messageId.ifBlank { message.sentTime.toString() }}"
 
                 AppNotificationManager.showPrivateChat(
@@ -211,36 +207,6 @@ class EmergencyFirebaseMessagingService : FirebaseMessagingService() {
                 AppState.isForeground &&
                 AppScreenTracker.currentScreen == "COORDINATION" &&
                 AppScreenTracker.currentThreadId == threadId
-
-    /**
-     * FCM receipt is the first reliable signal that the destination device
-     * received a private message. Never replace READ with a lower status.
-     */
-    private fun markPrivateMessageDelivered(threadId: String, messageId: String) {
-        if (threadId.isBlank() || messageId.isBlank()) return
-
-        FirebaseDatabase.getInstance().reference
-            .child("messages")
-            .child(threadId)
-            .child(messageId)
-            .child("status")
-            .runTransaction(object : Transaction.Handler {
-                override fun doTransaction(currentData: MutableData): Transaction.Result {
-                    val status = currentData.getValue(String::class.java)
-                        ?.lowercase(Locale.US)
-                    if (status == "sent" || status == "sending") {
-                        currentData.value = "delivered"
-                    }
-                    return Transaction.success(currentData)
-                }
-
-                override fun onComplete(
-                    error: com.google.firebase.database.DatabaseError?,
-                    committed: Boolean,
-                    currentData: com.google.firebase.database.DataSnapshot?
-                ) = Unit
-            })
-    }
 
     private fun firstNonBlank(data: Map<String, String>, vararg keys: String): String =
         keys.firstNotNullOfOrNull { key -> data[key]?.trim()?.takeIf { it.isNotBlank() } }.orEmpty()

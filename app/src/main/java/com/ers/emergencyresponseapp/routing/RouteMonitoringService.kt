@@ -9,14 +9,15 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
-import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import com.ers.emergencyresponseapp.R
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicBoolean
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
@@ -35,8 +36,6 @@ class RouteMonitoringService : Service() {
         var isRunning = false
 
         const val ACTION_REROUTE = "com.ers.emergencyresponseapp.action.REROUTE"
-        const val ACTION_OPEN_ACTIVE_ROUTE =
-            "com.ers.emergencyresponseapp.action.OPEN_ACTIVE_ROUTE"
 
         const val EXTRA_REROUTE_LAT = "extra_reroute_lat"
         const val EXTRA_REROUTE_LNG = "extra_reroute_lng"
@@ -52,10 +51,10 @@ class RouteMonitoringService : Service() {
 
         private const val CHANNEL_ID = "route_updates_channel"
         private const val FOREGROUND_ID = 4101
-        private const val MAX_LOCATION_FIX_AGE_MS = 15_000L
     }
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val running = AtomicBoolean(false)
     private lateinit var locationCallback: LocationCallback
     private val fusedClient by lazy {
         LocationServices.getFusedLocationProviderClient(this)
@@ -64,9 +63,6 @@ class RouteMonitoringService : Service() {
     private var lastSavedLat: Double? = null
     private var lastSavedLng: Double? = null
     private var lastSavedAt: Long = 0L
-    private var trackedIncidentId: String? = null
-    private var trackedAssignmentId: String? = null
-    private var trackedResponderId: String? = null
 
     private val minDistanceMeters = 5f
     private val minSaveIntervalMs = 5000L
@@ -89,60 +85,35 @@ class RouteMonitoringService : Service() {
         // ✅ Extract everything safely BEFORE coroutines
         val incidentId = intent?.getStringExtra(EXTRA_INCIDENT_ID).orEmpty()
         val assignmentId = intent?.getStringExtra(EXTRA_ASSIGNMENT_ID).orEmpty()
-        val destinationLat = intent?.getDoubleExtra(EXTRA_DEST_LAT, Double.NaN)
-            ?: Double.NaN
-        val destinationLng = intent?.getDoubleExtra(EXTRA_DEST_LNG, Double.NaN)
-            ?: Double.NaN
         android.util.Log.d(
             "LiveGPS",
             "incidentId=$incidentId assignmentId=$assignmentId"
         )
 
-        if (incidentId.isBlank() || !isValidCoordinate(destinationLat, destinationLng)) {
-            android.util.Log.e(
-                "LiveGPS",
-                "Incident identity or destination is invalid. Stopping service."
-            )
+        if (incidentId.isBlank()) {
+            android.util.Log.e("LiveGPS", "incidentId is blank. Stopping service.")
             stopSelf()
             return START_NOT_STICKY
         }
 
-        val fineGranted = ContextCompat.checkSelfPermission(
-            this,
-            Manifest.permission.ACCESS_FINE_LOCATION
-        ) == PackageManager.PERMISSION_GRANTED
-        if (!fineGranted) {
-            android.util.Log.e("LiveGPS", "Location permission is missing. Stopping service.")
-            stopSelf()
-            return START_NOT_STICKY
-        }
+        val destLat = intent?.getDoubleExtra(EXTRA_DEST_LAT, Double.NaN) ?: Double.NaN
+        val destLng = intent?.getDoubleExtra(EXTRA_DEST_LNG, Double.NaN) ?: Double.NaN
 
-        try {
-            startForeground(
-                FOREGROUND_ID,
-                buildForegroundNotification(intent?.getStringExtra(EXTRA_DEST_ADDRESS))
-            )
-        } catch (error: Exception) {
-            android.util.Log.e("LiveGPS", "Unable to promote location foreground service", error)
-            stopSelf()
-            return START_NOT_STICKY
-        }
+        // ✅ Start foreground immediately
+        startForeground(FOREGROUND_ID, buildForegroundNotification())
 
-        // onStartCommand can be called again while the service is alive. Always
-        // replace the old callback so a reassigned unit never keeps publishing
-        // coordinates against the previous incident.
-        val assignmentChanged = trackedIncidentId != incidentId ||
-                trackedAssignmentId != assignmentId
-        if (assignmentChanged && ::locationCallback.isInitialized) {
-            fusedClient.removeLocationUpdates(locationCallback)
-            lastSavedLat = null
-            lastSavedLng = null
-            lastSavedAt = 0L
-        }
-        if (assignmentChanged || !::locationCallback.isInitialized) {
-            trackedIncidentId = incidentId
-            trackedAssignmentId = assignmentId
-            startLiveLocationTracking(incidentId, assignmentId)
+        // ✅ Only start loop once
+        if (running.compareAndSet(false, true)) {
+            serviceScope.launch {
+                android.os.Handler(mainLooper).post {
+                    android.util.Log.d("LiveGPS", "Starting live tracking for incident=$incidentId")
+                    startLiveLocationTracking(incidentId, assignmentId)
+                }
+
+                while (running.get()) {
+                    delay(30_000)
+                }
+            }
         }
 
         return START_REDELIVER_INTENT
@@ -181,7 +152,6 @@ class RouteMonitoringService : Service() {
             stopSelf()
             return
         }
-        trackedResponderId = responderId
 
         val dbRef = FirebaseDatabase
             .getInstance()
@@ -191,20 +161,7 @@ class RouteMonitoringService : Service() {
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 val location = result.lastLocation ?: return
-                val fixAgeMillis = (
-                    SystemClock.elapsedRealtimeNanos() - location.elapsedRealtimeNanos
-                ).coerceAtLeast(0L) / 1_000_000L
-                if (
-                    !isValidCoordinate(location.latitude, location.longitude) ||
-                    fixAgeMillis > MAX_LOCATION_FIX_AGE_MS
-                ) {
-                    android.util.Log.w(
-                        "LiveGPS",
-                        "Rejected invalid or stale location fix (ageMs=$fixAgeMillis)"
-                    )
-                    return
-                }
-                val now = SystemClock.elapsedRealtime()
+                val now = System.currentTimeMillis()
 
                 val movedEnough = if (lastSavedLat != null && lastSavedLng != null) {
                     val results = FloatArray(1)
@@ -222,19 +179,17 @@ class RouteMonitoringService : Service() {
 
                 val intervalPassed = now - lastSavedAt >= minSaveIntervalMs
 
-                if (!intervalPassed) {
+                if (!movedEnough || !intervalPassed) {
                     android.util.Log.d(
                         "LiveGPS",
-                        "Skipped location update: heartbeat interval has not elapsed"
+                        "Skipped location update: movedEnough=$movedEnough intervalPassed=$intervalPassed"
                     )
                     return
                 }
 
+                lastSavedLat = location.latitude
+                lastSavedLng = location.longitude
                 lastSavedAt = now
-                if (movedEnough) {
-                    lastSavedLat = location.latitude
-                    lastSavedLng = location.longitude
-                }
 
                 val data = mapOf(
                     "responderId" to responderId,
@@ -248,8 +203,6 @@ class RouteMonitoringService : Service() {
                     "lng" to location.longitude,
                     "speed" to location.speed,
                     "heading" to location.bearing,
-                    "accuracy" to location.accuracy
-                        .takeIf { location.hasAccuracy() && it.isFinite() && it > 0f },
                     "status" to "en_route",
                     "updatedAt" to System.currentTimeMillis()
                 )
@@ -267,24 +220,13 @@ class RouteMonitoringService : Service() {
                         android.util.Log.e("LiveGPS", "Firebase upload failed: ${it.message}")
                     }
 
-                // Firebase receives a heartbeat even while stationary. The SQL
-                // route history still records only meaningful movement.
-                if (movedEnough) serviceScope.launch {
+                serviceScope.launch {
                     try {
-                        val numericIncidentId = incidentId.toIntOrNull()
-                        val numericResponderId = responderId.toIntOrNull()
-                        if (numericIncidentId == null || numericResponderId == null) {
-                            android.util.Log.e(
-                                "LiveGPS",
-                                "Skipped route history save because an operational ID is invalid"
-                            )
-                            return@launch
-                        }
                         val response = RetrofitProvider.incidentApi.saveRoutePoint(
                             SaveRoutePointRequest(
-                                incident_id = numericIncidentId,
+                                incident_id = incidentId.toIntOrNull() ?: 0,
                                 assignment_id = assignmentId.toIntOrNull(),
-                                responder_id = numericResponderId,
+                                responder_id = responderId.toIntOrNull() ?: 0,
                                 latitude = location.latitude,
                                 longitude = location.longitude,
                                 speed = location.speed,
@@ -310,25 +252,17 @@ class RouteMonitoringService : Service() {
             .setMinUpdateIntervalMillis(3000L)
             .build()
 
-        try {
-            fusedClient.requestLocationUpdates(
-                request,
-                locationCallback,
-                mainLooper
-            )
-            android.util.Log.d("LiveGPS", "Location updates requested")
-        } catch (error: SecurityException) {
-            android.util.Log.e("LiveGPS", "Location permission was revoked", error)
-            stopSelf()
-        }
+        fusedClient.requestLocationUpdates(
+            request,
+            locationCallback,
+            mainLooper
+        )
+        android.util.Log.d("LiveGPS", "Location updates requested")
     }
 
-    private fun buildForegroundNotification(destinationAddress: String?): Notification {
+    private fun buildForegroundNotification(): Notification {
         val openAppIntent = Intent(this, com.ers.emergencyresponseapp.MainActivity::class.java).apply {
-            action = ACTION_OPEN_ACTIVE_ROUTE
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
 
         val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
@@ -343,16 +277,10 @@ class RouteMonitoringService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_stat_emergency)
-            .setContentTitle("Live responder tracking active")
-            .setContentText(
-                destinationAddress?.trim()?.takeIf { it.isNotEmpty() }
-                    ?.let { "Navigating to $it" }
-                    ?: "Tap to return to the incident route"
-            )
-            .setContentIntent(openAppPending)
-            .setCategory(NotificationCompat.CATEGORY_SERVICE)
-            .setOnlyAlertOnce(true)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("ERS: Route Update")
+            .setContentText("Tap to return to ERS App")
+            .setContentIntent(openAppPending) // ✅ tap notif returns to app
             .setOngoing(true)
             .build()
     }
@@ -384,7 +312,7 @@ class RouteMonitoringService : Service() {
         )
 
         val notif = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_stat_emergency)
+            .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle("ERS: Route Updated")
             .setContentText("Tap to reroute in Google Maps")
             .setAutoCancel(true)
@@ -392,15 +320,6 @@ class RouteMonitoringService : Service() {
             .setContentIntent(pending) // tap notif = reroute agad
             .build()
 
-        if (
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.POST_NOTIFICATIONS
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            return
-        }
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(incidentId.hashCode(), notif)
     }
@@ -417,24 +336,16 @@ class RouteMonitoringService : Service() {
         }
     }
 
-    private fun isValidCoordinate(latitude: Double, longitude: Double): Boolean {
-        return latitude.isFinite() &&
-                longitude.isFinite() &&
-                latitude in -90.0..90.0 &&
-                longitude in -180.0..180.0
-    }
-
     override fun onDestroy() {
         isRunning = false
+        running.set(false)
 
         if (::locationCallback.isInitialized) {
             fusedClient.removeLocationUpdates(locationCallback)
         }
 
         val prefs = getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
-        val responderId = trackedResponderId
-            ?.takeIf { it.isNotBlank() }
-            ?: prefs.getString("user_id", "").orEmpty()
+        val responderId = prefs.getString("user_id", "") ?: ""
 
         if (responderId.isNotBlank()) {
             FirebaseDatabase.getInstance()

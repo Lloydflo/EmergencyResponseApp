@@ -28,6 +28,11 @@ android {
             "MAPTILER_API_KEY",
             "\"${project.findProperty("MAPTILER_API_KEY") ?: ""}\""
         )
+        buildConfigField(
+            "String",
+            "ORS_API_KEY",
+            "\"${project.findProperty("ORS_API_KEY") ?: ""}\""
+        )
     }
 
     buildTypes {

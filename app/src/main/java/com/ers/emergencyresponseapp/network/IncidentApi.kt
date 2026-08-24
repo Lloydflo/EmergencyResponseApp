@@ -45,7 +45,8 @@ data class MarkIncidentCompleteResponse(
     val success: Boolean,
     val message: String? = null,
     val incident_id: Int? = null,
-    val completion_image_path: String? = null
+    val completion_image_path: String? = null,
+    val review_status: String? = null
 )
 
 data class BackupRequestStatusDto(
@@ -141,7 +142,7 @@ data class CancelBackupRequestResponse(
     val message: String?
 )
 
-data class CompletedIncidentDto(
+data class PendingReviewIncidentDto(
     val id: Long,
     val reference_no: String?,
     val type: String,
@@ -151,13 +152,19 @@ data class CompletedIncidentDto(
     val location_address: String?,
     val completion_notes: String?,
     val completion_image_path: String?,
+    val review_status: String,
     val completed_at: String?
 )
 
-data class GetCompletedIncidentsResponse(
+data class GetPendingReviewIncidentsResponse(
     val success: Boolean,
     val message: String? = null,
-    val incidents: List<CompletedIncidentDto>? = null
+    val incidents: List<PendingReviewIncidentDto>? = null
+)
+
+data class SubmitIncidentReviewResponse(
+    val success: Boolean,
+    val message: String? = null
 )
 
 
@@ -295,10 +302,22 @@ interface IncidentApi {
         @Field("responder_id") responderId: Int
     ): CancelBackupRequestResponse
 
-    @GET("api/api_app/get-completed-incidents.php")
-    suspend fun getCompletedIncidents(
+    @GET("api/api_app/get-pending-review-incidents.php")
+    suspend fun getPendingReviewIncidents(
         @Query("responder_id") responderId: Int
-    ): GetCompletedIncidentsResponse
+    ): GetPendingReviewIncidentsResponse
+
+    @FormUrlEncoded
+    @POST("api/api_app/submit-incident-review.php")
+    suspend fun submitIncidentReview(
+        @Field("incident_id") incidentId: Long,
+        @Field("responder_id") responderId: Int,
+        @Field("response_rating") responseRating: Int,
+        @Field("communication_rating") communicationRating: Int,
+        @Field("professionalism_rating") professionalismRating: Int,
+        @Field("outcome") outcome: String,
+        @Field("review_text") reviewText: String
+    ): SubmitIncidentReviewResponse
 
     @FormUrlEncoded
     @POST("api/api_app/set-unit-presence.php")

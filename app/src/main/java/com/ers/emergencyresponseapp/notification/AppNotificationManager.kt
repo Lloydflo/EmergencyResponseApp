@@ -1,7 +1,6 @@
 package com.ers.emergencyresponseapp.notification
 
 import android.Manifest
-import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -23,10 +22,10 @@ import java.util.Locale
  * the in-app polling fallback cannot notify the responder twice.
  */
 object AppNotificationManager {
-    private const val CHANNEL_PRIVATE_CHAT = "private_chat_messages"
-    private const val CHANNEL_DEPARTMENT_CHAT = "department_chat_messages"
-    private const val CHANNEL_BROADCAST = "emergency_broadcasts"
-    private const val CHANNEL_ASSIGNED_INCIDENT = "assigned_incident_alerts"
+    const val CHANNEL_PRIVATE_CHAT = "private_chat_messages"
+    const val CHANNEL_DEPARTMENT_CHAT = "department_chat_messages"
+    const val CHANNEL_BROADCAST = "emergency_broadcasts"
+    const val CHANNEL_ASSIGNED_INCIDENT = "assigned_incident_alerts"
     private const val LEGACY_INCIDENT_CHANNEL = "emergency_incidents"
 
     private val CHAT_VIBRATION = longArrayOf(0, 180, 100, 260)
@@ -105,7 +104,7 @@ object AppNotificationManager {
         senderName: String,
         body: String
     ) {
-        if (!canNotify(context)) return
+        if (!canNotify(context) || !claimEvent(context, eventKey)) return
         createChannels(context)
 
         val intent = baseIntent(context).apply {
@@ -129,7 +128,7 @@ object AppNotificationManager {
             .setContentIntent(pendingIntent(context, eventKey, intent))
             .build()
 
-        notifyIfAllowed(context, eventKey, notification)
+        NotificationManagerCompat.from(context).notify(eventKey.hashCode(), notification)
     }
 
     fun showDepartmentChat(
@@ -140,7 +139,7 @@ object AppNotificationManager {
         senderName: String,
         body: String
     ) {
-        if (!canNotify(context)) return
+        if (!canNotify(context) || !claimEvent(context, eventKey)) return
         createChannels(context)
 
         val intent = baseIntent(context).apply {
@@ -167,7 +166,7 @@ object AppNotificationManager {
             .setContentIntent(pendingIntent(context, eventKey, intent))
             .build()
 
-        notifyIfAllowed(context, eventKey, notification)
+        NotificationManagerCompat.from(context).notify(eventKey.hashCode(), notification)
     }
 
     fun showBroadcast(
@@ -179,7 +178,7 @@ object AppNotificationManager {
         title: String,
         body: String
     ) {
-        if (!canNotify(context)) return
+        if (!canNotify(context) || !claimEvent(context, eventKey)) return
         createChannels(context)
 
         val intent = baseIntent(context).apply {
@@ -207,7 +206,7 @@ object AppNotificationManager {
             .setContentIntent(pendingIntent(context, eventKey, intent))
             .build()
 
-        notifyIfAllowed(context, eventKey, notification)
+        NotificationManagerCompat.from(context).notify(eventKey.hashCode(), notification)
     }
 
     fun showAssignedIncident(
@@ -221,7 +220,7 @@ object AppNotificationManager {
         location: String,
         body: String = ""
     ) {
-        if (!canNotify(context)) return
+        if (!canNotify(context) || !claimEvent(context, eventKey)) return
         createChannels(context)
 
         val intent = baseIntent(context).apply {
@@ -257,7 +256,7 @@ object AppNotificationManager {
             .setContentIntent(pendingIntent(context, eventKey, intent))
             .build()
 
-        notifyIfAllowed(context, eventKey, notification)
+        NotificationManagerCompat.from(context).notify(eventKey.hashCode(), notification)
     }
 
     private fun baseIntent(context: Context): Intent =
@@ -278,30 +277,6 @@ object AppNotificationManager {
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
     )
 
-    /**
-     * Rechecks the runtime permission immediately before posting. The earlier
-     * [canNotify] check avoids unnecessary notification construction, while
-     * this check handles a permission change that happens during that work.
-     */
-    @SuppressLint("MissingPermission")
-    private fun notifyIfAllowed(
-        context: Context,
-        eventKey: String,
-        notification: Notification
-    ) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.POST_NOTIFICATIONS
-            ) != PackageManager.PERMISSION_GRANTED
-        ) return
-        if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return
-        if (!claimEvent(context, eventKey)) return
-
-        NotificationManagerCompat.from(context)
-            .notify(eventKey.hashCode(), notification)
-    }
-
     private fun canNotify(context: Context): Boolean {
         val permissionGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
                 ContextCompat.checkSelfPermission(
@@ -314,8 +289,6 @@ object AppNotificationManager {
 }
 
 private object NotificationEventStore {
-    // Keep the original preference name so app updates retain deduplication history.
-    //noinspection SpellCheckingInspection
     private const val PREFS = "notification_event_dedupe"
     private const val KEY_EVENTS = "events"
     private const val MAX_EVENTS = 200

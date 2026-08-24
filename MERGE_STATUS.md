@@ -30,8 +30,8 @@ If a stale Kotlin/Gradle daemon error appears, close Android Studio, run `gradle
 
 - background/cold-process FCM handling and vibration for chat, broadcasts, and assigned incidents;
 - operational backup options and quantity/dispatch details on Home;
-- equipment/supply-only requests in Reports;
+- equipment/supply-only requests in Reviews;
 - responder directory opened from the Coordination pencil action;
-- add/edit/delete/restore quick templates for narrative Reports fields.
+- add/edit/delete/restore quick templates for narrative Reviews fields.
 
 See `FULL_UPDATE_NOTES.md` and `FCM_NOTIFICATION_PAYLOADS.md`.

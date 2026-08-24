@@ -66,13 +66,13 @@ import androidx.core.content.FileProvider
 import java.text.SimpleDateFormat
 import java.util.Date
 import androidx.compose.ui.graphics.graphicsLayer
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import com.ers.emergencyresponseapp.ui.components.AppPullToRefresh
 import com.ers.emergencyresponseapp.ui.components.QuickTemplateBar
 import com.ers.emergencyresponseapp.ui.theme.ThemeController
 import com.ers.emergencyresponseapp.data.AfterActionReportRecord
+import com.ers.emergencyresponseapp.data.IncidentReviewSummary
 import com.ers.emergencyresponseapp.data.OperationalRepository
 import com.ers.emergencyresponseapp.data.SaveAfterActionReportRequest
 import coil.compose.AsyncImage
@@ -104,18 +104,19 @@ private fun tonalSurface(accent: Color, lightAlpha: Float = 0.10f, darkAlpha: Fl
     return accent.copy(alpha = if (ThemeController.isDarkMode.value) darkAlpha else lightAlpha)
 }
 
-/**
- * An approved report remains in the active Approved queue for one full day so
- * the responder can easily see the admin decision. It is then shown in the
- * read-only monthly history instead of the active review-status queue.
- */
-private const val APPROVED_HISTORY_DELAY_MILLIS = 24L * 60L * 60L * 1000L
+// ─── Review status ────────────────────────────────────────────────────────────
+private enum class ReviewStatus(val label: String, val color: Color) {
+    Pending("Needs Service Review", Color(0xFFE67E22)),
+    Submitted("Awaiting Verification", Color(0xFF2E86C1)),
+    Completed("Verified", Color(0xFF2E8B57)),
+    Unknown("Status Unavailable", Color(0xFF6B7280))
+}
 
-// ─── Completed incident ──────────────────────────────────────────────────────
-private data class CompletedIncident(
+private data class ReviewableIncident(
     val id: String,
     val type: String,
     val date: String,
+    val status: ReviewStatus,
     val proofUri: String? = null,
     val completionNotes: String? = null,
     val completedAtMillis: Long = 0L
@@ -203,32 +204,21 @@ private data class SavedResourceRequest(
 
 
 
-private enum class ReportHubTab(val label: String, val icon: ImageVector) {
-    INCIDENTS("Reports", Icons.Default.Description),
-    HISTORY("History", Icons.Default.History),
+private enum class ReviewHubTab(val label: String, val icon: ImageVector) {
+    INCIDENTS("Post-Incident", Icons.Default.Description),
     RESOURCES("Equipment", Icons.Default.Inventory2)
 }
 
 private enum class OperationalReportStatus(val label: String, val color: Color) {
-    /** Saved locally/server-side but not yet sent to admin review. */
-    PENDING("Pending", Color(0xFFB86B12)),
-    /** Submitted by the responder and locked while an authorized admin reviews it. */
+    DRAFT("Draft", Color(0xFFB86B12)),
     SUBMITTED("Submitted", Color(0xFF2E777B)),
-    /** Approved by an authorized admin. The database keeps the legacy value `verified`. */
-    APPROVED("Approved", Color(0xFF2E8B57)),
-    /** Returned by admin and editable again; grouped under Pending in the responder hub. */
+    VERIFIED("Verified", Color(0xFF2E8B57)),
     RETURNED("Needs Revision", Color(0xFFB3261E))
-}
-
-private enum class ReportWorkflowFilter(val label: String) {
-    PENDING("Pending"),
-    SUBMITTED("Submitted"),
-    APPROVED("Approved")
 }
 
 /**
  * Unit-level responder documentation persisted through the PHP/MySQL API.
- * Incident command/admin may approve or return the submitted report.
+ * Incident command/admin may verify or return the submitted report.
  */
 private data class AfterActionReport(
     val incidentId: String,
@@ -249,146 +239,10 @@ private data class AfterActionReport(
     val lessonsLearned: String,
     val reviewerNotes: String,
     val status: OperationalReportStatus,
-    val approvedAt: Long,
-    val isInHistory: Boolean,
-    val sourceCompletedAt: Long,
-    val sourceCompletionNotes: String,
-    val sourceCompletionProofUri: String?,
     val updatedAt: Long
 )
 
-private data class ArchivedReportEntry(
-    val incident: CompletedIncident,
-    val report: AfterActionReport
-)
-
-private data class ReportHistoryMonth(
-    val key: String,
-    val label: String,
-    val count: Int
-)
-
 private fun normalizedIncidentId(raw: String): String = raw.removePrefix("#").trim()
-
-private const val AFTER_ACTION_DRAFT_PREFS = "after_action_report_drafts"
-
-private data class AfterActionDraftSnapshot(
-    val operationalOutcome: String,
-    val incidentSummary: String,
-    val actionsTaken: String,
-    val personsAssisted: String,
-    val injuries: String,
-    val fatalities: String,
-    val resourcesUsed: String,
-    val agenciesInvolved: String,
-    val handoffDetails: String,
-    val safetyIssues: String,
-    val followUpRequired: Boolean,
-    val followUpDetails: String,
-    val lessonsLearned: String
-)
-
-private data class StoredAfterActionDraft(
-    val savedAt: Long,
-    val step: Int,
-    val snapshot: AfterActionDraftSnapshot
-)
-
-private val afterActionDraftKeys = listOf(
-    "saved_at",
-    "step",
-    "operational_outcome",
-    "incident_summary",
-    "actions_taken",
-    "persons_assisted",
-    "injuries",
-    "fatalities",
-    "resources_used",
-    "agencies_involved",
-    "handoff_details",
-    "safety_issues",
-    "follow_up_required",
-    "follow_up_details",
-    "lessons_learned"
-)
-
-private fun afterActionDraftPrefix(responderId: Int, incidentId: String): String =
-    "responder_${responderId}_incident_${normalizedIncidentId(incidentId)}."
-
-private fun readAfterActionDraft(
-    context: Context,
-    responderId: Int,
-    incidentId: String
-): StoredAfterActionDraft? {
-    if (responderId <= 0) return null
-    val prefs = context.getSharedPreferences(AFTER_ACTION_DRAFT_PREFS, Context.MODE_PRIVATE)
-    val prefix = afterActionDraftPrefix(responderId, incidentId)
-    val savedAt = prefs.getLong("${prefix}saved_at", 0L)
-    if (savedAt <= 0L) return null
-
-    return StoredAfterActionDraft(
-        savedAt = savedAt,
-        step = prefs.getInt("${prefix}step", 1).coerceIn(1, 3),
-        snapshot = AfterActionDraftSnapshot(
-            operationalOutcome = prefs.getString("${prefix}operational_outcome", "Resolved")
-                ?: "Resolved",
-            incidentSummary = prefs.getString("${prefix}incident_summary", "").orEmpty(),
-            actionsTaken = prefs.getString("${prefix}actions_taken", "").orEmpty(),
-            personsAssisted = prefs.getString("${prefix}persons_assisted", "0") ?: "0",
-            injuries = prefs.getString("${prefix}injuries", "0") ?: "0",
-            fatalities = prefs.getString("${prefix}fatalities", "0") ?: "0",
-            resourcesUsed = prefs.getString("${prefix}resources_used", "").orEmpty(),
-            agenciesInvolved = prefs.getString("${prefix}agencies_involved", "").orEmpty(),
-            handoffDetails = prefs.getString("${prefix}handoff_details", "").orEmpty(),
-            safetyIssues = prefs.getString("${prefix}safety_issues", "").orEmpty(),
-            followUpRequired = prefs.getBoolean("${prefix}follow_up_required", false),
-            followUpDetails = prefs.getString("${prefix}follow_up_details", "").orEmpty(),
-            lessonsLearned = prefs.getString("${prefix}lessons_learned", "").orEmpty()
-        )
-    )
-}
-
-private fun saveAfterActionDraft(
-    context: Context,
-    responderId: Int,
-    incidentId: String,
-    step: Int,
-    snapshot: AfterActionDraftSnapshot
-) {
-    if (responderId <= 0) return
-    val prefix = afterActionDraftPrefix(responderId, incidentId)
-    context.getSharedPreferences(AFTER_ACTION_DRAFT_PREFS, Context.MODE_PRIVATE)
-        .edit()
-        .putLong("${prefix}saved_at", System.currentTimeMillis())
-        .putInt("${prefix}step", step.coerceIn(1, 3))
-        .putString("${prefix}operational_outcome", snapshot.operationalOutcome)
-        .putString("${prefix}incident_summary", snapshot.incidentSummary)
-        .putString("${prefix}actions_taken", snapshot.actionsTaken)
-        .putString("${prefix}persons_assisted", snapshot.personsAssisted)
-        .putString("${prefix}injuries", snapshot.injuries)
-        .putString("${prefix}fatalities", snapshot.fatalities)
-        .putString("${prefix}resources_used", snapshot.resourcesUsed)
-        .putString("${prefix}agencies_involved", snapshot.agenciesInvolved)
-        .putString("${prefix}handoff_details", snapshot.handoffDetails)
-        .putString("${prefix}safety_issues", snapshot.safetyIssues)
-        .putBoolean("${prefix}follow_up_required", snapshot.followUpRequired)
-        .putString("${prefix}follow_up_details", snapshot.followUpDetails)
-        .putString("${prefix}lessons_learned", snapshot.lessonsLearned)
-        .apply()
-}
-
-private fun clearAfterActionDraft(
-    context: Context,
-    responderId: Int,
-    incidentId: String
-) {
-    if (responderId <= 0) return
-    val prefix = afterActionDraftPrefix(responderId, incidentId)
-    val editor = context.getSharedPreferences(AFTER_ACTION_DRAFT_PREFS, Context.MODE_PRIVATE)
-        .edit()
-    afterActionDraftKeys.forEach { key -> editor.remove("$prefix$key") }
-    editor.apply()
-}
 
 private fun appendQuickTemplate(current: String, template: String): String {
     val existing = current.trimEnd()
@@ -425,84 +279,32 @@ private fun formatRequestTimestamp(timestamp: Long): String {
         .format(Date(timestamp))
 }
 
-private fun AfterActionReport.historySortTime(): Long =
-    approvedAt.takeIf { it > 0L } ?: updatedAt
-
-private fun reportHistoryMonthKey(timestamp: Long): String =
-    SimpleDateFormat("yyyy-MM", Locale.US).format(Date(timestamp.coerceAtLeast(0L)))
-
-private fun reportHistoryMonthLabel(timestamp: Long): String =
-    SimpleDateFormat("MMMM yyyy", Locale.getDefault())
-        .format(Date(timestamp.coerceAtLeast(0L)))
-
-private fun AfterActionReport.toHistoryIncidentFallback(): CompletedIncident {
-    val displayTimestamp = sourceCompletedAt.takeIf { it > 0L } ?: historySortTime()
-    val dateLabel = if (sourceCompletedAt > 0L) {
-        SimpleDateFormat("MMM dd, yyyy • hh:mm a", Locale.getDefault())
-            .format(Date(sourceCompletedAt))
-    } else if (displayTimestamp > 0L) {
-        "Approved ${SimpleDateFormat("MMM dd, yyyy • hh:mm a", Locale.getDefault()).format(Date(displayTimestamp))}"
-    } else {
-        "Approval date unavailable"
-    }
-
-    return CompletedIncident(
-        id = "#${normalizedIncidentId(incidentId)}",
-        type = incidentType.trim()
-            .takeIf { it.isNotBlank() }
-            ?.replaceFirstChar { it.uppercase() }
-            ?: "General Incident",
-        date = dateLabel,
-        proofUri = sourceCompletionProofUri,
-        completionNotes = sourceCompletionNotes.takeIf { it.isNotBlank() }
-            ?: incidentSummary.takeIf { it.isNotBlank() },
-        completedAtMillis = sourceCompletedAt.takeIf { it > 0L } ?: displayTimestamp
-    )
-}
-
-private fun AfterActionReportRecord.toUiReport(): AfterActionReport {
-    val uiStatus = when (status.lowercase(Locale.US)) {
-        "submitted", "awaiting_review" -> OperationalReportStatus.SUBMITTED
-        "verified", "approved" -> OperationalReportStatus.APPROVED
-        "returned", "revision_required", "needs_revision" -> OperationalReportStatus.RETURNED
-        "draft", "pending" -> OperationalReportStatus.PENDING
-        else -> OperationalReportStatus.PENDING
-    }
-    val resolvedUpdatedAt = updatedAtMillis.takeIf { it > 0L } ?: createdAtMillis
-    val resolvedApprovedAt = approvedAtMillis.takeIf { it > 0L }
-        ?: if (uiStatus == OperationalReportStatus.APPROVED) resolvedUpdatedAt else 0L
-    val historyByAge = uiStatus == OperationalReportStatus.APPROVED &&
-            resolvedApprovedAt > 0L &&
-            System.currentTimeMillis() - resolvedApprovedAt >= APPROVED_HISTORY_DELAY_MILLIS
-
-    return AfterActionReport(
-        incidentId = incidentId.toString(),
-        incidentType = incidentType,
-        responderName = responderName,
-        operationalOutcome = operationalOutcome,
-        incidentSummary = incidentSummary,
-        actionsTaken = actionsTaken,
-        personsAssisted = personsAssisted,
-        injuries = injuries,
-        fatalities = fatalities,
-        resourcesUsed = resourcesUsed,
-        agenciesInvolved = agenciesInvolved,
-        handoffDetails = handoffDetails,
-        safetyIssues = safetyIssues,
-        followUpRequired = followUpRequired,
-        followUpDetails = followUpDetails,
-        lessonsLearned = lessonsLearned,
-        reviewerNotes = reviewerNotes,
-        status = uiStatus,
-        approvedAt = resolvedApprovedAt,
-        isInHistory = uiStatus == OperationalReportStatus.APPROVED &&
-                (isInHistory || historyByAge),
-        sourceCompletedAt = incidentCompletedAtMillis,
-        sourceCompletionNotes = incidentCompletionNotes,
-        sourceCompletionProofUri = incidentCompletionImagePath.takeIf { it.isNotBlank() },
-        updatedAt = resolvedUpdatedAt
-    )
-}
+private fun AfterActionReportRecord.toUiReport(): AfterActionReport = AfterActionReport(
+    incidentId = incidentId.toString(),
+    incidentType = incidentType,
+    responderName = responderName,
+    operationalOutcome = operationalOutcome,
+    incidentSummary = incidentSummary,
+    actionsTaken = actionsTaken,
+    personsAssisted = personsAssisted,
+    injuries = injuries,
+    fatalities = fatalities,
+    resourcesUsed = resourcesUsed,
+    agenciesInvolved = agenciesInvolved,
+    handoffDetails = handoffDetails,
+    safetyIssues = safetyIssues,
+    followUpRequired = followUpRequired,
+    followUpDetails = followUpDetails,
+    lessonsLearned = lessonsLearned,
+    reviewerNotes = reviewerNotes,
+    status = when (status.lowercase(Locale.US)) {
+        "submitted" -> OperationalReportStatus.SUBMITTED
+        "verified" -> OperationalReportStatus.VERIFIED
+        "returned" -> OperationalReportStatus.RETURNED
+        else -> OperationalReportStatus.DRAFT
+    },
+    updatedAt = updatedAtMillis.takeIf { it > 0L } ?: createdAtMillis
+)
 
 private fun AfterActionReport.toApiRequest(
     responderId: Int
@@ -525,10 +327,10 @@ private fun AfterActionReport.toApiRequest(
     followUpDetails = followUpDetails,
     lessonsLearned = lessonsLearned,
     status = when (status) {
-        OperationalReportStatus.PENDING,
+        OperationalReportStatus.DRAFT,
         OperationalReportStatus.RETURNED -> "draft"
         OperationalReportStatus.SUBMITTED,
-        OperationalReportStatus.APPROVED -> "submitted"
+        OperationalReportStatus.VERIFIED -> "submitted"
     }
 )
 
@@ -541,11 +343,6 @@ private fun AfterActionReport.toPrintableText(): String = buildString {
     appendLine("Operational Outcome: $operationalOutcome")
     appendLine("Report Status: ${status.label}")
     appendLine("Updated: ${SimpleDateFormat("MMM dd, yyyy hh:mm a", Locale.getDefault()).format(Date(updatedAt))}")
-    if (approvedAt > 0L) {
-        appendLine(
-            "Approved: ${SimpleDateFormat("MMM dd, yyyy hh:mm a", Locale.getDefault()).format(Date(approvedAt))}"
-        )
-    }
     appendLine()
     appendLine("INCIDENT SUMMARY")
     appendLine(incidentSummary.ifBlank { "Not provided" })
@@ -765,34 +562,12 @@ private fun buildLocationString(ctx: Context, lat: Double, lng: Double): String 
 
 // ─── Stat card ────────────────────────────────────────────────────────────────
 @Composable
-private fun ReportStatCard(
-    value: Int,
-    label: String,
-    accent: Color,
-    modifier: Modifier = Modifier,
-    selected: Boolean = false,
-    onClick: (() -> Unit)? = null
-) {
-    val cardModifier = if (onClick == null) {
-        modifier
-    } else {
-        modifier.clickable(onClick = onClick)
-    }
-
+private fun ReviewStatCard(value: Int, label: String, accent: Color, modifier: Modifier = Modifier) {
     Card(
-        modifier = cardModifier,
+        modifier = modifier,
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (selected) {
-                tonalSurface(accent, lightAlpha = 0.09f, darkAlpha = 0.18f)
-            } else {
-                RFColors.Bg
-            }
-        ),
-        border = androidx.compose.foundation.BorderStroke(
-            if (selected) 2.dp else 1.dp,
-            if (selected) accent.copy(alpha = 0.72f) else RFColors.Border
-        )
+        colors = CardDefaults.cardColors(containerColor = RFColors.Bg),
+        border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
     ) {
         Column(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 13.dp),
@@ -803,8 +578,7 @@ private fun ReportStatCard(
             Text(
                 label,
                 fontSize = 10.sp,
-                color = if (selected) accent else RFColors.TextSecondary,
-                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                color = RFColors.TextSecondary,
                 textAlign = TextAlign.Center,
                 maxLines = 2,
                 minLines = 2,
@@ -816,9 +590,37 @@ private fun ReportStatCard(
                     .height(3.dp)
                     .fillMaxWidth(0.55f)
                     .clip(RoundedCornerShape(999.dp))
-                    .background(accent.copy(alpha = if (selected) 1f else 0.78f))
+                    .background(accent.copy(alpha = 0.78f))
             )
         }
+    }
+}
+
+// ─── Filter pill ──────────────────────────────────────────────────────────────
+@Composable
+private fun FilterPill(
+    label: String,
+    icon: ImageVector,
+    selected: Boolean,
+    accentColor: Color,
+    onClick: () -> Unit
+) {
+    OutlinedButton(
+        onClick = onClick,
+        shape = RoundedCornerShape(999.dp),
+        contentPadding = PaddingValues(horizontal = 13.dp, vertical = 7.dp),
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = if (selected) tonalSurface(accentColor) else Color.Transparent,
+            contentColor = if (selected) accentColor else RFColors.TextSecondary
+        ),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (selected) accentColor.copy(alpha = 0.65f) else RFColors.Border
+        )
+    ) {
+        Icon(icon, contentDescription = null, modifier = Modifier.size(15.dp))
+        Spacer(Modifier.width(5.dp))
+        Text(label, fontSize = 12.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
     }
 }
 
@@ -877,13 +679,15 @@ private fun FullScreenImageDialog(
     }
 }
 
-// ─── Completed-incident report card ─────────────────────────────────────────
+// ─── Incident closure card ────────────────────────────────────────────────────
 @Composable
-private fun IncidentReportCard(
-    incident: CompletedIncident,
+private fun ReviewCard(
+    incident: ReviewableIncident,
     index: Int,
     report: AfterActionReport?,
-    onOpenReport: (CompletedIncident) -> Unit,
+    onOpenReport: (ReviewableIncident) -> Unit,
+    onWriteReview: (ReviewableIncident) -> Unit,
+    onViewDetails: (ReviewableIncident) -> Unit,
     onViewImage: (String) -> Unit
 ) {
     var visible by remember(incident.id) { mutableStateOf(false) }
@@ -894,30 +698,18 @@ private fun IncidentReportCard(
 
     val reportAccent = report?.status?.color ?: RFColors.Warning
     val reportLabel = when (report?.status) {
-        OperationalReportStatus.PENDING -> "Report status: Pending"
-        OperationalReportStatus.SUBMITTED -> "Report status: Submitted"
-        OperationalReportStatus.APPROVED -> if (report.isInHistory) {
-            "History • Approved by admin"
-        } else {
-            "Report status: Approved"
-        }
-        OperationalReportStatus.RETURNED -> "Report status: Needs revision"
-        null -> "Report status: Pending • Not started"
+        OperationalReportStatus.DRAFT -> "Unit report: Draft"
+        OperationalReportStatus.SUBMITTED -> "Unit report: Submitted"
+        OperationalReportStatus.VERIFIED -> "Unit report: Verified"
+        OperationalReportStatus.RETURNED -> "Unit report: Needs revision"
+        null -> "Unit report: Not started"
     }
     val reportAction = when (report?.status) {
-        OperationalReportStatus.PENDING,
+        OperationalReportStatus.DRAFT,
         OperationalReportStatus.RETURNED -> "Continue Report"
-        OperationalReportStatus.SUBMITTED -> "View Submitted Report"
-        OperationalReportStatus.APPROVED -> if (report.isInHistory) {
-            "View Final Report"
-        } else {
-            "View Approved Report"
-        }
+        OperationalReportStatus.SUBMITTED,
+        OperationalReportStatus.VERIFIED -> "Open Report"
         null -> "Create Report"
-    }
-    val reportTimestamp = when {
-        report?.status == OperationalReportStatus.APPROVED && report.approvedAt > 0L -> report.approvedAt
-        else -> report?.updatedAt ?: 0L
     }
 
     AnimatedVisibility(
@@ -935,12 +727,7 @@ private fun IncidentReportCard(
                     .fillMaxWidth()
                     .background(
                         Brush.verticalGradient(
-                            listOf(
-                                RFColors.Bg,
-                                RFColors.Primary.copy(
-                                    alpha = if (ThemeController.isDarkMode.value) 0.08f else 0.035f
-                                )
-                            )
+                            listOf(RFColors.Bg, RFColors.Primary.copy(alpha = if (ThemeController.isDarkMode.value) 0.08f else 0.035f))
                         )
                     )
                     .padding(14.dp),
@@ -952,11 +739,7 @@ private fun IncidentReportCard(
                             .width(5.dp)
                             .height(54.dp)
                             .clip(RoundedCornerShape(999.dp))
-                            .background(
-                                Brush.verticalGradient(
-                                    listOf(RFColors.Primary, RFColors.Secondary)
-                                )
-                            )
+                            .background(Brush.verticalGradient(listOf(RFColors.Primary, RFColors.Secondary)))
                     )
                     Spacer(Modifier.width(11.dp))
                     Column(modifier = Modifier.weight(1f)) {
@@ -978,19 +761,20 @@ private fun IncidentReportCard(
                         )
                     }
                     Surface(
-                        color = tonalSurface(RFColors.Success),
+                        color = tonalSurface(incident.status.color),
                         shape = RoundedCornerShape(999.dp),
                         border = androidx.compose.foundation.BorderStroke(
                             1.dp,
-                            RFColors.Success.copy(alpha = 0.40f)
+                            incident.status.color.copy(alpha = 0.45f)
                         )
                     ) {
                         Text(
-                            "Completed",
-                            color = RFColors.Success,
+                            incident.status.label,
+                            color = incident.status.color,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
+                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                            maxLines = 1
                         )
                     }
                 }
@@ -998,17 +782,14 @@ private fun IncidentReportCard(
                 Surface(
                     color = tonalSurface(reportAccent, lightAlpha = 0.08f, darkAlpha = 0.17f),
                     shape = RoundedCornerShape(12.dp),
-                    border = androidx.compose.foundation.BorderStroke(
-                        1.dp,
-                        reportAccent.copy(alpha = 0.28f)
-                    )
+                    border = androidx.compose.foundation.BorderStroke(1.dp, reportAccent.copy(alpha = 0.28f))
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            Icons.Default.Description,
+                            if (report == null) Icons.Default.Description else Icons.Default.Description,
                             contentDescription = null,
                             tint = reportAccent,
                             modifier = Modifier.size(17.dp)
@@ -1021,10 +802,9 @@ private fun IncidentReportCard(
                             fontWeight = FontWeight.SemiBold,
                             modifier = Modifier.weight(1f)
                         )
-                        if (reportTimestamp > 0L) {
+                        if ((report?.updatedAt ?: 0L) > 0L) {
                             Text(
-                                SimpleDateFormat("MMM d, h:mm a", Locale.getDefault())
-                                    .format(Date(reportTimestamp)),
+                                SimpleDateFormat("MMM d, h:mm a", Locale.getDefault()).format(Date(report!!.updatedAt)),
                                 color = RFColors.TextMuted,
                                 fontSize = 9.sp
                             )
@@ -1108,28 +888,51 @@ private fun IncidentReportCard(
                     }
                 }
 
-                Button(
-                    onClick = { onOpenReport(incident) },
-                    modifier = Modifier.fillMaxWidth().height(44.dp),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = RFColors.Primary,
-                        contentColor = Color.White
-                    ),
-                    contentPadding = PaddingValues(horizontal = 10.dp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(
-                        Icons.Default.Assignment,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        reportAction,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1
-                    )
+                    Button(
+                        onClick = { onOpenReport(incident) },
+                        modifier = Modifier.weight(1.12f).height(44.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = RFColors.Primary,
+                            contentColor = Color.White
+                        ),
+                        contentPadding = PaddingValues(horizontal = 10.dp)
+                    ) {
+                        Icon(Icons.Default.Assignment, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(reportAction, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            if (incident.status == ReviewStatus.Pending) onWriteReview(incident)
+                            else onViewDetails(incident)
+                        },
+                        modifier = Modifier.weight(1f).height(44.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = if (ThemeController.isDarkMode.value) RFColors.Primary else RFColors.Secondary
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border),
+                        contentPadding = PaddingValues(horizontal = 9.dp)
+                    ) {
+                        Icon(
+                            if (incident.status == ReviewStatus.Pending) Icons.Default.Star else Icons.Default.Visibility,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(5.dp))
+                        Text(
+                            if (incident.status == ReviewStatus.Pending) "Service Review" else "Incident Record",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1
+                        )
+                    }
                 }
             }
         }
@@ -2025,7 +1828,7 @@ private fun PostIncidentHeader() {
                 )
                 Spacer(Modifier.height(3.dp))
                 Text(
-                    "Unit reports, approval history, completion evidence, and equipment support",
+                    "Unit reports, service review, evidence, and equipment support",
                     color = Color.White.copy(alpha = 0.78f),
                     fontSize = 11.sp,
                     lineHeight = 15.sp,
@@ -2042,7 +1845,7 @@ private fun PostIncidentHeader() {
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    Icons.Default.Assignment,
+                    Icons.Default.RateReview,
                     contentDescription = null,
                     tint = Color.White,
                     modifier = Modifier.size(28.dp)
@@ -2054,9 +1857,8 @@ private fun PostIncidentHeader() {
 
 @Composable
 private fun OperationalWorkflowCard(
-    pendingCount: Int,
-    submittedCount: Int,
-    approvedCount: Int
+    draftCount: Int,
+    submittedCount: Int
 ) {
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
@@ -2102,7 +1904,7 @@ private fun OperationalWorkflowCard(
                     shape = RoundedCornerShape(999.dp)
                 ) {
                     Text(
-                        "${pendingCount + submittedCount + approvedCount} active",
+                        "${draftCount + submittedCount} records",
                         color = RFColors.Primary,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
@@ -2123,8 +1925,8 @@ private fun OperationalWorkflowCard(
             )
             OperationalGuideStep(
                 number = "3",
-                title = "Authorized admin reviews and approves",
-                detail = "Admin checks whether the incident and submitted report are legitimate, then approves or returns the report for revision."
+                title = "Authorized admin finalizes",
+                detail = "Verification, official numbering, and command-level consolidation remain with the designated authority."
             )
 
             Surface(
@@ -2144,7 +1946,7 @@ private fun OperationalWorkflowCard(
                     )
                     Spacer(Modifier.width(7.dp))
                     Text(
-                        "Use Create Report to document the unit response. Pending reports remain editable; Submitted reports are locked while admin reviews them; Approved reports are final.",
+                        "Service ratings are feedback. The After-Action Report is the operational record. They are intentionally separate.",
                         color = RFColors.TextSecondary,
                         fontSize = 10.sp,
                         lineHeight = 15.sp
@@ -2177,11 +1979,10 @@ private fun OperationalGuideStep(number: String, title: String, detail: String) 
 
 @Composable
 private fun HubTabSwitcher(
-    selected: ReportHubTab,
-    incidentCount: Int,
-    historyCount: Int,
+    selected: ReviewHubTab,
+    pendingIncidents: Int,
     resourceCount: Int,
-    onSelect: (ReportHubTab) -> Unit
+    onSelect: (ReviewHubTab) -> Unit
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
@@ -2195,12 +1996,8 @@ private fun HubTabSwitcher(
             contentColor = RFColors.Primary,
             divider = { HorizontalDivider(color = RFColors.Border) }
         ) {
-            ReportHubTab.entries.forEach { tab ->
-                val count = when (tab) {
-                    ReportHubTab.INCIDENTS -> incidentCount
-                    ReportHubTab.HISTORY -> historyCount
-                    ReportHubTab.RESOURCES -> resourceCount
-                }
+            ReviewHubTab.entries.forEach { tab ->
+                val count = if (tab == ReviewHubTab.INCIDENTS) pendingIncidents else resourceCount
                 Tab(
                     selected = selected == tab,
                     onClick = { onSelect(tab) },
@@ -2231,278 +2028,6 @@ private fun HubTabSwitcher(
                     }
                 )
             }
-        }
-    }
-}
-
-@Composable
-private fun PostIncidentLoadErrorCard(
-    message: String,
-    onRetry: () -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = tonalSurface(RFColors.Warning)),
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            RFColors.Warning.copy(alpha = 0.35f)
-        )
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 13.dp, vertical = 11.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                Icons.Default.WarningAmber,
-                contentDescription = null,
-                tint = RFColors.Warning,
-                modifier = Modifier.size(19.dp)
-            )
-            Spacer(Modifier.width(9.dp))
-            Text(
-                message,
-                color = RFColors.Text,
-                fontSize = 11.sp,
-                lineHeight = 15.sp,
-                modifier = Modifier.weight(1f)
-            )
-            TextButton(onClick = onRetry) {
-                Text("Retry", color = RFColors.Warning, fontWeight = FontWeight.Bold)
-            }
-        }
-    }
-}
-
-@Composable
-private fun ReportHistoryHeader(
-    historyCount: Int,
-    latestMonthLabel: String?
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = RFColors.Bg),
-        border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
-    ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(tonalSurface(RFColors.Success)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        Icons.Default.History,
-                        contentDescription = null,
-                        tint = RFColors.Success,
-                        modifier = Modifier.size(21.dp)
-                    )
-                }
-                Spacer(Modifier.width(10.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        "Approved Report History",
-                        color = RFColors.Text,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        if (historyCount == 0) {
-                            "No reports have reached the history window yet"
-                        } else {
-                            "$historyCount finalized report${if (historyCount == 1) "" else "s"}${latestMonthLabel?.let { " • latest: $it" }.orEmpty()}"
-                        },
-                        color = RFColors.TextSecondary,
-                        fontSize = 10.sp,
-                        lineHeight = 14.sp
-                    )
-                }
-                Surface(
-                    color = tonalSurface(RFColors.Success),
-                    shape = RoundedCornerShape(999.dp)
-                ) {
-                    Text(
-                        historyCount.toString(),
-                        color = RFColors.Success,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
-                    )
-                }
-            }
-
-            Surface(
-                color = tonalSurface(RFColors.Info, lightAlpha = 0.07f, darkAlpha = 0.15f),
-                shape = RoundedCornerShape(12.dp),
-                border = androidx.compose.foundation.BorderStroke(
-                    1.dp,
-                    RFColors.Info.copy(alpha = 0.24f)
-                )
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp),
-                    verticalAlignment = Alignment.Top
-                ) {
-                    Icon(
-                        Icons.Default.Info,
-                        contentDescription = null,
-                        tint = RFColors.Info,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(Modifier.width(7.dp))
-                    Text(
-                        "An approved report stays under Approved for 24 hours, then appears here automatically. History records remain final and read-only and are organized by approval month.",
-                        color = RFColors.TextSecondary,
-                        fontSize = 10.sp,
-                        lineHeight = 15.sp
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ReportHistoryMonthSelector(
-    months: List<ReportHistoryMonth>,
-    selectedKey: String?,
-    totalCount: Int,
-    onSelect: (String?) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    LazyRow(
-        modifier = modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(horizontal = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        item(key = "history-month-all") {
-            FilterChip(
-                selected = selectedKey == null,
-                onClick = { onSelect(null) },
-                label = {
-                    Text(
-                        "All ($totalCount)",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                },
-                leadingIcon = if (selectedKey == null) {
-                    {
-                        Icon(
-                            Icons.Default.Done,
-                            contentDescription = null,
-                            modifier = Modifier.size(15.dp)
-                        )
-                    }
-                } else null
-            )
-        }
-
-        items(months, key = { it.key }) { month ->
-            FilterChip(
-                selected = selectedKey == month.key,
-                onClick = { onSelect(month.key) },
-                label = {
-                    Text(
-                        "${month.label} (${month.count})",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                },
-                leadingIcon = if (selectedKey == month.key) {
-                    {
-                        Icon(
-                            Icons.Default.Done,
-                            contentDescription = null,
-                            modifier = Modifier.size(15.dp)
-                        )
-                    }
-                } else null
-            )
-        }
-    }
-}
-
-@Composable
-private fun ReportHistoryMonthHeader(
-    label: String,
-    count: Int,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            Icons.Default.CalendarMonth,
-            contentDescription = null,
-            tint = RFColors.Primary,
-            modifier = Modifier.size(18.dp)
-        )
-        Spacer(Modifier.width(7.dp))
-        Text(
-            label,
-            color = RFColors.Text,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.weight(1f)
-        )
-        Text(
-            "$count record${if (count == 1) "" else "s"}",
-            color = RFColors.TextSecondary,
-            fontSize = 10.sp
-        )
-    }
-}
-
-@Composable
-private fun EmptyReportHistoryCard(selectedMonthLabel: String?) {
-    Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = RFColors.Bg),
-        border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
-    ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 34.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(9.dp)
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(58.dp)
-                    .clip(RoundedCornerShape(19.dp))
-                    .background(tonalSurface(RFColors.Primary)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    Icons.Default.History,
-                    contentDescription = null,
-                    tint = RFColors.Primary,
-                    modifier = Modifier.size(29.dp)
-                )
-            }
-            Text(
-                selectedMonthLabel?.let { "No approved reports for $it" }
-                    ?: "No report history yet",
-                color = RFColors.Text,
-                fontWeight = FontWeight.Bold,
-                fontSize = 15.sp,
-                textAlign = TextAlign.Center
-            )
-            Text(
-                "Reports will appear here after they have been approved by admin for at least 24 hours.",
-                color = RFColors.TextSecondary,
-                fontSize = 11.sp,
-                lineHeight = 16.sp,
-                textAlign = TextAlign.Center
-            )
         }
     }
 }
@@ -2720,8 +2245,7 @@ private fun OperationalOutcomeSelector(
 
 @Composable
 private fun AfterActionReportDialog(
-    incident: CompletedIncident,
-    responderId: Int,
+    incident: ReviewableIncident,
     responderName: String,
     initialReport: AfterActionReport?,
     isSaving: Boolean,
@@ -2729,109 +2253,28 @@ private fun AfterActionReportDialog(
     onSave: (AfterActionReport) -> Unit,
     onExport: (AfterActionReport) -> Unit
 ) {
-    val context = LocalContext.current
-    val isReadOnly = initialReport?.status == OperationalReportStatus.SUBMITTED ||
-            initialReport?.status == OperationalReportStatus.APPROVED
-    val serverSnapshot = remember(incident, initialReport) {
-        AfterActionDraftSnapshot(
-            operationalOutcome = initialReport?.operationalOutcome ?: "Resolved",
-            incidentSummary = initialReport?.incidentSummary ?: incident.completionNotes.orEmpty(),
-            actionsTaken = initialReport?.actionsTaken.orEmpty(),
-            personsAssisted = (initialReport?.personsAssisted ?: 0).toString(),
-            injuries = (initialReport?.injuries ?: 0).toString(),
-            fatalities = (initialReport?.fatalities ?: 0).toString(),
-            resourcesUsed = initialReport?.resourcesUsed.orEmpty(),
-            agenciesInvolved = initialReport?.agenciesInvolved.orEmpty(),
-            handoffDetails = initialReport?.handoffDetails.orEmpty(),
-            safetyIssues = initialReport?.safetyIssues.orEmpty(),
-            followUpRequired = initialReport?.followUpRequired ?: false,
-            followUpDetails = initialReport?.followUpDetails.orEmpty(),
-            lessonsLearned = initialReport?.lessonsLearned.orEmpty()
-        )
+    val stateKey = "${incident.id}_${initialReport?.updatedAt ?: 0L}"
+    var step by rememberSaveable(stateKey) { mutableIntStateOf(1) }
+    var operationalOutcome by rememberSaveable(stateKey) { mutableStateOf(initialReport?.operationalOutcome ?: "Resolved") }
+    var incidentSummary by rememberSaveable(stateKey) {
+        mutableStateOf(initialReport?.incidentSummary ?: incident.completionNotes.orEmpty())
     }
-    val restoredDraft = remember(
-        responderId,
-        incident.id,
-        initialReport?.updatedAt,
-        isReadOnly
-    ) {
-        if (isReadOnly) {
-            null
-        } else {
-            readAfterActionDraft(context, responderId, incident.id)
-                ?.takeIf { it.savedAt > (initialReport?.updatedAt ?: 0L) }
-        }
-    }
-    val initialSnapshot = restoredDraft?.snapshot ?: serverSnapshot
-    val stateKey = "${normalizedIncidentId(incident.id)}_${initialReport?.updatedAt ?: 0L}_${restoredDraft?.savedAt ?: 0L}"
-    var step by rememberSaveable(stateKey) { mutableIntStateOf(restoredDraft?.step ?: 1) }
-    var operationalOutcome by rememberSaveable(stateKey) { mutableStateOf(initialSnapshot.operationalOutcome) }
-    var incidentSummary by rememberSaveable(stateKey) { mutableStateOf(initialSnapshot.incidentSummary) }
-    var actionsTaken by rememberSaveable(stateKey) { mutableStateOf(initialSnapshot.actionsTaken) }
-    var personsAssisted by rememberSaveable(stateKey) { mutableStateOf(initialSnapshot.personsAssisted) }
-    var injuries by rememberSaveable(stateKey) { mutableStateOf(initialSnapshot.injuries) }
-    var fatalities by rememberSaveable(stateKey) { mutableStateOf(initialSnapshot.fatalities) }
-    var resourcesUsed by rememberSaveable(stateKey) { mutableStateOf(initialSnapshot.resourcesUsed) }
-    var agenciesInvolved by rememberSaveable(stateKey) { mutableStateOf(initialSnapshot.agenciesInvolved) }
-    var handoffDetails by rememberSaveable(stateKey) { mutableStateOf(initialSnapshot.handoffDetails) }
-    var safetyIssues by rememberSaveable(stateKey) { mutableStateOf(initialSnapshot.safetyIssues) }
-    var followUpRequired by rememberSaveable(stateKey) { mutableStateOf(initialSnapshot.followUpRequired) }
-    var followUpDetails by rememberSaveable(stateKey) { mutableStateOf(initialSnapshot.followUpDetails) }
-    var lessonsLearned by rememberSaveable(stateKey) { mutableStateOf(initialSnapshot.lessonsLearned) }
+    var actionsTaken by rememberSaveable(stateKey) { mutableStateOf(initialReport?.actionsTaken.orEmpty()) }
+    var personsAssisted by rememberSaveable(stateKey) { mutableStateOf((initialReport?.personsAssisted ?: 0).toString()) }
+    var injuries by rememberSaveable(stateKey) { mutableStateOf((initialReport?.injuries ?: 0).toString()) }
+    var fatalities by rememberSaveable(stateKey) { mutableStateOf((initialReport?.fatalities ?: 0).toString()) }
+    var resourcesUsed by rememberSaveable(stateKey) { mutableStateOf(initialReport?.resourcesUsed.orEmpty()) }
+    var agenciesInvolved by rememberSaveable(stateKey) { mutableStateOf(initialReport?.agenciesInvolved.orEmpty()) }
+    var handoffDetails by rememberSaveable(stateKey) { mutableStateOf(initialReport?.handoffDetails.orEmpty()) }
+    var safetyIssues by rememberSaveable(stateKey) { mutableStateOf(initialReport?.safetyIssues.orEmpty()) }
+    var followUpRequired by rememberSaveable(stateKey) { mutableStateOf(initialReport?.followUpRequired ?: false) }
+    var followUpDetails by rememberSaveable(stateKey) { mutableStateOf(initialReport?.followUpDetails.orEmpty()) }
+    var lessonsLearned by rememberSaveable(stateKey) { mutableStateOf(initialReport?.lessonsLearned.orEmpty()) }
     var certified by rememberSaveable(stateKey) { mutableStateOf(false) }
     var attemptedNext by rememberSaveable(stateKey) { mutableStateOf(false) }
-    var showClosePrompt by rememberSaveable(stateKey) { mutableStateOf(false) }
+    val isReadOnly = initialReport?.status == OperationalReportStatus.SUBMITTED ||
+            initialReport?.status == OperationalReportStatus.VERIFIED
     val formEnabled = !isReadOnly && !isSaving
-
-    val currentSnapshot = AfterActionDraftSnapshot(
-        operationalOutcome = operationalOutcome,
-        incidentSummary = incidentSummary,
-        actionsTaken = actionsTaken,
-        personsAssisted = personsAssisted,
-        injuries = injuries,
-        fatalities = fatalities,
-        resourcesUsed = resourcesUsed,
-        agenciesInvolved = agenciesInvolved,
-        handoffDetails = handoffDetails,
-        safetyIssues = safetyIssues,
-        followUpRequired = followUpRequired,
-        followUpDetails = followUpDetails,
-        lessonsLearned = lessonsLearned
-    )
-    val isDirty = !isReadOnly && currentSnapshot != serverSnapshot
-
-    LaunchedEffect(
-        currentSnapshot,
-        serverSnapshot,
-        step,
-        isReadOnly,
-        isSaving,
-        responderId,
-        incident.id
-    ) {
-        if (isReadOnly || isSaving || responderId <= 0) return@LaunchedEffect
-        if (!isDirty) {
-            clearAfterActionDraft(context, responderId, incident.id)
-            return@LaunchedEffect
-        }
-        delay(350L)
-        saveAfterActionDraft(
-            context = context,
-            responderId = responderId,
-            incidentId = incident.id,
-            step = step,
-            snapshot = currentSnapshot
-        )
-    }
-
-    fun requestClose() {
-        if (isSaving) return
-        if (isDirty) {
-            showClosePrompt = true
-        } else {
-            onDismiss()
-        }
-    }
 
     val fieldColors = OutlinedTextFieldDefaults.colors(
         focusedContainerColor = RFColors.InputBg,
@@ -2867,14 +2310,6 @@ private fun AfterActionReportDialog(
         lessonsLearned = lessonsLearned.trim(),
         reviewerNotes = initialReport?.reviewerNotes.orEmpty(),
         status = status,
-        approvedAt = initialReport?.approvedAt ?: 0L,
-        isInHistory = initialReport?.isInHistory ?: false,
-        sourceCompletedAt = initialReport?.sourceCompletedAt ?: incident.completedAtMillis,
-        sourceCompletionNotes = initialReport?.sourceCompletionNotes
-            ?.takeIf { it.isNotBlank() }
-            ?: incident.completionNotes.orEmpty(),
-        sourceCompletionProofUri = initialReport?.sourceCompletionProofUri
-            ?: incident.proofUri,
         updatedAt = System.currentTimeMillis()
     )
 
@@ -2889,7 +2324,7 @@ private fun AfterActionReportDialog(
             certified
 
     Dialog(
-        onDismissRequest = ::requestClose,
+        onDismissRequest = onDismiss,
         properties = DialogProperties(
             usePlatformDefaultWidth = false,
             decorFitsSystemWindows = false,
@@ -2945,7 +2380,7 @@ private fun AfterActionReportDialog(
                                     )
                                 }
                             }
-                            IconButton(onClick = ::requestClose) {
+                            IconButton(onClick = onDismiss) {
                                 Icon(Icons.Default.Close, contentDescription = "Close report", tint = RFColors.TextSecondary)
                             }
                         }
@@ -2968,7 +2403,7 @@ private fun AfterActionReportDialog(
                                 Icon(Icons.Default.Security, contentDescription = null, tint = RFColors.Info, modifier = Modifier.size(17.dp))
                                 Spacer(Modifier.width(8.dp))
                                 Text(
-                                    "This unit-level operational entry is stored in the server database. Submitted reports remain read-only while an authorized admin validates the incident and either approves or returns the report for revision.",
+                                    "This unit-level operational entry is stored in the server database. Submitted reports remain read-only while command/admin verifies or returns them for revision.",
                                     color = RFColors.TextSecondary,
                                     fontSize = 10.sp,
                                     lineHeight = 15.sp
@@ -3106,7 +2541,7 @@ private fun AfterActionReportDialog(
                                         label = { Text("Resources used") },
                                         placeholder = { Text("Vehicles, equipment, supplies, personnel") },
                                         supportingText = {
-                                            Text("Documentation only. Request backup from Home and equipment or supplies from Reports > Equipment.")
+                                            Text("Documentation only. Request backup from Home and equipment or supplies from Reviews > Equipment.")
                                         },
                                         modifier = Modifier.fillMaxWidth(),
                                         minLines = 2,
@@ -3333,18 +2768,18 @@ private fun AfterActionReportDialog(
                                 }
                             }
                             TextButton(
-                                onClick = { onSave(buildReport(OperationalReportStatus.PENDING)) },
+                                onClick = { onSave(buildReport(OperationalReportStatus.DRAFT)) },
                                 enabled = formEnabled,
                                 modifier = Modifier.align(Alignment.CenterHorizontally)
                             ) {
                                 Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(15.dp))
                                 Spacer(Modifier.width(5.dp))
-                                Text("Save as Pending and close", color = RFColors.TextSecondary, fontSize = 11.sp)
+                                Text("Save draft and close", color = RFColors.TextSecondary, fontSize = 11.sp)
                             }
                         } else {
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 OutlinedButton(
-                                    onClick = { onSave(buildReport(OperationalReportStatus.PENDING)) },
+                                    onClick = { onSave(buildReport(OperationalReportStatus.DRAFT)) },
                                     enabled = formEnabled,
                                     modifier = Modifier.weight(1f).height(46.dp),
                                     shape = RoundedCornerShape(12.dp),
@@ -3352,7 +2787,7 @@ private fun AfterActionReportDialog(
                                 ) {
                                     Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(15.dp))
                                     Spacer(Modifier.width(5.dp))
-                                    Text("Save Pending", fontSize = 11.sp)
+                                    Text("Save Draft", fontSize = 11.sp)
                                 }
                                 Button(
                                     onClick = {
@@ -3379,7 +2814,7 @@ private fun AfterActionReportDialog(
                                 }
                                 TextButton(
                                     onClick = {
-                                        onExport(buildReport(initialReport?.status ?: OperationalReportStatus.PENDING))
+                                        onExport(buildReport(initialReport?.status ?: OperationalReportStatus.DRAFT))
                                     },
                                     enabled = !isSaving && (incidentSummary.isNotBlank() || actionsTaken.isNotBlank())
                                 ) {
@@ -3393,61 +2828,6 @@ private fun AfterActionReportDialog(
                 }
             }
         }
-
-        if (showClosePrompt) {
-            AlertDialog(
-                onDismissRequest = { showClosePrompt = false },
-                icon = {
-                    Icon(
-                        Icons.Default.EditNote,
-                        contentDescription = null,
-                        tint = RFColors.Warning
-                    )
-                },
-                title = { Text("Close this report?") },
-                text = {
-                    Text(
-                        "Your unsaved changes are stored as a local draft on this device."
-                    )
-                },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            saveAfterActionDraft(
-                                context = context,
-                                responderId = responderId,
-                                incidentId = incident.id,
-                                step = step,
-                                snapshot = currentSnapshot
-                            )
-                            showClosePrompt = false
-                            onDismiss()
-                        }
-                    ) {
-                        Text("Keep Draft & Close", fontWeight = FontWeight.Bold)
-                    }
-                },
-                dismissButton = {
-                    Column(horizontalAlignment = Alignment.End) {
-                        TextButton(
-                            onClick = {
-                                clearAfterActionDraft(context, responderId, incident.id)
-                                showClosePrompt = false
-                                onDismiss()
-                            }
-                        ) {
-                            Text("Discard Draft", color = RFColors.Danger)
-                        }
-                        TextButton(onClick = { showClosePrompt = false }) {
-                            Text("Continue Editing")
-                        }
-                    }
-                },
-                containerColor = RFColors.Bg,
-                titleContentColor = RFColors.Text,
-                textContentColor = RFColors.TextSecondary
-            )
-        }
     }
 }
 
@@ -3458,136 +2838,115 @@ fun ReviewsFeedbackScreen() {
     val accountPrefs = context.getSharedPreferences("ers_prefs", Context.MODE_PRIVATE)
     val userPrefs = context.getSharedPreferences("user_prefs", Context.MODE_PRIVATE)
     val operationalRepository = remember { OperationalRepository() }
-    val incidentRepository = remember { com.ers.emergencyresponseapp.data.IncidentRepository() }
 
     val responderName = accountPrefs.getString("account_username", "Responder") ?: "Responder"
     val responderId = userPrefs.getString("user_id", "")?.toIntOrNull() ?: 0
     val scope = rememberCoroutineScope()
 
-    var hubTab by rememberSaveable { mutableStateOf(ReportHubTab.INCIDENTS) }
-    var selectedReportFilter by rememberSaveable {
-        mutableStateOf(ReportWorkflowFilter.PENDING)
-    }
+    var hubTab by rememberSaveable { mutableStateOf(ReviewHubTab.INCIDENTS) }
+    var selectedStatus by rememberSaveable { mutableStateOf(ReviewStatus.Pending) }
     var requestSearch by rememberSaveable { mutableStateOf("") }
 
+    var reviewRefreshKey by remember { mutableIntStateOf(0) }
     var requestRefreshKey by remember { mutableIntStateOf(0) }
     var reportRefreshKey by remember { mutableIntStateOf(0) }
 
-    var serverCompletedIncidents by remember {
-        mutableStateOf<List<com.ers.emergencyresponseapp.network.CompletedIncidentDto>>(emptyList())
+    var serverReviewIncidents by remember {
+        mutableStateOf<List<com.ers.emergencyresponseapp.network.PendingReviewIncidentDto>>(emptyList())
     }
     var parsedRequests by remember { mutableStateOf<List<SavedResourceRequest>>(emptyList()) }
     var afterActionReports by remember { mutableStateOf<List<AfterActionReport>>(emptyList()) }
-    var completedIncidentsLoadError by remember { mutableStateOf<String?>(null) }
-    var resourceRequestsLoadError by remember { mutableStateOf<String?>(null) }
-    var afterActionReportsLoadError by remember { mutableStateOf<String?>(null) }
-    var hasLoadedCompletedIncidents by remember { mutableStateOf(false) }
-    var hasLoadedResourceRequests by remember { mutableStateOf(false) }
-    var hasLoadedAfterActionReports by remember { mutableStateOf(false) }
+    var incidentReviewSummary by remember { mutableStateOf<IncidentReviewSummary?>(null) }
     var isSavingAfterActionReport by remember { mutableStateOf(false) }
     var isPullRefreshing by remember { mutableStateOf(false) }
 
-    var showAllIncidents by remember { mutableStateOf(false) }
-    var showAllHistory by remember { mutableStateOf(false) }
+    var showAllReviews by remember { mutableStateOf(false) }
     var showAllRequests by remember { mutableStateOf(false) }
-    var selectedHistoryMonthKey by rememberSaveable { mutableStateOf<String?>(null) }
     var showResourceForm by remember { mutableStateOf(false) }
     var selectedRequest by remember { mutableStateOf<SavedResourceRequest?>(null) }
     var requestToCancel by remember { mutableStateOf<SavedResourceRequest?>(null) }
-    var reportTarget by remember { mutableStateOf<CompletedIncident?>(null) }
+
+    var reportTarget by remember { mutableStateOf<ReviewableIncident?>(null) }
+
+    val composeTarget = remember { mutableStateOf<ReviewableIncident?>(null) }
+    val showComposeDialog = remember { mutableStateOf(false) }
+    val reviewText = rememberSaveable { mutableStateOf("") }
+    var responseRating by rememberSaveable { mutableIntStateOf(3) }
+    var communicationRating by rememberSaveable { mutableIntStateOf(3) }
+    var professionalismRating by rememberSaveable { mutableIntStateOf(3) }
+    var selectedOutcome by rememberSaveable { mutableStateOf("Resolved") }
+    var showSubmitReviewConfirm by remember { mutableStateOf(false) }
+    var isSubmittingReview by remember { mutableStateOf(false) }
+
+    val detailsTarget = remember { mutableStateOf<ReviewableIncident?>(null) }
+    val detailsText = rememberSaveable { mutableStateOf("") }
+    var showIncidentRecord by remember { mutableStateOf(false) }
+    val generatedReport = rememberSaveable { mutableStateOf("") }
+    val showReportDialog = remember { mutableStateOf(false) }
+    var isExportingPdf by remember { mutableStateOf(false) }
     var fullScreenImageUri by remember { mutableStateOf<String?>(null) }
 
-    suspend fun refreshCompletedIncidents() {
-        if (responderId <= 0) {
-            completedIncidentsLoadError = "Responder session is unavailable. Sign in again."
-            return
-        }
-        try {
-            val loadedIncidents = incidentRepository.getCompletedIncidents(responderId)
-            serverCompletedIncidents = loadedIncidents
-            hasLoadedCompletedIncidents = true
-            completedIncidentsLoadError = null
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Exception) {
-            Log.e("PostIncidentHub", "Completed incident load failed", error)
-            completedIncidentsLoadError = if (hasLoadedCompletedIncidents) {
-                "Unable to refresh completed incidents. Previous data is still shown."
-            } else {
-                "Unable to load completed incidents. Tap Retry."
-            }
-        }
+    suspend fun refreshReviewIncidents() {
+        if (responderId <= 0) return
+        val repo = com.ers.emergencyresponseapp.data.IncidentRepository()
+        serverReviewIncidents = repo.getPendingReviewIncidents(responderId)
     }
 
     suspend fun refreshResourceRequests() {
-        if (responderId <= 0) {
-            resourceRequestsLoadError = "Responder session is unavailable. Sign in again."
-            return
-        }
-        try {
-            val loadedRequests = incidentRepository.getMyResourceRequests(responderId)
-                .map { dto ->
-                    val createdAt = parseServerTimestamp(dto.created_at)
-                    val updatedAt = parseServerTimestamp(dto.updated_at).takeIf { it > 0L }
-                        ?: createdAt
-                    SavedResourceRequest(
-                        id = dto.id.toString(),
-                        resourceName = dto.resource_name,
-                        category = dto.category,
-                        quantity = dto.quantity.toString(),
-                        urgency = dto.urgency,
-                        status = dto.status.replaceFirstChar { it.uppercase() },
-                        incidentId = dto.incident_id.orEmpty().trim(),
-                        location = dto.location.trim(),
-                        notes = dto.notes.orEmpty().trim(),
-                        createdAt = createdAt,
-                        updatedAt = updatedAt
-                    )
-                }
-                .sortedWith(
-                    compareByDescending<SavedResourceRequest> { it.createdAt }
-                        .thenByDescending { it.id.toLongOrNull() ?: 0L }
+        if (responderId <= 0) return
+        val repo = com.ers.emergencyresponseapp.data.IncidentRepository()
+        parsedRequests = repo.getMyResourceRequests(responderId)
+            .map { dto ->
+                val createdAt = parseServerTimestamp(dto.created_at)
+                val updatedAt = parseServerTimestamp(dto.updated_at).takeIf { it > 0L } ?: createdAt
+                SavedResourceRequest(
+                    id = dto.id.toString(),
+                    resourceName = dto.resource_name,
+                    category = dto.category,
+                    quantity = dto.quantity.toString(),
+                    urgency = dto.urgency,
+                    status = dto.status.replaceFirstChar { it.uppercase() },
+                    incidentId = dto.incident_id.orEmpty().trim(),
+                    location = dto.location.trim(),
+                    notes = dto.notes.orEmpty().trim(),
+                    createdAt = createdAt,
+                    updatedAt = updatedAt
                 )
-            parsedRequests = loadedRequests
-            hasLoadedResourceRequests = true
-            resourceRequestsLoadError = null
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Exception) {
-            Log.e("PostIncidentHub", "Equipment request load failed", error)
-            resourceRequestsLoadError = if (hasLoadedResourceRequests) {
-                "Unable to refresh equipment requests. Previous data is still shown."
-            } else {
-                "Unable to load equipment requests. Tap Retry."
             }
-        }
+            .sortedWith(
+                compareByDescending<SavedResourceRequest> { it.createdAt }
+                    .thenByDescending { it.id.toLongOrNull() ?: 0L }
+            )
     }
 
     suspend fun refreshAfterActionReports() {
-        if (responderId <= 0) {
-            afterActionReportsLoadError = "Responder session is unavailable. Sign in again."
-            return
-        }
-        try {
-            val records = operationalRepository.getAfterActionReports(responderId).getOrThrow()
-            afterActionReports = records
-                .map { it.toUiReport() }
-                .sortedByDescending { it.updatedAt }
-            hasLoadedAfterActionReports = true
-            afterActionReportsLoadError = null
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Exception) {
-            Log.e("AfterActionReport", "Load failed", error)
-            afterActionReportsLoadError = if (hasLoadedAfterActionReports) {
-                "Unable to refresh after-action reports. Previous data is still shown."
-            } else {
-                "Unable to load after-action reports. Tap Retry."
+        if (responderId <= 0) return
+        operationalRepository.getAfterActionReports(responderId)
+            .onSuccess { records ->
+                afterActionReports = records
+                    .map { it.toUiReport() }
+                    .sortedByDescending { it.updatedAt }
             }
-        }
+            .onFailure { error ->
+                Log.e("AfterActionReport", "Load failed", error)
+            }
     }
 
-    LaunchedEffect(responderId) { refreshCompletedIncidents() }
+    suspend fun refreshIncidentReviewAnalytics() {
+        if (responderId <= 0) return
+        operationalRepository.getIncidentReviews(responderId)
+            .onSuccess { result ->
+                incidentReviewSummary = result.summary
+            }
+            .onFailure { error ->
+                Log.e("IncidentReviewAnalytics", "Load failed", error)
+            }
+    }
+
+    LaunchedEffect(reviewRefreshKey, responderId) {
+        refreshReviewIncidents()
+        refreshIncidentReviewAnalytics()
+    }
     LaunchedEffect(requestRefreshKey, responderId) { refreshResourceRequests() }
     LaunchedEffect(reportRefreshKey, responderId) { refreshAfterActionReports() }
 
@@ -3595,14 +2954,21 @@ fun ReviewsFeedbackScreen() {
         if (responderId <= 0) return@LaunchedEffect
         while (true) {
             delay(5000L)
-            refreshCompletedIncidents()
+            refreshReviewIncidents()
+            refreshIncidentReviewAnalytics()
             refreshResourceRequests()
             refreshAfterActionReports()
         }
     }
 
-    val allIncidents = remember(serverCompletedIncidents) {
-        serverCompletedIncidents.map { dto ->
+    val allIncidents = remember(serverReviewIncidents) {
+        serverReviewIncidents.map { dto ->
+            val status = when (dto.review_status.trim().lowercase(Locale.US)) {
+                "pending_review" -> ReviewStatus.Pending
+                "submitted_review" -> ReviewStatus.Submitted
+                "resolved", "completed", "verified" -> ReviewStatus.Completed
+                else -> ReviewStatus.Unknown
+            }
             val completedAtMillis = parseServerTimestamp(dto.completed_at)
             val dateLabel = if (completedAtMillis > 0L) {
                 SimpleDateFormat("MMM dd, yyyy • hh:mm a", Locale.getDefault())
@@ -3611,22 +2977,34 @@ fun ReviewsFeedbackScreen() {
                 dto.completed_at?.takeIf { it.isNotBlank() } ?: "Date unavailable"
             }
 
-            CompletedIncident(
+            ReviewableIncident(
                 id = "#${dto.id}",
                 type = dto.type.trim()
                     .takeIf { it.isNotBlank() }
                     ?.replaceFirstChar { it.uppercase() }
                     ?: "General Incident",
                 date = dateLabel,
+                status = status,
                 proofUri = dto.completion_image_path,
                 completionNotes = dto.completion_notes,
                 completedAtMillis = completedAtMillis
             )
         }.sortedWith(
-            compareByDescending<CompletedIncident> { it.completedAtMillis }
+            compareByDescending<ReviewableIncident> { it.completedAtMillis }
                 .thenByDescending { normalizedIncidentId(it.id).toLongOrNull() ?: 0L }
         )
     }
+
+    val pendingCount = allIncidents.count { it.status == ReviewStatus.Pending }
+    val submittedCount = allIncidents.count { it.status == ReviewStatus.Submitted }
+    val completedCount = allIncidents.count { it.status == ReviewStatus.Completed }
+    val unknownStatusCount = allIncidents.count { it.status == ReviewStatus.Unknown }
+
+    val filteredIncidents = remember(allIncidents, selectedStatus) {
+        allIncidents.filter { it.status == selectedStatus }
+    }
+    val incidentsShown = if (selectedStatus == ReviewStatus.Pending) filteredIncidents else filteredIncidents.take(3)
+    val hasMoreIncidents = selectedStatus != ReviewStatus.Pending && filteredIncidents.size > incidentsShown.size
 
     val visibleResourceRequests = remember(parsedRequests) {
         parsedRequests.filterNot { it.status.equals("Cancelled", ignoreCase = true) }
@@ -3643,132 +3021,70 @@ fun ReviewsFeedbackScreen() {
     val reportByIncident = remember(afterActionReports) {
         afterActionReports.associateBy { normalizedIncidentId(it.incidentId) }
     }
+    val draftReportCount = afterActionReports.count {
+        it.status == OperationalReportStatus.DRAFT || it.status == OperationalReportStatus.RETURNED
+    }
+    val submittedReportCount = afterActionReports.count { it.status == OperationalReportStatus.SUBMITTED }
+    val verifiedReportCount = afterActionReports.count { it.status == OperationalReportStatus.VERIFIED }
+    val serviceReviewCount = incidentReviewSummary?.reviewCount ?: 0
+    val averageServiceRating = incidentReviewSummary?.averageOverallRating ?: 0.0
 
-    val archivedReports = remember(afterActionReports) {
-        afterActionReports
-            .filter {
-                it.status == OperationalReportStatus.APPROVED && it.isInHistory
-            }
-            .sortedByDescending { it.historySortTime() }
-    }
-    val completedIncidentById = remember(allIncidents) {
-        allIncidents.associateBy { normalizedIncidentId(it.id) }
-    }
-    val historyEntries = remember(archivedReports, completedIncidentById) {
-        archivedReports.map { report ->
-            ArchivedReportEntry(
-                incident = completedIncidentById[normalizedIncidentId(report.incidentId)]
-                    ?: report.toHistoryIncidentFallback(),
-                report = report
-            )
+    suspend fun submitServiceReview(
+        incident: ReviewableIncident,
+        text: String,
+        responseRatingValue: Int,
+        communicationRatingValue: Int,
+        professionalismRatingValue: Int,
+        outcome: String
+    ): Boolean {
+        val incidentId = normalizedIncidentId(incident.id).toLongOrNull()
+        if (incidentId == null || responderId <= 0) {
+            Toast.makeText(context, "Unable to submit service review", Toast.LENGTH_SHORT).show()
+            return false
         }
-    }
-    val historyMonths = remember(historyEntries) {
-        historyEntries
-            .groupBy { reportHistoryMonthKey(it.report.historySortTime()) }
-            .map { (key, entries) ->
-                ReportHistoryMonth(
-                    key = key,
-                    label = reportHistoryMonthLabel(entries.first().report.historySortTime()),
-                    count = entries.size
-                )
-            }
-            .sortedByDescending { it.key }
-    }
-    LaunchedEffect(historyMonths, selectedHistoryMonthKey) {
-        if (
-            selectedHistoryMonthKey != null &&
-            historyMonths.none { it.key == selectedHistoryMonthKey }
-        ) {
-            selectedHistoryMonthKey = null
-        }
-    }
-    val selectedHistoryEntries = remember(
-        historyEntries,
-        selectedHistoryMonthKey
-    ) {
-        selectedHistoryMonthKey?.let { selectedMonth ->
-            historyEntries.filter {
-                reportHistoryMonthKey(it.report.historySortTime()) == selectedMonth
-            }
-        } ?: historyEntries
-    }
-    val historyPreviewEntries = selectedHistoryEntries.take(5)
-    val hasMoreHistory = selectedHistoryEntries.size > historyPreviewEntries.size
-    val selectedHistoryMonthLabel = historyMonths
-        .firstOrNull { it.key == selectedHistoryMonthKey }
-        ?.label
-
-    val currentIncidents = remember(allIncidents, reportByIncident) {
-        allIncidents.filterNot { incident ->
-            reportByIncident[normalizedIncidentId(incident.id)]?.isInHistory == true
-        }
-    }
-    val notStartedReportCount = currentIncidents.count {
-        reportByIncident[normalizedIncidentId(it.id)] == null
-    }
-    val savedPendingReportCount = afterActionReports.count {
-        it.status == OperationalReportStatus.PENDING ||
-                it.status == OperationalReportStatus.RETURNED
-    }
-    val pendingReportCount = notStartedReportCount + savedPendingReportCount
-    val submittedReportCount = afterActionReports.count {
-        it.status == OperationalReportStatus.SUBMITTED
-    }
-    val approvedReportCount = afterActionReports.count {
-        it.status == OperationalReportStatus.APPROVED && !it.isInHistory
+        val result = com.ers.emergencyresponseapp.data.IncidentRepository().submitIncidentReview(
+            incidentId = incidentId,
+            responderId = responderId,
+            responseRating = responseRatingValue,
+            communicationRating = communicationRatingValue,
+            professionalismRating = professionalismRatingValue,
+            outcome = outcome,
+            reviewText = text
+        )
+        return result.onSuccess {
+            Toast.makeText(context, "Service review submitted for verification", Toast.LENGTH_SHORT).show()
+        }.onFailure { error ->
+            Toast.makeText(context, "Review failed: ${error.message}", Toast.LENGTH_LONG).show()
+        }.isSuccess
     }
 
-    val filteredIncidents = remember(
-        currentIncidents,
-        reportByIncident,
-        selectedReportFilter
-    ) {
-        currentIncidents.filter { incident ->
-            when (selectedReportFilter) {
-                ReportWorkflowFilter.PENDING -> {
-                    when (reportByIncident[normalizedIncidentId(incident.id)]?.status) {
-                        null,
-                        OperationalReportStatus.PENDING,
-                        OperationalReportStatus.RETURNED -> true
-                        OperationalReportStatus.SUBMITTED,
-                        OperationalReportStatus.APPROVED -> false
-                    }
-                }
-
-                ReportWorkflowFilter.SUBMITTED -> {
-                    reportByIncident[normalizedIncidentId(incident.id)]?.status ==
-                            OperationalReportStatus.SUBMITTED
-                }
-
-                ReportWorkflowFilter.APPROVED -> {
-                    val report = reportByIncident[normalizedIncidentId(incident.id)]
-                    report?.status == OperationalReportStatus.APPROVED &&
-                            !report.isInHistory
-                }
-            }
-        }
+    fun openServiceReview(incident: ReviewableIncident) {
+        composeTarget.value = incident
+        reviewText.value = ""
+        responseRating = 3
+        communicationRating = 3
+        professionalismRating = 3
+        selectedOutcome = "Resolved"
+        showComposeDialog.value = true
     }
-    val incidentsShown = filteredIncidents.take(5)
-    val hasMoreIncidents = filteredIncidents.size > incidentsShown.size
+
+    fun openIncidentRecord(incident: ReviewableIncident) {
+        detailsTarget.value = incident
+        detailsText.value = incident.completionNotes?.takeIf { it.isNotBlank() }
+            ?: "No completion notes were provided."
+        showIncidentRecord = true
+    }
 
     fun cancelResourceRequest(requestId: String) {
         val id = requestId.toIntOrNull() ?: return
         scope.launch {
-            val result = incidentRepository.cancelResourceRequest(id, responderId)
+            val result = com.ers.emergencyresponseapp.data.IncidentRepository()
+                .cancelResourceRequest(id, responderId)
             result.onSuccess {
                 requestRefreshKey++
-                Toast.makeText(
-                    context,
-                    "Equipment/supply request cancelled",
-                    Toast.LENGTH_SHORT
-                ).show()
+                Toast.makeText(context, "Equipment/supply request cancelled", Toast.LENGTH_SHORT).show()
             }.onFailure { error ->
-                Toast.makeText(
-                    context,
-                    "Unable to cancel: ${error.message}",
-                    Toast.LENGTH_LONG
-                ).show()
+                Toast.makeText(context, "Unable to cancel: ${error.message}", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -3778,44 +3094,14 @@ fun ReviewsFeedbackScreen() {
         scope.launch {
             isPullRefreshing = true
             try {
-                refreshCompletedIncidents()
+                refreshReviewIncidents()
+                refreshIncidentReviewAnalytics()
                 refreshResourceRequests()
                 refreshAfterActionReports()
             } finally {
                 isPullRefreshing = false
             }
         }
-    }
-
-    val incidentReportFirstLoadFailed =
-        (!hasLoadedCompletedIncidents && completedIncidentsLoadError != null) ||
-                (!hasLoadedAfterActionReports && afterActionReportsLoadError != null)
-    val selectedTabLoadError = when (hubTab) {
-        ReportHubTab.INCIDENTS -> when {
-            completedIncidentsLoadError != null && afterActionReportsLoadError != null ->
-                if (incidentReportFirstLoadFailed) {
-                    "Unable to load incident report data. Tap Retry."
-                } else {
-                    "Unable to refresh incident report data. Previous data is still shown."
-                }
-            completedIncidentsLoadError != null -> completedIncidentsLoadError
-            else -> afterActionReportsLoadError
-        }
-        ReportHubTab.HISTORY -> afterActionReportsLoadError
-        ReportHubTab.RESOURCES -> resourceRequestsLoadError
-    }
-    val selectedTabFirstLoadFailed = when (hubTab) {
-        ReportHubTab.INCIDENTS -> incidentReportFirstLoadFailed
-        ReportHubTab.HISTORY ->
-            !hasLoadedAfterActionReports && afterActionReportsLoadError != null
-        ReportHubTab.RESOURCES ->
-            !hasLoadedResourceRequests && resourceRequestsLoadError != null
-    }
-    val selectedTabHasSuccessfulLoad = when (hubTab) {
-        ReportHubTab.INCIDENTS ->
-            hasLoadedCompletedIncidents && hasLoadedAfterActionReports
-        ReportHubTab.HISTORY -> hasLoadedAfterActionReports
-        ReportHubTab.RESOURCES -> hasLoadedResourceRequests
     }
 
     Scaffold(containerColor = RFColors.SurfaceBg) { paddingValues ->
@@ -3830,392 +3116,229 @@ fun ReviewsFeedbackScreen() {
                 modifier = Modifier
                     .fillMaxSize()
                     .windowInsetsPadding(WindowInsets.navigationBars),
-                contentPadding = PaddingValues(bottom = 28.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                item { PostIncidentHeader() }
+            contentPadding = PaddingValues(bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item { PostIncidentHeader() }
 
-                if (hasLoadedCompletedIncidents && hasLoadedAfterActionReports) {
-                    item {
-                        OperationalWorkflowCard(
-                            pendingCount = pendingReportCount,
-                            submittedCount = submittedReportCount,
-                            approvedCount = approvedReportCount
+            item {
+                OperationalWorkflowCard(
+                    draftCount = draftReportCount,
+                    submittedCount = submittedReportCount
+                )
+            }
+
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    ReviewStatCard(pendingCount, "Needs review", ReviewStatus.Pending.color, Modifier.weight(1f))
+                    ReviewStatCard(submittedCount, "Submitted", ReviewStatus.Submitted.color, Modifier.weight(1f))
+                    ReviewStatCard(completedCount, "Verified", ReviewStatus.Completed.color, Modifier.weight(1f))
+                }
+            }
+
+            if (unknownStatusCount > 0) {
+                item {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                        color = tonalSurface(ReviewStatus.Unknown.color),
+                        shape = RoundedCornerShape(14.dp),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            ReviewStatus.Unknown.color.copy(alpha = 0.35f)
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Info,
+                                contentDescription = null,
+                                tint = ReviewStatus.Unknown.color,
+                                modifier = Modifier.size(17.dp)
+                            )
+                            Text(
+                                "$unknownStatusCount incident record${if (unknownStatusCount == 1) " has" else "s have"} a server status this app does not recognize.",
+                                color = RFColors.TextSecondary,
+                                fontSize = 11.sp,
+                                lineHeight = 16.sp
+                            )
+                        }
+                    }
+                }
+            }
+
+            item {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("Operational snapshot", color = RFColors.Text, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        AnalyticsCard(
+                            title = "Unit reports • $verifiedReportCount verified",
+                            value = "${submittedReportCount} submitted • ${draftReportCount} drafts",
+                            modifier = Modifier.weight(1f)
+                        )
+                        AnalyticsCard(
+                            title = if (serviceReviewCount == 1) {
+                                "1 submitted service review"
+                            } else {
+                                "$serviceReviewCount submitted service reviews"
+                            },
+                            value = if (serviceReviewCount > 0) {
+                                "${String.format(Locale.getDefault(), "%.1f", averageServiceRating)} / 5"
+                            } else {
+                                "No ratings"
+                            },
+                            modifier = Modifier.weight(1f)
                         )
                     }
                 }
+            }
 
+            item {
+                HubTabSwitcher(
+                    selected = hubTab,
+                    pendingIncidents = pendingCount,
+                    resourceCount = visibleResourceRequests.size,
+                    onSelect = { hubTab = it }
+                )
+            }
+
+            if (hubTab == ReviewHubTab.INCIDENTS) {
                 item {
-                    HubTabSwitcher(
-                        selected = hubTab,
-                        incidentCount = currentIncidents.size,
-                        historyCount = historyEntries.size,
-                        resourceCount = visibleResourceRequests.size,
-                        onSelect = { selectedTab ->
-                            hubTab = selectedTab
-                            showAllIncidents = false
-                            showAllHistory = false
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(7.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column {
+                                Text("Completed incident records", color = RFColors.Text, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                                Text("Operational report and service review are separate actions", color = RFColors.TextSecondary, fontSize = 10.sp)
+                            }
+                            Text("Latest first", color = RFColors.Primary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                         }
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                            item {
+                                FilterPill("Needs Review", Icons.Default.HourglassTop, selectedStatus == ReviewStatus.Pending, ReviewStatus.Pending.color) {
+                                    selectedStatus = ReviewStatus.Pending
+                                }
+                            }
+                            item {
+                                FilterPill("Submitted", Icons.AutoMirrored.Filled.Send, selectedStatus == ReviewStatus.Submitted, ReviewStatus.Submitted.color) {
+                                    selectedStatus = ReviewStatus.Submitted
+                                }
+                            }
+                            item {
+                                FilterPill("Verified", Icons.Default.CheckCircle, selectedStatus == ReviewStatus.Completed, ReviewStatus.Completed.color) {
+                                    selectedStatus = ReviewStatus.Completed
+                                }
+                            }
+                            if (unknownStatusCount > 0) {
+                                item {
+                                    FilterPill("Other", Icons.Default.HelpOutline, selectedStatus == ReviewStatus.Unknown, ReviewStatus.Unknown.color) {
+                                        selectedStatus = ReviewStatus.Unknown
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (filteredIncidents.isEmpty()) {
+                    item {
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                            shape = RoundedCornerShape(20.dp),
+                            colors = CardDefaults.cardColors(containerColor = RFColors.Bg),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
+                        ) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 34.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(9.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier.size(58.dp).clip(RoundedCornerShape(19.dp)).background(tonalSurface(RFColors.Primary)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(Icons.Default.Inbox, contentDescription = null, tint = RFColors.Primary, modifier = Modifier.size(29.dp))
+                                }
+                                Text(
+                                    when (selectedStatus) {
+                                        ReviewStatus.Pending -> "No incidents need a service review"
+                                        ReviewStatus.Submitted -> "No submitted reviews"
+                                        ReviewStatus.Completed -> "No verified reviews yet"
+                                        ReviewStatus.Unknown -> "No records with an unrecognized status"
+                                    },
+                                    color = RFColors.Text,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp,
+                                    textAlign = TextAlign.Center
+                                )
+                                Text(
+                                    "Completed incidents will appear here when they are available for post-incident documentation.",
+                                    color = RFColors.TextSecondary,
+                                    fontSize = 11.sp,
+                                    lineHeight = 16.sp,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    itemsIndexed(
+                        items = incidentsShown,
+                        key = { _, incident -> incident.id }
+                    ) { index, incident ->
+                        Box(modifier = Modifier.padding(horizontal = 12.dp)) {
+                            ReviewCard(
+                                incident = incident,
+                                index = index,
+                                report = reportByIncident[normalizedIncidentId(incident.id)],
+                                onOpenReport = { reportTarget = it },
+                                onWriteReview = ::openServiceReview,
+                                onViewDetails = ::openIncidentRecord,
+                                onViewImage = { fullScreenImageUri = it }
+                            )
+                        }
+                    }
+                    if (hasMoreIncidents) {
+                        item {
+                            OutlinedButton(
+                                onClick = { showAllReviews = true },
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).height(44.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = RFColors.Primary)
+                            ) {
+                                Text("View all ${filteredIncidents.size} records", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    }
+                }
+            } else {
+                item {
+                    ResourceRequestsPanel(
+                        requests = visibleResourceRequests,
+                        latestRequest = latestResourceRequest,
+                        onNewRequest = { showResourceForm = true },
+                        onViewAll = { showAllRequests = true },
+                        onRefresh = ::refreshPostIncidentHub,
+                        onSelect = { selectedRequest = it },
+                        onCancel = { requestToCancel = it }
                     )
                 }
-
-                selectedTabLoadError?.let { message ->
-                    item {
-                        PostIncidentLoadErrorCard(
-                            message = message,
-                            onRetry = ::refreshPostIncidentHub
-                        )
-                    }
-                }
-
-                if (!selectedTabHasSuccessfulLoad && selectedTabLoadError == null) {
-                    item {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 18.dp),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                strokeWidth = 2.dp,
-                                color = RFColors.Primary
-                            )
-                            Spacer(Modifier.width(9.dp))
-                            Text(
-                                "Loading ${hubTab.label.lowercase(Locale.US)}...",
-                                color = RFColors.TextSecondary,
-                                fontSize = 11.sp
-                            )
-                        }
-                    }
-                }
-
-                if (selectedTabHasSuccessfulLoad && !selectedTabFirstLoadFailed) when (hubTab) {
-                    ReportHubTab.INCIDENTS -> {
-                        item {
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Text(
-                                    "Report review status",
-                                    color = RFColors.Text,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 12.dp)
-                                )
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 12.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    ReportStatCard(
-                                        value = pendingReportCount,
-                                        label = "Pending",
-                                        accent = RFColors.Warning,
-                                        modifier = Modifier.weight(1f),
-                                        selected = selectedReportFilter == ReportWorkflowFilter.PENDING,
-                                        onClick = {
-                                            selectedReportFilter = ReportWorkflowFilter.PENDING
-                                            showAllIncidents = false
-                                        }
-                                    )
-                                    ReportStatCard(
-                                        value = submittedReportCount,
-                                        label = "Submitted",
-                                        accent = RFColors.Info,
-                                        modifier = Modifier.weight(1f),
-                                        selected = selectedReportFilter == ReportWorkflowFilter.SUBMITTED,
-                                        onClick = {
-                                            selectedReportFilter = ReportWorkflowFilter.SUBMITTED
-                                            showAllIncidents = false
-                                        }
-                                    )
-                                    ReportStatCard(
-                                        value = approvedReportCount,
-                                        label = "Approved",
-                                        accent = RFColors.Success,
-                                        modifier = Modifier.weight(1f),
-                                        selected = selectedReportFilter == ReportWorkflowFilter.APPROVED,
-                                        onClick = {
-                                            selectedReportFilter = ReportWorkflowFilter.APPROVED
-                                            showAllIncidents = false
-                                        }
-                                    )
-                                }
-                                Text(
-                                    when (selectedReportFilter) {
-                                        ReportWorkflowFilter.PENDING ->
-                                            "Pending includes reports not started, saved for later, or returned for revision."
-                                        ReportWorkflowFilter.SUBMITTED ->
-                                            "Submitted reports are locked while an authorized admin validates the incident and report."
-                                        ReportWorkflowFilter.APPROVED ->
-                                            "Approved reports stay here for 24 hours, then are filed automatically under History."
-                                    },
-                                    color = RFColors.TextSecondary,
-                                    fontSize = 10.sp,
-                                    lineHeight = 14.sp,
-                                    modifier = Modifier.padding(horizontal = 14.dp)
-                                )
-                            }
-                        }
-
-                        item {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Column {
-                                    Text(
-                                        "${selectedReportFilter.label} reports",
-                                        color = RFColors.Text,
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Text(
-                                        when (selectedReportFilter) {
-                                            ReportWorkflowFilter.PENDING -> "Create, continue, or revise an incident report"
-                                            ReportWorkflowFilter.SUBMITTED -> "Awaiting authorized admin review"
-                                            ReportWorkflowFilter.APPROVED -> "Approved within the last 24 hours"
-                                        },
-                                        color = RFColors.TextSecondary,
-                                        fontSize = 10.sp
-                                    )
-                                }
-                                Text(
-                                    "Latest first",
-                                    color = RFColors.Primary,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-
-                        if (currentIncidents.isEmpty() || filteredIncidents.isEmpty()) {
-                            item {
-                                Card(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 12.dp),
-                                    shape = RoundedCornerShape(20.dp),
-                                    colors = CardDefaults.cardColors(containerColor = RFColors.Bg),
-                                    border = androidx.compose.foundation.BorderStroke(
-                                        1.dp,
-                                        RFColors.Border
-                                    )
-                                ) {
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(horizontal = 24.dp, vertical = 34.dp),
-                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                        verticalArrangement = Arrangement.spacedBy(9.dp)
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(58.dp)
-                                                .clip(RoundedCornerShape(19.dp))
-                                                .background(tonalSurface(RFColors.Primary)),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Icon(
-                                                Icons.Default.Inbox,
-                                                contentDescription = null,
-                                                tint = RFColors.Primary,
-                                                modifier = Modifier.size(29.dp)
-                                            )
-                                        }
-                                        Text(
-                                            if (currentIncidents.isEmpty()) {
-                                                "No active completed incidents"
-                                            } else {
-                                                "No ${selectedReportFilter.label.lowercase(Locale.US)} reports"
-                                            },
-                                            color = RFColors.Text,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 15.sp,
-                                            textAlign = TextAlign.Center
-                                        )
-                                        Text(
-                                            if (currentIncidents.isEmpty()) {
-                                                if (historyEntries.isEmpty()) {
-                                                    "An incident will appear here after it is completed by this responder."
-                                                } else {
-                                                    "All finalized reports are already filed under History."
-                                                }
-                                            } else {
-                                                when (selectedReportFilter) {
-                                                    ReportWorkflowFilter.PENDING -> "All available incident reports have already been submitted or approved."
-                                                    ReportWorkflowFilter.SUBMITTED -> "No report is currently waiting for admin review."
-                                                    ReportWorkflowFilter.APPROVED -> "No report was approved in the last 24 hours. Older approvals are available under History."
-                                                }
-                                            },
-                                            color = RFColors.TextSecondary,
-                                            fontSize = 11.sp,
-                                            lineHeight = 16.sp,
-                                            textAlign = TextAlign.Center
-                                        )
-                                    }
-                                }
-                            }
-                        } else {
-                            itemsIndexed(
-                                items = incidentsShown,
-                                key = { _, incident -> incident.id }
-                            ) { index, incident ->
-                                Box(modifier = Modifier.padding(horizontal = 12.dp)) {
-                                    IncidentReportCard(
-                                        incident = incident,
-                                        index = index,
-                                        report = reportByIncident[normalizedIncidentId(incident.id)],
-                                        onOpenReport = { reportTarget = it },
-                                        onViewImage = { fullScreenImageUri = it }
-                                    )
-                                }
-                            }
-                            if (hasMoreIncidents) {
-                                item {
-                                    OutlinedButton(
-                                        onClick = { showAllIncidents = true },
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(horizontal = 12.dp)
-                                            .height(44.dp),
-                                        shape = RoundedCornerShape(12.dp),
-                                        border = androidx.compose.foundation.BorderStroke(
-                                            1.dp,
-                                            RFColors.Border
-                                        ),
-                                        colors = ButtonDefaults.outlinedButtonColors(
-                                            contentColor = RFColors.Primary
-                                        )
-                                    ) {
-                                        Text(
-                                            "View all ${filteredIncidents.size} ${selectedReportFilter.label.lowercase(Locale.US)} reports",
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    ReportHubTab.HISTORY -> {
-                        item {
-                            ReportHistoryHeader(
-                                historyCount = historyEntries.size,
-                                latestMonthLabel = historyMonths.firstOrNull()?.label
-                            )
-                        }
-
-                        if (historyEntries.isNotEmpty()) {
-                            item {
-                                ReportHistoryMonthSelector(
-                                    months = historyMonths,
-                                    selectedKey = selectedHistoryMonthKey,
-                                    totalCount = historyEntries.size,
-                                    onSelect = { selectedHistoryMonthKey = it }
-                                )
-                            }
-                        }
-
-                        if (selectedHistoryEntries.isEmpty()) {
-                            item {
-                                EmptyReportHistoryCard(
-                                    selectedMonthLabel = selectedHistoryMonthLabel
-                                )
-                            }
-                        } else {
-                            val previewGroups = historyPreviewEntries.groupBy {
-                                reportHistoryMonthKey(it.report.historySortTime())
-                            }
-                            previewGroups.forEach { (monthKey, entries) ->
-                                item(key = "history-preview-month-$monthKey") {
-                                    ReportHistoryMonthHeader(
-                                        label = historyMonths
-                                            .firstOrNull { it.key == monthKey }
-                                            ?.label
-                                            ?: reportHistoryMonthLabel(
-                                                entries.first().report.historySortTime()
-                                            ),
-                                        count = historyMonths
-                                            .firstOrNull { it.key == monthKey }
-                                            ?.count
-                                            ?: entries.size,
-                                        modifier = Modifier.padding(horizontal = 12.dp)
-                                    )
-                                }
-                                itemsIndexed(
-                                    items = entries,
-                                    key = { _, entry -> "history-preview-${entry.report.incidentId}" }
-                                ) { index, entry ->
-                                    Box(modifier = Modifier.padding(horizontal = 12.dp)) {
-                                        IncidentReportCard(
-                                            incident = entry.incident,
-                                            index = index,
-                                            report = entry.report,
-                                            onOpenReport = { reportTarget = it },
-                                            onViewImage = { fullScreenImageUri = it }
-                                        )
-                                    }
-                                }
-                            }
-
-                            if (hasMoreHistory) {
-                                item {
-                                    OutlinedButton(
-                                        onClick = { showAllHistory = true },
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(horizontal = 12.dp)
-                                            .height(44.dp),
-                                        shape = RoundedCornerShape(12.dp),
-                                        border = androidx.compose.foundation.BorderStroke(
-                                            1.dp,
-                                            RFColors.Border
-                                        ),
-                                        colors = ButtonDefaults.outlinedButtonColors(
-                                            contentColor = RFColors.Primary
-                                        )
-                                    ) {
-                                        Icon(
-                                            Icons.Default.History,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        Spacer(Modifier.width(6.dp))
-                                        Text(
-                                            "View all ${selectedHistoryEntries.size} history records",
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    ReportHubTab.RESOURCES -> {
-                        item {
-                            ResourceRequestsPanel(
-                                requests = visibleResourceRequests,
-                                latestRequest = latestResourceRequest,
-                                onNewRequest = { showResourceForm = true },
-                                onViewAll = { showAllRequests = true },
-                                onRefresh = ::refreshPostIncidentHub,
-                                onSelect = { selectedRequest = it },
-                                onCancel = { requestToCancel = it }
-                            )
-                        }
-                    }
-                }
+            }
             }
         }
     }
@@ -4224,7 +3347,6 @@ fun ReviewsFeedbackScreen() {
         val initial = reportByIncident[normalizedIncidentId(incident.id)]
         AfterActionReportDialog(
             incident = incident,
-            responderId = responderId,
             responderName = responderName,
             initialReport = initial,
             isSaving = isSavingAfterActionReport,
@@ -4233,90 +3355,59 @@ fun ReviewsFeedbackScreen() {
                 if (!isSavingAfterActionReport) {
                     isSavingAfterActionReport = true
                     scope.launch {
-                        try {
-                            operationalRepository.upsertAfterActionReport(
-                                report.toApiRequest(responderId)
-                            ).onSuccess {
-                                clearAfterActionDraft(context, responderId, report.incidentId)
-                                refreshAfterActionReports()
-                                reportRefreshKey++
-                                reportTarget = null
-                                Toast.makeText(
-                                    context,
-                                    if (report.status == OperationalReportStatus.PENDING) {
-                                        "Report saved as Pending"
-                                    } else {
-                                        "Report submitted for admin review"
-                                    },
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            }.onFailure { error ->
-                                Toast.makeText(
-                                    context,
-                                    "Report was not saved: ${error.message ?: "server error"}",
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            }
-                        } finally {
-                            isSavingAfterActionReport = false
+                        operationalRepository.upsertAfterActionReport(
+                            report.toApiRequest(responderId)
+                        ).onSuccess {
+                            refreshAfterActionReports()
+                            reportRefreshKey++
+                            reportTarget = null
+                            Toast.makeText(
+                                context,
+                                if (report.status == OperationalReportStatus.DRAFT) {
+                                    "After-action draft saved to the server"
+                                } else {
+                                    "After-action report submitted for verification"
+                                },
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }.onFailure { error ->
+                            Toast.makeText(
+                                context,
+                                "Report was not saved: ${error.message ?: "server error"}",
+                                Toast.LENGTH_LONG
+                            ).show()
                         }
+                        isSavingAfterActionReport = false
                     }
                 }
             },
             onExport = { report ->
                 runCatching { exportIncidentReportPdf(context, report.toPrintableText()) }
                     .onFailure {
-                        Toast.makeText(
-                            context,
-                            "Unable to export report",
-                            Toast.LENGTH_SHORT
-                        ).show()
+                        Toast.makeText(context, "Unable to export report", Toast.LENGTH_SHORT).show()
                     }
             }
         )
     }
 
-    if (showAllIncidents) {
+    if (showAllReviews) {
         Dialog(
-            onDismissRequest = { showAllIncidents = false },
-            properties = DialogProperties(
-                usePlatformDefaultWidth = false,
-                decorFitsSystemWindows = false
-            )
+            onDismissRequest = { showAllReviews = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
         ) {
             Surface(modifier = Modifier.fillMaxSize(), color = RFColors.SurfaceBg) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .statusBarsPadding()
-                        .navigationBarsPadding()
-                ) {
+                Column(modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
                     Surface(color = RFColors.Bg, shadowElevation = 2.dp) {
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    "${selectedReportFilter.label} Reports",
-                                    color = RFColors.Text,
-                                    fontSize = 19.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    "${filteredIncidents.size} records • latest first",
-                                    color = RFColors.TextSecondary,
-                                    fontSize = 11.sp
-                                )
+                                Text(selectedStatus.label, color = RFColors.Text, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                                Text("${filteredIncidents.size} incident records • latest first", color = RFColors.TextSecondary, fontSize = 11.sp)
                             }
-                            IconButton(onClick = { showAllIncidents = false }) {
-                                Icon(
-                                    Icons.Default.Close,
-                                    contentDescription = "Close",
-                                    tint = RFColors.TextSecondary
-                                )
+                            IconButton(onClick = { showAllReviews = false }) {
+                                Icon(Icons.Default.Close, contentDescription = "Close", tint = RFColors.TextSecondary)
                             }
                         }
                     }
@@ -4329,13 +3420,21 @@ fun ReviewsFeedbackScreen() {
                             items = filteredIncidents,
                             key = { _, incident -> incident.id }
                         ) { index, incident ->
-                            IncidentReportCard(
+                            ReviewCard(
                                 incident = incident,
                                 index = index,
                                 report = reportByIncident[normalizedIncidentId(incident.id)],
                                 onOpenReport = {
-                                    showAllIncidents = false
+                                    showAllReviews = false
                                     reportTarget = it
+                                },
+                                onWriteReview = {
+                                    showAllReviews = false
+                                    openServiceReview(it)
+                                },
+                                onViewDetails = {
+                                    showAllReviews = false
+                                    openIncidentRecord(it)
                                 },
                                 onViewImage = { fullScreenImageUri = it }
                             )
@@ -4346,126 +3445,349 @@ fun ReviewsFeedbackScreen() {
         }
     }
 
-    if (showAllHistory) {
+    if (showSubmitReviewConfirm && composeTarget.value != null) {
+        val target = composeTarget.value!!
+        AlertDialog(
+            onDismissRequest = { if (!isSubmittingReview) showSubmitReviewConfirm = false },
+            containerColor = RFColors.Bg,
+            shape = RoundedCornerShape(20.dp),
+            title = { Text("Submit Service Review?", color = RFColors.Text, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "This sends ratings and feedback for verification. It does not replace the operational After-Action Report.",
+                    color = RFColors.TextSecondary,
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (isSubmittingReview) return@Button
+                        val fullReview = """
+                            Outcome: $selectedOutcome
+
+                            Response Time Rating: $responseRating/5
+                            Communication Rating: $communicationRating/5
+                            Professionalism Rating: $professionalismRating/5
+
+                            Service Feedback:
+                            ${reviewText.value.trim()}
+                        """.trimIndent()
+                        isSubmittingReview = true
+                        scope.launch {
+                            val success = submitServiceReview(
+                                target,
+                                fullReview,
+                                responseRating,
+                                communicationRating,
+                                professionalismRating,
+                                selectedOutcome
+                            )
+                            isSubmittingReview = false
+                            if (success) {
+                                reviewRefreshKey++
+                                showSubmitReviewConfirm = false
+                                showComposeDialog.value = false
+                                composeTarget.value = null
+                                reviewText.value = ""
+                            }
+                        }
+                    },
+                    enabled = !isSubmittingReview,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = RFColors.Primary)
+                ) {
+                    if (isSubmittingReview) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                    } else {
+                        Text("Submit Review")
+                    }
+                }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = { showSubmitReviewConfirm = false },
+                    enabled = !isSubmittingReview,
+                    shape = RoundedCornerShape(12.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
+                ) {
+                    Text("Go Back", color = RFColors.TextSecondary)
+                }
+            }
+        )
+    }
+
+    if (showIncidentRecord && detailsTarget.value != null) {
+        val incident = detailsTarget.value!!
         Dialog(
-            onDismissRequest = { showAllHistory = false },
-            properties = DialogProperties(
-                usePlatformDefaultWidth = false,
-                decorFitsSystemWindows = false
-            )
+            onDismissRequest = {
+                showIncidentRecord = false
+                detailsTarget.value = null
+            },
+            properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
+        ) {
+            Surface(modifier = Modifier.fillMaxSize(), color = RFColors.SurfaceBg) {
+                Column(
+                    modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(11.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Incident Record", color = RFColors.Text, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                            Text("${incident.type} • ${incident.id}", color = RFColors.Primary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                        IconButton(onClick = {
+                            showIncidentRecord = false
+                            detailsTarget.value = null
+                        }) {
+                            Icon(Icons.Default.Close, contentDescription = "Close", tint = RFColors.TextSecondary)
+                        }
+                    }
+
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(17.dp),
+                        colors = CardDefaults.cardColors(containerColor = RFColors.Bg),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            InfoRow("Review status", incident.status.label)
+                            InfoRow("Completed", incident.date)
+                            InfoRow(
+                                "Unit report",
+                                reportByIncident[normalizedIncidentId(incident.id)]?.status?.label ?: "Not started"
+                            )
+                        }
+                    }
+
+                    Card(
+                        modifier = Modifier.fillMaxWidth().weight(1f),
+                        shape = RoundedCornerShape(17.dp),
+                        colors = CardDefaults.cardColors(containerColor = RFColors.Bg),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
+                    ) {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(15.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            item {
+                                Text("Completion notes", color = RFColors.Text, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                Spacer(Modifier.height(6.dp))
+                                Text(detailsText.value, color = RFColors.TextSecondary, fontSize = 13.sp, lineHeight = 20.sp)
+                            }
+                        }
+                    }
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = {
+                                showIncidentRecord = false
+                                reportTarget = incident
+                            },
+                            modifier = Modifier.weight(1f).height(48.dp),
+                            shape = RoundedCornerShape(13.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = RFColors.Primary)
+                        ) {
+                            Icon(Icons.Default.Assignment, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Unit Report", fontSize = 12.sp)
+                        }
+                        Button(
+                            onClick = {
+                                generatedReport.value = """
+                                    INCIDENT COMPLETION SUMMARY
+
+                                    Incident ID: ${incident.id}
+                                    Incident Type: ${incident.type}
+                                    Date Completed: ${incident.date}
+                                    Review Status: ${incident.status.label}
+
+                                    Completion Notes:
+                                    ${detailsText.value}
+
+                                    Generated By: $responderName
+                                    Generated On: ${SimpleDateFormat("MMM dd, yyyy hh:mm a", Locale.getDefault()).format(Date())}
+                                """.trimIndent()
+                                showReportDialog.value = true
+                            },
+                            modifier = Modifier.weight(1.2f).height(48.dp),
+                            shape = RoundedCornerShape(13.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = RFColors.Primary)
+                        ) {
+                            Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Export Summary", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showComposeDialog.value && composeTarget.value != null) {
+        val target = composeTarget.value!!
+        Dialog(
+            onDismissRequest = { showComposeDialog.value = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
         ) {
             Surface(modifier = Modifier.fillMaxSize(), color = RFColors.SurfaceBg) {
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
                         .statusBarsPadding()
-                        .navigationBarsPadding()
+                        .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars).only(WindowInsetsSides.Bottom))
                 ) {
                     Surface(color = RFColors.Bg, shadowElevation = 2.dp) {
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 15.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(40.dp)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(tonalSurface(RFColors.Success)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    Icons.Default.History,
-                                    contentDescription = null,
-                                    tint = RFColors.Success,
-                                    modifier = Modifier.size(21.dp)
-                                )
-                            }
-                            Spacer(Modifier.width(10.dp))
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    "Approved Report History",
-                                    color = RFColors.Text,
-                                    fontSize = 19.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    "${selectedHistoryEntries.size} records${selectedHistoryMonthLabel?.let { " • $it" }.orEmpty()} • latest approval first",
-                                    color = RFColors.TextSecondary,
-                                    fontSize = 11.sp
-                                )
+                                Text("Service Review", color = RFColors.Text, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                                Text("${target.type} • ${target.id}", color = RFColors.Primary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                             }
-                            IconButton(onClick = { showAllHistory = false }) {
-                                Icon(
-                                    Icons.Default.Close,
-                                    contentDescription = "Close",
-                                    tint = RFColors.TextSecondary
+                            IconButton(onClick = { showComposeDialog.value = false }) {
+                                Icon(Icons.Default.Close, contentDescription = "Close", tint = RFColors.TextSecondary)
+                            }
+                        }
+                    }
+
+                    LazyColumn(
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 14.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        item {
+                            Surface(
+                                color = tonalSurface(RFColors.Info, lightAlpha = 0.08f, darkAlpha = 0.17f),
+                                shape = RoundedCornerShape(13.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Info.copy(alpha = 0.24f))
+                            ) {
+                                Row(modifier = Modifier.padding(11.dp), verticalAlignment = Alignment.Top) {
+                                    Icon(Icons.Default.Info, contentDescription = null, tint = RFColors.Info, modifier = Modifier.size(17.dp))
+                                    Spacer(Modifier.width(7.dp))
+                                    Text(
+                                        "Rate response quality and communication here. Operational actions, handoff, safety concerns, and follow-up belong in the After-Action Report.",
+                                        color = RFColors.TextSecondary,
+                                        fontSize = 10.sp,
+                                        lineHeight = 15.sp
+                                    )
+                                }
+                            }
+                        }
+                        item {
+                            SectionCard(title = "Service ratings", icon = Icons.Default.Star) {
+                                RatingSelector("Response time", responseRating) { responseRating = it }
+                                RatingSelector("Communication", communicationRating) { communicationRating = it }
+                                RatingSelector("Professionalism", professionalismRating) { professionalismRating = it }
+                            }
+                        }
+                        item {
+                            SectionCard(title = "Outcome", icon = Icons.Default.Flag) {
+                                OutcomeSelector(selectedOutcome) { selectedOutcome = it }
+                            }
+                        }
+                        item {
+                            SectionCard(title = "Feedback", icon = Icons.AutoMirrored.Filled.Notes) {
+                                OutlinedTextField(
+                                    value = reviewText.value,
+                                    onValueChange = { reviewText.value = it },
+                                    placeholder = { Text("What worked well, and what should improve?") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    minLines = 5,
+                                    maxLines = 8,
+                                    shape = RoundedCornerShape(13.dp),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedContainerColor = RFColors.InputBg,
+                                        unfocusedContainerColor = RFColors.InputBg,
+                                        focusedTextColor = RFColors.Text,
+                                        unfocusedTextColor = RFColors.Text,
+                                        focusedBorderColor = RFColors.Primary,
+                                        unfocusedBorderColor = RFColors.Border,
+                                        cursorColor = RFColors.Primary
+                                    )
+                                )
+                                QuickTemplateBar(
+                                    fieldKey = "service_review",
+                                    onApply = { template ->
+                                        reviewText.value = appendQuickTemplate(reviewText.value, template)
+                                    },
+                                    enabled = true,
+                                    modifier = Modifier.padding(top = 2.dp)
                                 )
                             }
                         }
                     }
 
-                    Spacer(Modifier.height(10.dp))
-                    ReportHistoryMonthSelector(
-                        months = historyMonths,
-                        selectedKey = selectedHistoryMonthKey,
-                        totalCount = historyEntries.size,
-                        onSelect = { selectedHistoryMonthKey = it }
-                    )
-                    Spacer(Modifier.height(6.dp))
-
-                    if (selectedHistoryEntries.isEmpty()) {
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.TopCenter
+                    Surface(color = RFColors.Bg, shadowElevation = 5.dp) {
+                        Button(
+                            onClick = { showSubmitReviewConfirm = true },
+                            enabled = reviewText.value.isNotBlank(),
+                            modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(14.dp).height(50.dp),
+                            shape = RoundedCornerShape(13.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = RFColors.Primary)
                         ) {
-                            EmptyReportHistoryCard(
-                                selectedMonthLabel = selectedHistoryMonthLabel
-                            )
-                        }
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                            verticalArrangement = Arrangement.spacedBy(11.dp)
-                        ) {
-                            val historyGroups = selectedHistoryEntries.groupBy {
-                                reportHistoryMonthKey(it.report.historySortTime())
-                            }
-                            historyGroups.forEach { (monthKey, entries) ->
-                                item(key = "history-dialog-month-$monthKey") {
-                                    ReportHistoryMonthHeader(
-                                        label = historyMonths
-                                            .firstOrNull { it.key == monthKey }
-                                            ?.label
-                                            ?: reportHistoryMonthLabel(
-                                                entries.first().report.historySortTime()
-                                            ),
-                                        count = entries.size
-                                    )
-                                }
-                                itemsIndexed(
-                                    items = entries,
-                                    key = { _, entry -> "history-dialog-${entry.report.incidentId}" }
-                                ) { index, entry ->
-                                    IncidentReportCard(
-                                        incident = entry.incident,
-                                        index = index,
-                                        report = entry.report,
-                                        onOpenReport = {
-                                            showAllHistory = false
-                                            reportTarget = it
-                                        },
-                                        onViewImage = { fullScreenImageUri = it }
-                                    )
-                                }
-                            }
+                            Text("Review and Submit", fontWeight = FontWeight.Bold)
                         }
                     }
                 }
             }
         }
+    }
+
+    if (showReportDialog.value) {
+        AlertDialog(
+            onDismissRequest = { if (!isExportingPdf) showReportDialog.value = false },
+            containerColor = RFColors.Bg,
+            shape = RoundedCornerShape(20.dp),
+            title = { Text("Completion Summary", color = RFColors.Text, fontWeight = FontWeight.Bold) },
+            text = {
+                Card(
+                    shape = RoundedCornerShape(15.dp),
+                    colors = CardDefaults.cardColors(containerColor = RFColors.MutedBg),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
+                ) {
+                    LazyColumn(modifier = Modifier.heightIn(max = 360.dp).padding(13.dp)) {
+                        item {
+                            Text(generatedReport.value, color = RFColors.Text, fontSize = 12.sp, lineHeight = 19.sp)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        isExportingPdf = true
+                        val success = runCatching { exportIncidentReportPdf(context, generatedReport.value) }.isSuccess
+                        isExportingPdf = false
+                        Toast.makeText(context, if (success) "PDF ready to share" else "PDF export failed", Toast.LENGTH_SHORT).show()
+                    },
+                    enabled = !isExportingPdf,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = RFColors.Primary)
+                ) {
+                    if (isExportingPdf) CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                    else {
+                        Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Export PDF")
+                    }
+                }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = { showReportDialog.value = false },
+                    enabled = !isExportingPdf,
+                    shape = RoundedCornerShape(12.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
+                ) {
+                    Text("Close", color = RFColors.TextSecondary)
+                }
+            }
+        )
     }
 
     fullScreenImageUri?.let { uri ->
@@ -4475,44 +3797,21 @@ fun ReviewsFeedbackScreen() {
     if (showAllRequests) {
         Dialog(
             onDismissRequest = { showAllRequests = false },
-            properties = DialogProperties(
-                usePlatformDefaultWidth = false,
-                decorFitsSystemWindows = false
-            )
+            properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
         ) {
             Surface(modifier = Modifier.fillMaxSize(), color = RFColors.SurfaceBg) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .statusBarsPadding()
-                        .navigationBarsPadding()
-                ) {
+                Column(modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
                     Surface(color = RFColors.Bg, shadowElevation = 2.dp) {
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 15.dp, vertical = 12.dp),
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 15.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    "Equipment & Supply Requests",
-                                    color = RFColors.Text,
-                                    fontSize = 19.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    "${visibleResourceRequests.size} requests • latest first",
-                                    color = RFColors.TextSecondary,
-                                    fontSize = 11.sp
-                                )
+                                Text("Equipment & Supply Requests", color = RFColors.Text, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                                Text("${visibleResourceRequests.size} requests • latest first", color = RFColors.TextSecondary, fontSize = 11.sp)
                             }
                             IconButton(onClick = { showAllRequests = false }) {
-                                Icon(
-                                    Icons.Default.Close,
-                                    contentDescription = "Close",
-                                    tint = RFColors.TextSecondary
-                                )
+                                Icon(Icons.Default.Close, contentDescription = "Close", tint = RFColors.TextSecondary)
                             }
                         }
                     }
@@ -4520,23 +3819,13 @@ fun ReviewsFeedbackScreen() {
                     OutlinedTextField(
                         value = requestSearch,
                         onValueChange = { requestSearch = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
                         singleLine = true,
                         shape = RoundedCornerShape(14.dp),
-                        leadingIcon = {
-                            Icon(Icons.Default.Search, contentDescription = null)
-                        },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                         trailingIcon = if (requestSearch.isNotBlank()) {
-                            {
-                                IconButton(onClick = { requestSearch = "" }) {
-                                    Icon(Icons.Default.Close, contentDescription = "Clear")
-                                }
-                            }
-                        } else {
-                            null
-                        },
+                            { IconButton(onClick = { requestSearch = "" }) { Icon(Icons.Default.Close, contentDescription = "Clear") } }
+                        } else null,
                         placeholder = { Text("Search item, category, or request ID") },
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedContainerColor = RFColors.InputBg,
@@ -4559,30 +3848,16 @@ fun ReviewsFeedbackScreen() {
                                 Card(
                                     modifier = Modifier.fillMaxWidth(),
                                     shape = RoundedCornerShape(16.dp),
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = RFColors.Bg
-                                    ),
-                                    border = androidx.compose.foundation.BorderStroke(
-                                        1.dp,
-                                        RFColors.Border
-                                    )
+                                    colors = CardDefaults.cardColors(containerColor = RFColors.Bg),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
                                 ) {
                                     Column(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(24.dp),
+                                        modifier = Modifier.fillMaxWidth().padding(24.dp),
                                         horizontalAlignment = Alignment.CenterHorizontally
                                     ) {
-                                        Icon(
-                                            Icons.Default.SearchOff,
-                                            contentDescription = null,
-                                            tint = RFColors.TextMuted
-                                        )
+                                        Icon(Icons.Default.SearchOff, contentDescription = null, tint = RFColors.TextMuted)
                                         Spacer(Modifier.height(7.dp))
-                                        Text(
-                                            "No matching requests",
-                                            color = RFColors.TextSecondary
-                                        )
+                                        Text("No matching requests", color = RFColors.TextSecondary)
                                     }
                                 }
                             }
@@ -4607,13 +3882,7 @@ fun ReviewsFeedbackScreen() {
             onDismissRequest = { requestToCancel = null },
             containerColor = RFColors.Bg,
             shape = RoundedCornerShape(20.dp),
-            title = {
-                Text(
-                    "Cancel Equipment Request?",
-                    color = RFColors.Text,
-                    fontWeight = FontWeight.Bold
-                )
-            },
+            title = { Text("Cancel Equipment Request?", color = RFColors.Text, fontWeight = FontWeight.Bold) },
             text = {
                 Text(
                     "Cancel ${request.resourceName}? Dispatch will see this request as cancelled.",
@@ -4667,6 +3936,98 @@ fun ReviewsFeedbackScreen() {
     }
 }
 
+@Composable
+private fun RatingSelector(
+    title: String,
+    rating: Int,
+    onRatingChange: (Int) -> Unit
+) {
+    Column {
+        Text(
+            title,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = RFColors.TextSecondary
+        )
+
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            (1..5).forEach { value ->
+                Icon(
+                    imageVector = if (value <= rating) Icons.Default.Star else Icons.Default.StarBorder,
+                    contentDescription = null,
+                    tint = if (value <= rating) Color(0xFFFFB300) else RFColors.Border,
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clickable { onRatingChange(value) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun OutcomeSelector(
+    selected: String,
+    onSelect: (String) -> Unit
+) {
+    val outcomes = listOf("Resolved", "Partially Resolved", "Escalated", "False Alarm")
+
+    Column {
+        Text(
+            "Incident Outcome",
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = RFColors.TextSecondary
+        )
+
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(outcomes.size) { index ->
+                val item = outcomes[index]
+                FilterChip(
+                    selected = selected == item,
+                    onClick = { onSelect(item) },
+                    label = { Text(item, fontSize = 12.sp) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AnalyticsCard(
+    title: String,
+    value: String,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier.height(86.dp),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = RFColors.Bg),
+        border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                value,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                color = RFColors.Text
+            )
+
+            Spacer(Modifier.height(4.dp))
+
+            Text(
+                title,
+                fontSize = 12.sp,
+                color = RFColors.TextSecondary
+            )
+        }
+    }
+}
 
 private fun wrapPdfLine(text: String, paint: Paint, maxWidth: Float): List<String> {
     if (text.isBlank()) return listOf("")

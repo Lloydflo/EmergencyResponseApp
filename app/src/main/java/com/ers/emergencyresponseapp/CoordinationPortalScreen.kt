@@ -8,10 +8,6 @@ import android.graphics.BitmapFactory
 import android.location.Geocoder
 import android.location.Location
 import android.location.LocationManager
-import android.media.AudioAttributes
-import android.media.AudioManager
-import android.media.MediaPlayer
-import android.os.SystemClock
 import android.net.Uri
 import android.util.Base64
 import android.widget.Toast
@@ -28,7 +24,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
-import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -47,17 +42,11 @@ import androidx.compose.ui.unit.*
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.NavHostController
 import com.ers.emergencyresponseapp.coordination.model.ChatMessage
 import com.ers.emergencyresponseapp.coordination.model.MessageStatus
 import com.ers.emergencyresponseapp.coordination.model.MessageType
-import com.ers.emergencyresponseapp.coordination.model.ReplyMessageCodec
-import com.ers.emergencyresponseapp.coordination.voice.VoicePlaybackCache
-import com.ers.emergencyresponseapp.coordination.voice.VoiceRecorder
 import com.ers.emergencyresponseapp.coordination.model.viewmodel.CoordinationViewModel
 import com.ers.emergencyresponseapp.data.OperationalRepository
 import com.ers.emergencyresponseapp.notification.NotificationDestination
@@ -71,7 +60,6 @@ import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -83,7 +71,6 @@ import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.UUID
-import kotlin.math.roundToInt
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.activity.compose.BackHandler
 import android.content.Intent
@@ -572,7 +559,6 @@ fun CoordinationPortalScreen(
     }
 
     BackHandler(enabled = navState == NavState.CHAT) {
-        vm.clearTyping()
         navState = NavState.INBOX
     }
 
@@ -602,7 +588,6 @@ fun CoordinationPortalScreen(
                 currentResponderId   = currentResponderId,
                 currentResponderName = currentResponderName,
                 onBack               = {
-                    vm.clearTyping()
                     inboxTabIndex = if (vm.selectedDepartment.value != null) 1 else 0
                     navState = NavState.INBOX
                 }
@@ -1553,16 +1538,7 @@ private fun ChatScreen(
     val selectedDepartment = vm.selectedDepartment.value
     val messages           = vm.messages
     val isPeerTyping       = vm.isPeerTyping
-    val ctx                 = LocalContext.current
-    val threadKey           = vm.activeThreadId.orEmpty()
-    val draftPreferences    = remember(ctx) {
-        ctx.getSharedPreferences("coordination_drafts", Context.MODE_PRIVATE)
-    }
-    val draftKey            = remember(threadKey) { "draft:$threadKey" }
-    val messageInput        = remember(draftKey) {
-        mutableStateOf(draftPreferences.getString(draftKey, "").orEmpty())
-    }
-    var replyTarget by remember(threadKey) { mutableStateOf<ChatMessage?>(null) }
+    val messageInput       = remember { mutableStateOf("") }
     val listState          = rememberLazyListState()
     val scope              = rememberCoroutineScope()
     val unseenCount        = remember { mutableIntStateOf(0) }
@@ -1578,167 +1554,8 @@ private fun ChatScreen(
     val showSharedFilesDialog = remember { mutableStateOf(false) }
     var showChatSearch by remember { mutableStateOf(false) }
     var chatSearchQuery by remember { mutableStateOf("") }
+    val ctx                = LocalContext.current
     val chatName           = selectedResponder?.fullName ?: selectedDepartment?.displayName ?: "Chat"
-    val lifecycleOwner     = LocalLifecycleOwner.current
-    val voiceRecorder      = remember(ctx) { VoiceRecorder(ctx) }
-    var isRecordingVoice by remember { mutableStateOf(false) }
-    var recordingStartedAt by remember { mutableLongStateOf(0L) }
-    var recordingElapsedMs by remember { mutableLongStateOf(0L) }
-
-    fun resetVoiceRecordingUi() {
-        isRecordingVoice = false
-        recordingStartedAt = 0L
-        recordingElapsedMs = 0L
-    }
-
-    fun cancelVoiceRecording(showConfirmation: Boolean = false) {
-        voiceRecorder.cancel()
-        resetVoiceRecordingUi()
-        if (showConfirmation) {
-            Toast.makeText(ctx, "Voice recording discarded", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    fun beginVoiceRecording() {
-        if (isRecordingVoice) return
-        voiceRecorder.start()
-            .onSuccess {
-                recordingStartedAt = SystemClock.elapsedRealtime()
-                recordingElapsedMs = 0L
-                isRecordingVoice = true
-                showQuickReplies = false
-                showAttach.value = false
-            }
-            .onFailure { error ->
-                cancelVoiceRecording()
-                Toast.makeText(
-                    ctx,
-                    error.message ?: "Unable to start the microphone",
-                    Toast.LENGTH_LONG
-                ).show()
-            }
-    }
-
-    fun sendVoiceRecording() {
-        if (!isRecordingVoice) return
-        voiceRecorder.stop()
-            .onSuccess { recording ->
-                resetVoiceRecordingUi()
-                when {
-                    selectedResponder != null -> vm.sendVoiceMessage(
-                        meId = currentResponderId,
-                        peer = selectedResponder,
-                        recordingFile = recording.file,
-                        durationMs = recording.durationMs,
-                        mimeType = recording.mimeType
-                    )
-
-                    selectedDepartment != null -> vm.sendVoiceToDepartment(
-                        meId = currentResponderId,
-                        department = selectedDepartment.name,
-                        recordingFile = recording.file,
-                        durationMs = recording.durationMs,
-                        mimeType = recording.mimeType
-                    )
-
-                    else -> {
-                        recording.file.delete()
-                        Toast.makeText(ctx, "Select a chat first", Toast.LENGTH_SHORT).show()
-                        return@onSuccess
-                    }
-                }
-                Toast.makeText(ctx, "Uploading voice message…", Toast.LENGTH_SHORT).show()
-            }
-            .onFailure { error ->
-                resetVoiceRecordingUi()
-                Toast.makeText(
-                    ctx,
-                    error.message ?: "Unable to save the voice recording",
-                    Toast.LENGTH_LONG
-                ).show()
-            }
-    }
-
-    val recordAudioPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) {
-            beginVoiceRecording()
-        } else {
-            Toast.makeText(
-                ctx,
-                "Microphone permission is required to send a voice message",
-                Toast.LENGTH_LONG
-            ).show()
-        }
-    }
-
-    fun requestVoiceRecording() {
-        when {
-            ContextCompat.checkSelfPermission(
-                ctx,
-                Manifest.permission.RECORD_AUDIO
-            ) == PackageManager.PERMISSION_GRANTED -> beginVoiceRecording()
-
-            else -> recordAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-        }
-    }
-
-    LaunchedEffect(isRecordingVoice, recordingStartedAt) {
-        while (isRecordingVoice && recordingStartedAt > 0L) {
-            recordingElapsedMs = (SystemClock.elapsedRealtime() - recordingStartedAt)
-                .coerceAtLeast(0L)
-            if (recordingElapsedMs >= VoiceRecorder.MAX_RECORDING_DURATION_MS) {
-                sendVoiceRecording()
-                break
-            }
-            delay(100L)
-        }
-    }
-
-    // Keep the lifecycle observer stable while still reading the latest Compose
-    // state and callback. This prevents the microphone from being left active
-    // when the app is backgrounded during a recording.
-    val latestRecordingActive = rememberUpdatedState(isRecordingVoice)
-    val latestCancelVoiceRecording = rememberUpdatedState<() -> Unit> {
-        cancelVoiceRecording()
-    }
-    var isChatLifecycleActive by remember {
-        mutableStateOf(
-            lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
-        )
-    }
-    DisposableEffect(lifecycleOwner, voiceRecorder) {
-        val observer = LifecycleEventObserver { _, event ->
-            when (event) {
-                Lifecycle.Event.ON_START,
-                Lifecycle.Event.ON_RESUME -> isChatLifecycleActive = true
-
-                Lifecycle.Event.ON_STOP -> {
-                    isChatLifecycleActive = false
-                    if (latestRecordingActive.value) {
-                        latestCancelVoiceRecording.value.invoke()
-                    }
-                }
-
-                else -> Unit
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-            voiceRecorder.cancel()
-        }
-    }
-
-    DisposableEffect(threadKey) {
-        onDispose { vm.clearTyping() }
-    }
-
-    BackHandler(enabled = isRecordingVoice) {
-        cancelVoiceRecording(showConfirmation = true)
-    }
-
     var liveIsOnline by remember(selectedResponder?.id) {
         mutableStateOf(selectedResponder?.status?.contains("online", ignoreCase = true) == true)
     }
@@ -1827,37 +1644,15 @@ private fun ChatScreen(
         }
     }
 
-    fun sendText(rawText: String) {
-        val text = rawText.trim()
+    fun doSend() {
+        val text = messageInput.value.trim()
         if (text.isEmpty()) return
-        val outgoingText = replyTarget?.let { target ->
-            ReplyMessageCodec.encode(
-                body = text,
-                sender = target.senderName.ifBlank {
-                    if (target.isOwn) "You" else "Responder"
-                },
-                preview = coordinationReplyPreview(target)
-            )
-        } ?: text
-
         when {
-            selectedResponder  != null ->
-                vm.sendPrivateMessage(currentResponderId, selectedResponder, outgoingText)
-
-            selectedDepartment != null ->
-                vm.sendDepartmentMessage(currentResponderId, selectedDepartment.name, outgoingText)
-
+            selectedResponder  != null -> vm.sendPrivateMessage(currentResponderId, selectedResponder, text)
+            selectedDepartment != null -> vm.sendDepartmentMessage(currentResponderId, selectedDepartment.name, text)
             else -> Toast.makeText(ctx, "Select a chat to send", Toast.LENGTH_SHORT).show()
         }
-
         messageInput.value = ""
-        replyTarget = null
-        draftPreferences.edit().remove(draftKey).apply()
-        vm.clearTyping()
-    }
-
-    fun doSend() {
-        sendText(messageInput.value)
     }
 
     fun sendTipToCurrentChat(payload: CoordinationTipPayload) {
@@ -1965,13 +1760,11 @@ private fun ChatScreen(
             }
         }
     }
-    LaunchedEffect(messages.size, selectedResponder?.id, isChatLifecycleActive) {
-        if (isChatLifecycleActive && AppState.isForeground) {
-            vm.markMessagesAsRead(
-                currentResponderId,
-                selectedResponder?.id
-            )
-        }
+    LaunchedEffect(messages.size, selectedResponder?.id) {
+        vm.markMessagesAsRead(
+            currentResponderId,
+            selectedResponder?.id
+        )
     }
 
     val visibleMessages = if (chatSearchQuery.isBlank()) {
@@ -1991,12 +1784,7 @@ private fun ChatScreen(
                     tip.senderName
                 ).joinToString(" ")
             } else {
-                val reply = ReplyMessageCodec.decode(message.text.orEmpty())
-                listOfNotNull(
-                    reply?.body ?: message.text,
-                    reply?.sender,
-                    reply?.preview
-                ).joinToString(" ")
+                message.text.orEmpty()
             }
 
             searchableText.contains(chatSearchQuery, ignoreCase = true) ||
@@ -2186,45 +1974,62 @@ private fun ChatScreen(
                 AnimatedVisibility(visible = showQuickReplies) {
                     QuickReplyBar(
                         onSelect = { reply ->
-                            sendText(reply)
-                            showQuickReplies = false
-                        }
-                    )
-                }
+                            when {
+                                selectedResponder != null ->
+                                    vm.sendPrivateMessage(
+                                        currentResponderId,
+                                        selectedResponder,
+                                        reply
+                                    )
 
-                replyTarget?.let { target ->
-                    ReplyComposerBanner(
-                        sender = target.senderName.ifBlank {
-                            if (target.isOwn) "You" else "Responder"
-                        },
-                        preview = coordinationReplyPreview(target),
-                        onCancel = { replyTarget = null }
+                                selectedDepartment != null ->
+                                    vm.sendDepartmentMessage(
+                                        currentResponderId,
+                                        selectedDepartment.name,
+                                        reply
+                                    )
+
+                                else -> Toast.makeText(
+                                    ctx,
+                                    "Select a chat first",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        }
                     )
                 }
 
                 ChatComposer(
                     text = messageInput.value,
-                    onTextChange = { value ->
-                        messageInput.value = value
-                        if (value.isBlank()) {
-                            draftPreferences.edit().remove(draftKey).apply()
-                        } else {
-                            draftPreferences.edit().putString(draftKey, value).apply()
-                        }
-                        vm.onComposerTextChanged(value.isNotBlank())
-                    },
+                    onTextChange = { messageInput.value = it },
                     onSend = { doSend() },
                     onAttachClick = { showAttach.value = true },
                     onQuickReplyToggle = {
                         showQuickReplies = !showQuickReplies
                     },
-                    isRecordingVoice = isRecordingVoice,
-                    recordingDurationMs = recordingElapsedMs,
-                    onStartVoice = ::requestVoiceRecording,
-                    onCancelVoice = {
-                        cancelVoiceRecording(showConfirmation = true)
-                    },
-                    onSendVoice = ::sendVoiceRecording
+                    onLike = {
+                        when {
+                            selectedResponder != null ->
+                                vm.sendPrivateMessage(
+                                    currentResponderId,
+                                    selectedResponder,
+                                    "👍"
+                                )
+
+                            selectedDepartment != null ->
+                                vm.sendDepartmentMessage(
+                                    currentResponderId,
+                                    selectedDepartment.name,
+                                    "👍"
+                                )
+
+                            else -> Toast.makeText(
+                                ctx,
+                                "Select a chat first",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
                 )
             }
         },
@@ -2243,20 +2048,6 @@ private fun ChatScreen(
                 currentResponderId = currentResponderId,
                 onReact = { id, emoji ->
                     vm.addReaction(id, emoji, currentResponderId)
-                },
-                reactionsEnabled = selectedResponder != null,
-                onReply = { message ->
-                    replyTarget = message
-                    showQuickReplies = false
-                },
-                onCopy = { message ->
-                    val copiedText = coordinationCopyText(message)
-                    val clipboard = ctx.getSystemService(Context.CLIPBOARD_SERVICE)
-                            as android.content.ClipboardManager
-                    clipboard.setPrimaryClip(
-                        android.content.ClipData.newPlainText("Coordination message", copiedText)
-                    )
-                    Toast.makeText(ctx, "Message copied", Toast.LENGTH_SHORT).show()
                 },
                 onOpenTip = { payload ->
                     selectedTipDetails = payload
@@ -2390,9 +2181,6 @@ private fun ChatMessagesPanel(
     listState: LazyListState,
     currentResponderId: String,
     onReact: (String, String) -> Unit,
-    reactionsEnabled: Boolean,
-    onReply: (ChatMessage) -> Unit,
-    onCopy: (ChatMessage) -> Unit,
     onOpenTip: (CoordinationTipPayload) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -2478,9 +2266,6 @@ private fun ChatMessagesPanel(
                 timeLabel = timeFmt.format(Date(msg.createdAt)),
                 currentResponderId = currentResponderId,
                 onReact = onReact,
-                reactionsEnabled = reactionsEnabled,
-                onReply = onReply,
-                onCopy = onCopy,
                 onOpenTip = onOpenTip,
                 isTimeVisible = revealedMessageId == msg.id,
                 onToggleTime = {
@@ -2522,9 +2307,6 @@ private fun ChatBubble(
     timeLabel: String,
     currentResponderId: String,
     onReact: (String, String) -> Unit,
-    reactionsEnabled: Boolean,
-    onReply: (ChatMessage) -> Unit,
-    onCopy: (ChatMessage) -> Unit,
     onOpenTip: (CoordinationTipPayload) -> Unit,
     isTimeVisible: Boolean,
     onToggleTime: () -> Unit
@@ -2535,16 +2317,9 @@ private fun ChatBubble(
     val alignment = if (isOwn) Alignment.End else Alignment.Start
     val horizontalArrangement = if (isOwn) Arrangement.End else Arrangement.Start
     val tipPayload = remember(msg.text) { parseCoordinationTip(msg.text) }
-    val replyPayload = remember(msg.text) {
-        ReplyMessageCodec.decode(msg.text.orEmpty())
-    }
-    val maximumBubbleWidth = when {
-        tipPayload != null -> 360.dp
-        msg.type == MessageType.AUDIO -> 320.dp
-        else -> 280.dp
-    }
+    val maximumBubbleWidth = if (tipPayload != null) 360.dp else 280.dp
 
-    var showMessageActions by remember(msg.id) { mutableStateOf(false) }
+    var showEmojiPicker by remember(msg.id) { mutableStateOf(false) }
     var showLightbox by remember(msg.id) { mutableStateOf(false) }
 
     val bubbleShape = RoundedCornerShape(
@@ -2575,50 +2350,25 @@ private fun ChatBubble(
             horizontalAlignment = alignment,
             modifier = Modifier.widthIn(max = maximumBubbleWidth)
         ) {
-            AnimatedVisibility(visible = showMessageActions) {
+            AnimatedVisibility(visible = showEmojiPicker) {
                 Surface(
-                    shape = RoundedCornerShape(18.dp),
+                    shape = RoundedCornerShape(20.dp),
                     color = BgElevated,
                     border = BorderStroke(1.dp, DividerColor),
                     shadowElevation = 10.dp,
                     modifier = Modifier.padding(bottom = 4.dp)
                 ) {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
-                        verticalArrangement = Arrangement.spacedBy(5.dp)
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        if (reactionsEnabled) {
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                listOf("👍", "❤️", "😮", "🔥", "🚨").forEach { emoji ->
-                                    Text(
-                                        emoji,
-                                        fontSize = 22.sp,
-                                        modifier = Modifier.clickable {
-                                            onReact(msg.id, emoji)
-                                            showMessageActions = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
-
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            MessageActionButton(
-                                icon = Icons.AutoMirrored.Filled.Reply,
-                                label = "Reply",
-                                onClick = {
-                                    onReply(msg)
-                                    showMessageActions = false
-                                }
-                            )
-                            MessageActionButton(
-                                icon = Icons.Default.ContentCopy,
-                                label = "Copy",
-                                onClick = {
-                                    onCopy(msg)
-                                    showMessageActions = false
+                        listOf("👍", "❤️", "😮", "🔥", "🚨").forEach { emoji ->
+                            Text(
+                                emoji,
+                                fontSize = 22.sp,
+                                modifier = Modifier.clickable {
+                                    onReact(msg.id, emoji)
+                                    showEmojiPicker = false
                                 }
                             )
                         }
@@ -2636,7 +2386,7 @@ private fun ChatBubble(
                                 onClick = onToggleTime,
                                 onLongClick = {
                                     onToggleTime()
-                                    showMessageActions = !showMessageActions
+                                    showEmojiPicker = !showEmojiPicker
                                 }
                             ),
                             onView = { onOpenTip(tipPayload) }
@@ -2650,7 +2400,7 @@ private fun ChatBubble(
                                 onClick = onToggleTime,
                                 onLongClick = {
                                     onToggleTime()
-                                    showMessageActions = !showMessageActions
+                                    showEmojiPicker = !showEmojiPicker
                                 }
                             )
                         ) {
@@ -2666,19 +2416,11 @@ private fun ChatBubble(
                                     )
                                     Spacer(Modifier.height(2.dp))
                                 }
-                                replyPayload?.let { reply ->
-                                    ReplyBubbleQuote(
-                                        sender = reply.sender,
-                                        preview = reply.preview,
-                                        isOwn = isOwn
-                                    )
-                                    Spacer(Modifier.height(6.dp))
-                                }
                                 Text(
                                     text = if (msg.text.orEmpty().contains(TIP_MESSAGE_PREFIX)) {
                                         "Incident tip could not be displayed. Please update or resend it."
                                     } else {
-                                        replyPayload?.body ?: msg.text.orEmpty()
+                                        msg.text.orEmpty()
                                     },
                                     color = textColor,
                                     fontSize = 14.sp,
@@ -2701,7 +2443,7 @@ private fun ChatBubble(
                             },
                             onLongClick = {
                                 onToggleTime()
-                                showMessageActions = !showMessageActions
+                                showEmojiPicker = !showEmojiPicker
                             }
                         )
                     ) {
@@ -2765,7 +2507,7 @@ private fun ChatBubble(
                             },
                             onLongClick = {
                                 onToggleTime()
-                                showMessageActions = !showMessageActions
+                                showEmojiPicker = !showEmojiPicker
                             }
                         )
                     ) {
@@ -2818,42 +2560,6 @@ private fun ChatBubble(
                     }
                 }
 
-                MessageType.AUDIO -> {
-                    Surface(
-                        color = bubbleColor,
-                        shape = bubbleShape,
-                        shadowElevation = if (isOwn) 0.dp else 1.dp,
-                        modifier = Modifier.combinedClickable(
-                            onClick = onToggleTime,
-                            onLongClick = {
-                                onToggleTime()
-                                showMessageActions = !showMessageActions
-                            }
-                        )
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
-                        ) {
-                            if (!isOwn && msg.senderName.isNotBlank()) {
-                                Text(
-                                    msg.senderName,
-                                    fontWeight = FontWeight.SemiBold,
-                                    fontSize = 11.sp,
-                                    color = roleColor(msg.role)
-                                )
-                                Spacer(Modifier.height(5.dp))
-                            }
-
-                            VoiceMessagePlayer(
-                                audioUrl = msg.attachmentUri,
-                                mimeType = msg.attachmentMimeType,
-                                declaredDurationMs = msg.audioDurationMs,
-                                isOwn = isOwn
-                            )
-                        }
-                    }
-                }
-
                 else -> {
                     Surface(color = bubbleColor, shape = bubbleShape) {
                         Text(
@@ -2876,9 +2582,7 @@ private fun ChatBubble(
                             shape = RoundedCornerShape(12.dp),
                             color = BgMuted,
                             border = BorderStroke(1.dp, DividerColor),
-                            modifier = Modifier.clickable(enabled = reactionsEnabled) {
-                                onReact(msg.id, emoji)
-                            }
+                            modifier = Modifier.clickable { onReact(msg.id, emoji) }
                         ) {
                             Text(
                                 "$emoji $count",
@@ -2955,289 +2659,6 @@ private fun ChatBubble(
 }
 
 @Composable
-private fun VoiceMessagePlayer(
-    audioUrl: String?,
-    mimeType: String?,
-    declaredDurationMs: Long,
-    isOwn: Boolean
-) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val playbackCache = remember(context) { VoicePlaybackCache(context) }
-    val audioManager = remember(context) {
-        context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-    }
-    val resolvedUrl = remember(audioUrl) {
-        audioUrl?.takeIf { it.isNotBlank() }?.let(::resolveOperationalFileUrl)
-    }
-    var mediaPlayer by remember(resolvedUrl) { mutableStateOf<MediaPlayer?>(null) }
-    var preparationJob by remember(resolvedUrl) { mutableStateOf<Job?>(null) }
-    var isPrepared by remember(resolvedUrl) { mutableStateOf(false) }
-    var isPreparing by remember(resolvedUrl) { mutableStateOf(false) }
-    var isPlaying by remember(resolvedUrl) { mutableStateOf(false) }
-    var positionMs by remember(resolvedUrl) { mutableLongStateOf(0L) }
-    var durationMs by remember(resolvedUrl, declaredDurationMs) {
-        mutableLongStateOf(declaredDurationMs.coerceAtLeast(0L))
-    }
-    var playbackError by remember(resolvedUrl) { mutableStateOf<String?>(null) }
-
-    val accent = if (isOwn) Color.White else BrandGreen
-    val muted = if (isOwn) Color.White.copy(alpha = 0.72f) else TextSecondary
-    val track = if (isOwn) Color.White.copy(alpha = 0.30f) else DividerColor
-
-    fun releasePlayer(resetPosition: Boolean = true) {
-        preparationJob?.cancel()
-        preparationJob = null
-        mediaPlayer?.let { player ->
-            runCatching { player.stop() }
-            runCatching { player.reset() }
-            runCatching { player.release() }
-        }
-        mediaPlayer = null
-        isPrepared = false
-        isPreparing = false
-        isPlaying = false
-        if (resetPosition) positionMs = 0L
-    }
-
-    fun warnWhenMediaVolumeIsMuted() {
-        val manager = audioManager ?: return
-        @Suppress("DEPRECATION")
-        val volume = manager.getStreamVolume(AudioManager.STREAM_MUSIC)
-        if (volume <= 0) {
-            playbackError = "Media volume is muted. Raise the phone's media volume."
-        }
-    }
-
-    fun prepareLocalAudio(localFile: java.io.File) {
-        val newPlayer = MediaPlayer()
-        mediaPlayer = newPlayer
-
-        try {
-            newPlayer.setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build()
-            )
-            newPlayer.setVolume(1f, 1f)
-            newPlayer.setDataSource(localFile.absolutePath)
-            newPlayer.setOnPreparedListener { preparedPlayer ->
-                if (mediaPlayer !== preparedPlayer) return@setOnPreparedListener
-                isPreparing = false
-                isPrepared = true
-                durationMs = preparedPlayer.duration.toLong()
-                    .takeIf { it > 0L }
-                    ?: declaredDurationMs.coerceAtLeast(0L)
-                warnWhenMediaVolumeIsMuted()
-                preparedPlayer.start()
-                isPlaying = true
-            }
-            newPlayer.setOnCompletionListener { completedPlayer ->
-                if (mediaPlayer !== completedPlayer) return@setOnCompletionListener
-                isPlaying = false
-                positionMs = 0L
-                runCatching { completedPlayer.seekTo(0) }
-            }
-            newPlayer.setOnErrorListener { failedPlayer, what, extra ->
-                if (mediaPlayer === failedPlayer) {
-                    playbackError = "Audio decoder error ($what/$extra). Re-send this voice message."
-                    releasePlayer()
-                }
-                true
-            }
-            newPlayer.prepareAsync()
-        } catch (error: Throwable) {
-            playbackError = error.message ?: "Unable to decode this voice message"
-            releasePlayer()
-        }
-    }
-
-    fun togglePlayback() {
-        val source = resolvedUrl
-        if (source.isNullOrBlank()) {
-            playbackError = "Voice message URL is unavailable"
-            return
-        }
-
-        val existing = mediaPlayer
-        if (existing != null && isPrepared) {
-            if (isPlaying) {
-                runCatching { existing.pause() }
-                isPlaying = false
-            } else {
-                runCatching {
-                    if (durationMs > 0L && positionMs >= durationMs - 250L) {
-                        existing.seekTo(0)
-                        positionMs = 0L
-                    }
-                    warnWhenMediaVolumeIsMuted()
-                    existing.start()
-                    isPlaying = true
-                }.onFailure { error ->
-                    playbackError = error.message ?: "Unable to play this voice message"
-                    releasePlayer()
-                }
-            }
-            return
-        }
-        if (isPreparing) return
-
-        playbackError = null
-        isPreparing = true
-        preparationJob?.cancel()
-        preparationJob = scope.launch {
-            playbackCache.resolve(
-                remoteUrl = source,
-                expectedMimeType = mimeType
-            ).onSuccess { localFile ->
-                if (resolvedUrl != source) return@onSuccess
-                preparationJob = null
-                prepareLocalAudio(localFile)
-            }.onFailure { error ->
-                preparationJob = null
-                isPreparing = false
-                playbackError = error.message ?: "Unable to download this voice message"
-            }
-        }
-    }
-
-    LaunchedEffect(isPlaying, mediaPlayer) {
-        while (isPlaying) {
-            val activePlayer = mediaPlayer ?: break
-            val current = runCatching { activePlayer.currentPosition.toLong() }.getOrNull()
-                ?: break
-            positionMs = current.coerceAtLeast(0L)
-            delay(200L)
-        }
-    }
-
-    DisposableEffect(resolvedUrl) {
-        onDispose {
-            preparationJob?.cancel()
-            mediaPlayer?.let { player ->
-                runCatching { player.stop() }
-                runCatching { player.reset() }
-                runCatching { player.release() }
-            }
-        }
-    }
-
-    val effectiveDurationMs = maxOf(durationMs, declaredDurationMs, 1L)
-    val sliderPosition = positionMs.coerceIn(0L, effectiveDurationMs).toFloat()
-
-    Row(
-        modifier = Modifier.widthIn(min = 220.dp, max = 292.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(9.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .size(42.dp)
-                .clip(CircleShape)
-                .background(
-                    if (isOwn) Color.White.copy(alpha = 0.18f)
-                    else BrandGreen.copy(alpha = 0.12f)
-                )
-                .clickable(enabled = !isPreparing, onClick = ::togglePlayback),
-            contentAlignment = Alignment.Center
-        ) {
-            if (isPreparing) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(20.dp),
-                    strokeWidth = 2.dp,
-                    color = accent
-                )
-            } else {
-                Icon(
-                    imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    contentDescription = if (isPlaying) {
-                        "Pause voice message"
-                    } else {
-                        "Play voice message"
-                    },
-                    tint = accent,
-                    modifier = Modifier.size(24.dp)
-                )
-            }
-        }
-
-        Column(modifier = Modifier.weight(1f)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    Icons.Default.GraphicEq,
-                    contentDescription = null,
-                    tint = accent,
-                    modifier = Modifier.size(17.dp)
-                )
-                Spacer(Modifier.width(5.dp))
-                Text(
-                    "Voice message",
-                    color = accent,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-            }
-
-            Slider(
-                value = sliderPosition,
-                onValueChange = { value ->
-                    positionMs = value.roundToInt().toLong()
-                },
-                onValueChangeFinished = {
-                    if (isPrepared) {
-                        runCatching {
-                            mediaPlayer?.seekTo(positionMs.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
-                        }
-                    }
-                },
-                enabled = isPrepared,
-                valueRange = 0f..effectiveDurationMs.toFloat(),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(24.dp),
-                colors = SliderDefaults.colors(
-                    thumbColor = accent,
-                    activeTrackColor = accent,
-                    inactiveTrackColor = track,
-                    disabledThumbColor = accent.copy(alpha = 0.60f),
-                    disabledActiveTrackColor = track,
-                    disabledInactiveTrackColor = track
-                )
-            )
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    formatVoiceDuration(positionMs),
-                    color = muted,
-                    fontSize = 10.sp
-                )
-                Text(
-                    formatVoiceDuration(effectiveDurationMs),
-                    color = muted,
-                    fontSize = 10.sp
-                )
-            }
-
-            playbackError?.let { error ->
-                Text(
-                    error,
-                    color = if (isOwn) Color.White.copy(alpha = 0.88f) else DangerColor,
-                    fontSize = 10.sp,
-                    maxLines = 3
-                )
-            }
-        }
-    }
-}
-
-@Composable
 private fun CoordinationChannelStrip(
     recipientLabel: String,
     isDepartment: Boolean,
@@ -3269,7 +2690,7 @@ private fun CoordinationChannelStrip(
                     fontWeight = FontWeight.SemiBold
                 )
                 Text(
-                    "Long-press for Reply/Copy · $recipientLabel",
+                    "Share verified updates with $recipientLabel",
                     color = TextSecondary,
                     fontSize = 10.sp,
                     maxLines = 1,
@@ -4533,147 +3954,6 @@ private fun TipDetailBlock(
 // ─────────────────────────────────────────────────────────────────────────────
 //  QUICK REPLIES — fast, one-tap responses for responders on scene / driving
 // ─────────────────────────────────────────────────────────────────────────────
-private fun coordinationReplyPreview(message: ChatMessage): String {
-    parseCoordinationTip(message.text)?.let { tip ->
-        return buildString {
-            append(tip.incidentType.ifBlank { "Incident tip" })
-            tip.location.takeIf { it.isNotBlank() }?.let { append(" • ").append(it) }
-        }.take(ReplyMessageCodec.MAX_PREVIEW_LENGTH)
-    }
-
-    return when (message.type) {
-        MessageType.IMAGE -> "Image"
-        MessageType.FILE -> message.attachmentName?.takeIf { it.isNotBlank() } ?: "File"
-        MessageType.AUDIO -> "Voice message"
-        MessageType.SYSTEM -> "System update"
-        MessageType.TEXT -> ReplyMessageCodec.displayBody(message.text)
-            .replace(Regex("\\s+"), " ")
-            .trim()
-            .ifBlank { "Message" }
-            .take(ReplyMessageCodec.MAX_PREVIEW_LENGTH)
-    }
-}
-
-private fun coordinationCopyText(message: ChatMessage): String {
-    parseCoordinationTip(message.text)?.let { tip ->
-        return buildList {
-            add("${tip.incidentType.ifBlank { "Emergency" }} incident tip")
-            tip.priority.takeIf { it.isNotBlank() }?.let { add("Priority: $it") }
-            tip.location.takeIf { it.isNotBlank() }?.let { add("Location: $it") }
-            tip.description.takeIf { it.isNotBlank() }?.let(::add)
-            tip.tipId.takeIf { it.isNotBlank() }?.let { add("Reference: $it") }
-        }.joinToString("\n")
-    }
-
-    return when (message.type) {
-        MessageType.TEXT -> ReplyMessageCodec.displayBody(message.text)
-        MessageType.IMAGE -> message.text?.takeIf { it.isNotBlank() && it != "Image" } ?: "Image"
-        MessageType.FILE -> message.attachmentName?.takeIf { it.isNotBlank() } ?: "File"
-        MessageType.AUDIO -> "Voice message"
-        MessageType.SYSTEM -> message.text.orEmpty().ifBlank { "System update" }
-    }
-}
-
-@Composable
-private fun MessageActionButton(
-    icon: ImageVector,
-    label: String,
-    onClick: () -> Unit
-) {
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = BgMuted,
-        modifier = Modifier.clickable(onClick = onClick)
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(5.dp)
-        ) {
-            Icon(icon, contentDescription = null, tint = BrandGreen, modifier = Modifier.size(15.dp))
-            Text(label, color = TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-        }
-    }
-}
-
-@Composable
-private fun ReplyBubbleQuote(sender: String, preview: String, isOwn: Boolean) {
-    Surface(
-        color = if (isOwn) Color.White.copy(alpha = 0.14f) else BgMuted,
-        shape = RoundedCornerShape(10.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(modifier = Modifier.padding(horizontal = 9.dp, vertical = 7.dp)) {
-            Box(
-                modifier = Modifier
-                    .width(3.dp)
-                    .heightIn(min = 34.dp)
-                    .clip(RoundedCornerShape(99.dp))
-                    .background(if (isOwn) Color.White.copy(alpha = 0.8f) else BrandGreen)
-            )
-            Spacer(Modifier.width(7.dp))
-            Column {
-                Text(
-                    sender.ifBlank { "Responder" },
-                    color = if (isOwn) Color.White else BrandGreen,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    preview.ifBlank { "Message" },
-                    color = if (isOwn) Color.White.copy(alpha = 0.78f) else TextSecondary,
-                    fontSize = 11.sp,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun ReplyComposerBanner(sender: String, preview: String, onCancel: () -> Unit) {
-    Surface(color = BgElevated, border = BorderStroke(1.dp, DividerColor)) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 12.dp, end = 4.dp, top = 7.dp, bottom = 7.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .width(3.dp)
-                    .height(38.dp)
-                    .clip(RoundedCornerShape(99.dp))
-                    .background(BrandGreen)
-            )
-            Spacer(Modifier.width(9.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    "Replying to ${sender.ifBlank { "Responder" }}",
-                    color = BrandGreen,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    preview,
-                    color = TextSecondary,
-                    fontSize = 11.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            IconButton(onClick = onCancel, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.Default.Close, contentDescription = "Cancel reply", tint = TextSecondary)
-            }
-        }
-    }
-}
-
 private val QuickReplies = listOf(
     "Copy",
     "En route",
@@ -4726,12 +4006,8 @@ private fun ChatComposer(
     onTextChange: (String) -> Unit,
     onSend: () -> Unit,
     onAttachClick: () -> Unit,
-    onQuickReplyToggle: () -> Unit,
-    isRecordingVoice: Boolean,
-    recordingDurationMs: Long,
-    onStartVoice: () -> Unit,
-    onCancelVoice: () -> Unit,
-    onSendVoice: () -> Unit
+    onLike: () -> Unit,
+    onQuickReplyToggle: () -> Unit
 ) {
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -4739,147 +4015,77 @@ private fun ChatComposer(
         shadowElevation = 8.dp,
         border = BorderStroke(1.dp, DividerColor)
     ) {
-        if (isRecordingVoice) {
-            val pulse = rememberInfiniteTransition(label = "voice_recording")
-            val pulseAlpha by pulse.animateFloat(
-                initialValue = 0.35f,
-                targetValue = 1f,
-                animationSpec = infiniteRepeatable(
-                    animation = tween(650),
-                    repeatMode = RepeatMode.Reverse
-                ),
-                label = "voice_recording_alpha"
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            ComposerIconButton(
+                icon = Icons.Default.AddCircleOutline,
+                contentDescription = "Add attachment or incident tip",
+                onClick = onAttachClick
+            )
+            ComposerIconButton(
+                icon = Icons.Default.Bolt,
+                contentDescription = "Quick replies",
+                onClick = onQuickReplyToggle
             )
 
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .background(DangerSurface),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(12.dp)
-                            .clip(CircleShape)
-                            .background(DangerColor.copy(alpha = pulseAlpha))
-                    )
-                }
-
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        "Recording voice message",
-                        color = TextPrimary,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        "${formatVoiceDuration(recordingDurationMs)} / 2:00",
-                        color = DangerColor,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-
-                IconButton(onClick = onCancelVoice) {
-                    Icon(
-                        Icons.Default.DeleteOutline,
-                        contentDescription = "Discard voice recording",
-                        tint = DangerColor
-                    )
-                }
-
-                Box(
-                    modifier = Modifier
-                        .size(44.dp)
-                        .clip(CircleShape)
-                        .background(BrandGreen)
-                        .clickable(onClick = onSendVoice),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.Send,
-                        contentDescription = "Send voice message",
-                        tint = Color.White,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-            }
-        } else {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 7.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                ComposerIconButton(
-                    icon = Icons.Default.AddCircleOutline,
-                    contentDescription = "Add attachment or incident tip",
-                    onClick = onAttachClick
+            OutlinedTextField(
+                value = text,
+                onValueChange = onTextChange,
+                placeholder = {
+                    Text("Message…", fontSize = 14.sp, color = TextSecondary)
+                },
+                modifier = Modifier.weight(1f),
+                singleLine = false,
+                maxLines = 4,
+                shape = RoundedCornerShape(22.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = BgInput,
+                    unfocusedContainerColor = BgInput,
+                    focusedTextColor = TextPrimary,
+                    unfocusedTextColor = TextPrimary,
+                    focusedBorderColor = BrandGreen,
+                    unfocusedBorderColor = DividerColor,
+                    cursorColor = BrandGreen
                 )
-                ComposerIconButton(
-                    icon = Icons.Default.Bolt,
-                    contentDescription = "Quick replies",
-                    onClick = onQuickReplyToggle
-                )
+            )
 
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = onTextChange,
-                    placeholder = {
-                        Text("Message…", fontSize = 14.sp, color = TextSecondary)
-                    },
-                    modifier = Modifier.weight(1f),
-                    singleLine = false,
-                    maxLines = 4,
-                    shape = RoundedCornerShape(22.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = BgInput,
-                        unfocusedContainerColor = BgInput,
-                        focusedTextColor = TextPrimary,
-                        unfocusedTextColor = TextPrimary,
-                        focusedBorderColor = BrandGreen,
-                        unfocusedBorderColor = DividerColor,
-                        cursorColor = BrandGreen
-                    )
-                )
-
-                val hasText = text.trim().isNotEmpty()
-                AnimatedContent(targetState = hasText, label = "send_or_voice_btn") { active ->
+            val hasText = text.trim().isNotEmpty()
+            AnimatedContent(targetState = hasText, label = "send_btn") { active ->
+                if (active) {
                     Box(
                         modifier = Modifier
                             .size(44.dp)
                             .clip(CircleShape)
-                            .background(if (active) BrandGreen else BgMuted)
-                            .then(
-                                if (active) Modifier
-                                else Modifier.border(1.dp, DividerColor, CircleShape)
-                            )
-                            .clickable {
-                                if (active) onSend() else onStartVoice()
-                            },
+                            .background(BrandGreen)
+                            .clickable { onSend() },
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            imageVector = if (active) {
-                                Icons.AutoMirrored.Filled.Send
-                            } else {
-                                Icons.Default.Mic
-                            },
-                            contentDescription = if (active) {
-                                "Send"
-                            } else {
-                                "Record voice message"
-                            },
-                            tint = if (active) Color.White else BrandGreen,
+                            Icons.AutoMirrored.Filled.Send,
+                            contentDescription = "Send",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(BgMuted)
+                            .border(1.dp, DividerColor, CircleShape)
+                            .clickable { onLike() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Default.ThumbUp,
+                            contentDescription = "Send like",
+                            tint = BrandGreen,
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -5237,9 +4443,7 @@ private fun ChatInfoContent(
     val online = liveIsOnline
     val messageCount = messages.size
     val fileCount = messages.count {
-        it.type == MessageType.FILE ||
-                it.type == MessageType.IMAGE ||
-                it.type == MessageType.AUDIO
+        it.type == MessageType.FILE || it.type == MessageType.IMAGE
     }
     val firstMessageTime = messages.minOfOrNull { it.createdAt } ?: 0L
     val chatAge = if (firstMessageTime > 0L) {
@@ -5365,7 +4569,7 @@ private fun ChatInfoContent(
             )
             ChatStatTile(
                 value = fileCount.toString(),
-                label = "Media/files",
+                label = "Files",
                 modifier = Modifier.weight(1f),
                 onClick = onFilesClick
             )
@@ -6043,14 +5247,6 @@ private fun CompactStatusChip(
     }
 }
 
-private fun formatVoiceDuration(durationMs: Long): String {
-    val totalSeconds = (durationMs.coerceAtLeast(0L) / 1000L)
-        .coerceAtMost(99L * 60L + 59L)
-    val minutes = totalSeconds / 60L
-    val seconds = totalSeconds % 60L
-    return String.format(Locale.US, "%d:%02d", minutes, seconds)
-}
-
 private fun formatChatTime(time: Long): String {
     if (time <= 0L) return ""
 
@@ -6073,9 +5269,7 @@ private fun SharedFilesDialog(
     val context = LocalContext.current
 
     val files = messages.filter {
-        it.type == MessageType.FILE ||
-                it.type == MessageType.IMAGE ||
-                it.type == MessageType.AUDIO
+        it.type == MessageType.FILE || it.type == MessageType.IMAGE
     }
 
     AlertDialog(
@@ -6086,12 +5280,12 @@ private fun SharedFilesDialog(
             }
         },
         title = {
-            Text("Shared Media & Files", fontWeight = FontWeight.Bold)
+            Text("Shared Files", fontWeight = FontWeight.Bold)
         },
         text = {
             if (files.isEmpty()) {
                 Text(
-                    "No shared media or files yet.",
+                    "No shared files yet.",
                     color = TextSecondary
                 )
             } else {
@@ -6124,11 +5318,10 @@ private fun SharedFilesDialog(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
-                                imageVector = when (file.type) {
-                                    MessageType.IMAGE -> Icons.Default.Image
-                                    MessageType.AUDIO -> Icons.Default.Mic
-                                    else -> Icons.AutoMirrored.Filled.InsertDriveFile
-                                },
+                                if (file.type == MessageType.IMAGE)
+                                    Icons.Default.Image
+                                else
+                                    Icons.AutoMirrored.Filled.InsertDriveFile,
                                 contentDescription = null,
                                 tint = BrandGreen,
                                 modifier = Modifier.size(24.dp)
@@ -6138,11 +5331,7 @@ private fun SharedFilesDialog(
 
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = if (file.type == MessageType.AUDIO) {
-                                        "Voice message · ${formatVoiceDuration(file.audioDurationMs)}"
-                                    } else {
-                                        file.attachmentName ?: file.text ?: "Attachment"
-                                    },
+                                    file.attachmentName ?: file.text ?: "Attachment",
                                     fontWeight = FontWeight.SemiBold,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
@@ -6231,9 +5420,7 @@ private fun DepartmentChatInfoContent(
 ) {
     val messageCount = messages.size
     val fileCount = messages.count {
-        it.type == MessageType.FILE ||
-                it.type == MessageType.IMAGE ||
-                it.type == MessageType.AUDIO
+        it.type == MessageType.FILE || it.type == MessageType.IMAGE
     }
     val accent = roleColor(department.displayName)
 
@@ -6307,7 +5494,7 @@ private fun DepartmentChatInfoContent(
             )
             ChatStatTile(
                 value = fileCount.toString(),
-                label = "Media/files",
+                label = "Shared files",
                 modifier = Modifier.weight(1f),
                 onClick = onFilesClick
             )

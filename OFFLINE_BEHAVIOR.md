@@ -28,6 +28,6 @@ The cache is advisory, is cleared during logout, and never substitutes for a liv
 
 ## Deliberate limitations
 
-There is no durable offline write queue in this patch. The app does not queue incident completion, on-scene reports, backup requests, chat messages, broadcast acknowledgements, profile uploads, route points, or After-Action Reports for later submission. Those operations must be retried after reconnecting.
+There is no durable offline write queue in this patch. The app does not queue incident completion, on-scene reports, backup requests, chat messages, broadcast acknowledgements, profile uploads, route points, or reviews for later submission. Those operations must be retried after reconnecting.
 
 A production offline-first responder workflow would additionally require conflict resolution, encrypted operational storage, server-issued sequence/version numbers, idempotency keys for every queued mutation, and auditable synchronization outcomes.

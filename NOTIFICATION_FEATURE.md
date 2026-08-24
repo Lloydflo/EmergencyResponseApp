@@ -9,7 +9,7 @@ The app now uses Firebase Cloud Messaging and Android notification channels for 
 
 `EmergencyFirebaseMessagingService` processes high-priority data messages even when the activity is not visible. `AppNotificationManager` creates a dedicated channel for each event class, selects a vibration pattern, builds a status-bar-safe monochrome icon, and attaches a deep-link intent. `NotificationNavigation` passes that destination into Compose navigation when the user taps the alert.
 
-The process defaults to a background state so a cold-started Firebase service never mistakes itself for an open Home screen. `MainActivity` updates the screen tracker from the actual navigation route. This suppresses alerts only while the responder is already viewing the exact chat, while still allowing assigned-incident alerts on Reports, Coordination, or outside the app.
+The process defaults to a background state so a cold-started Firebase service never mistakes itself for an open Home screen. `MainActivity` updates the screen tracker from the actual navigation route. This suppresses alerts only while the responder is already viewing the exact chat, while still allowing assigned-incident alerts on Reviews, Coordination, or outside the app.
 
 Home polling remains a fallback while the process is active. FCM and polling claim the same stable event key; whichever receives the event first owns the single visible alert.
 

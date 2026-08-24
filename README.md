@@ -4,7 +4,7 @@ Android responder application for live emergency-response operations.
 
 ## Real data sources
 
-- Hostinger PHP/MySQL: authentication, assigned and active incidents, assignment status, incident completion, route history/analytics, backup and resource requests, After-Action Reports, coordination tips, department chat, and emergency broadcasts.
+- Hostinger PHP/MySQL: authentication, assigned and active incidents, assignment status, incident completion, route history/analytics, backup and resource requests, service reviews, After-Action Reports, coordination tips, department chat, and emergency broadcasts.
 - Firebase Realtime Database: private responder chat, responder presence, private-thread unread state, and live locations.
 - Firebase Cloud Messaging: private-message, department-message, emergency-broadcast, and assigned-incident notifications.
 
@@ -22,42 +22,16 @@ The current project includes:
 - FCM token registration and logout deactivation;
 - stable event-key deduplication between FCM and Home polling;
 - a direct system-channel shortcut in **Account Settings > Alerts & vibration**;
-- pull-to-refresh on Home, Coordination, Post-Incident Reports, and Route Analytics.
+- pull-to-refresh on Home, Coordination, Post-Incident/Reviews, and Route Analytics.
 
 The Android client is ready to receive all four events. The live PHP/dispatch server must send high-priority data messages using the contract in `FCM_NOTIFICATION_PAYLOADS.md`. Server deployment code, database migrations, and Firebase service-account credentials are not bundled in this Android archive.
 
 ## Operational workflow refinements
 
-- **Responder reliability (17.5):** incident actions now follow the server status, missing coordinates can never reuse a previous incident, completion proof stays available for retry, Disaster/General incidents are visible, and every backup request is bound to a selected incident.
-- **Stable navigation:** the first route is frozen and restored across map exits. GPS movement does not silently replace it; only a valid route returned by the alternative-route integration becomes active. Responders can exit the map while tracking continues and reopen the exact route from Home or the foreground notification.
-- **Traffic-route integration:** the exact request/response contract and client validation rules for the other group are documented in [`ALTERNATIVE_ROUTE_INTEGRATION.md`](ALTERNATIVE_ROUTE_INTEGRATION.md).
-- **Reports** is now reports-only: responder-facing service reviews and star ratings are removed, while completed incidents, **Create Report**, recoverable per-incident report drafts, truthful load/retry states, submission, PDF export, and equipment/supply requests remain. See `SERVICE_REVIEW_REMOVAL.md`.
-- **Coordination voice messages** work in private responder chats and department channels. Tap the microphone with an empty composer, record for up to two minutes, then send or discard. Voice notes support in-app play, pause, seeking, notifications, and Shared Media & Files. Deploy the matching API package first; see `VOICE_MESSAGE_IMPLEMENTATION.md`.
 - **Home > Backup Requests** now requests response personnel, teams, units, or operational capabilities. The responder chooses the exact backup option and can add quantity, staging, transport, or other dispatch details.
-- **Reports > Equipment** is reserved for equipment, PPE, consumables, medical supplies, communications/power, and logistics replenishment. It no longer presents responders or emergency vehicles as post-incident resource categories.
+- **Reviews > Equipment** is reserved for equipment, PPE, consumables, medical supplies, communications/power, and logistics replenishment. It no longer presents responders or emergency vehicles as review-side resource categories.
 - The Coordination Portal has only **Chats** and **Departments** as persistent tabs. The pencil action opens a searchable responder-directory bottom sheet for starting a private chat.
-- Narrative fields in After-Action Reports and equipment/supply request notes include per-field quick templates. Responders can apply, add, edit, delete, or restore templates; custom templates are stored locally on the device.
-
-## Coordination messaging features
-
-The responder coordination experience includes familiar messaging controls without adding high-risk audio/video calling infrastructure:
-
-- private responder chats and approved department channels;
-- text, image, file, and two-minute voice messages;
-- long-press message actions for quoted replies and copying;
-- emoji reactions in private chats;
-- sent, device-delivered, and read indicators for private messages;
-- live typing status in private chats with inactivity and disconnect cleanup;
-- per-conversation draft autosave, so unfinished operational updates do not move to another chat;
-- conversation and in-chat search, unread counts, quick replies, shared media/files, presence, and last-seen status;
-- structured, server-persisted incident tips with location data; and
-- notification deep links to the exact responder or department conversation.
-
-Quoted replies use a readable versioned envelope inside the existing message text, so they remain understandable to older clients and work through both Firebase private chat and the current PHP/MySQL department-chat API. Department reactions are intentionally not shown until the server team provides an authenticated reaction endpoint and returns reaction data with group messages. Edit/unsend is also deferred because operational communications require server-enforced ownership and an auditable soft-delete policy.
-
-For a clean version 17.5 installation and exact responder-flow checks, follow
-[`INSTALL_AND_TEST_V17_5.md`](INSTALL_AND_TEST_V17_5.md). The 17.4 guide remains
-available for the Coordination-only feature checks.
+- Narrative fields in After-Action Reports, service reviews, and equipment/supply request notes include per-field quick templates. Responders can apply, add, edit, delete, or restore templates; custom templates are stored locally on the device.
 
 ## Build
 

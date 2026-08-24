@@ -77,7 +77,8 @@ private fun normalizeIncidentStatus(raw: String?): IncidentStatus {
         "pending", "assigned", "accepted", "received", "dispatched" -> IncidentStatus.DISPATCHED
         "en_route", "enroute", "on_route", "in_transit" -> IncidentStatus.ON_ROUTE
         "on_scene", "onscene", "arrived" -> IncidentStatus.ON_SCENE
-        "pending_review", "for_review", "submitted_review", "review_submitted", "submitted",
+        "pending_review", "for_review" -> IncidentStatus.PENDING_REVIEW
+        "submitted_review", "review_submitted", "submitted" -> IncidentStatus.SUBMITTED_REVIEW
         "resolved", "completed", "closed" -> IncidentStatus.RESOLVED
         else -> IncidentStatus.UNKNOWN
     }

@@ -140,12 +140,12 @@ class IncidentRepository {
     }
 
     suspend fun getMyResourceRequests(responderId: Int): List<MyResourceRequestDto> {
-        val response = api.getMyResourceRequests(responderId)
-        if (response.success) {
-            return response.requests ?: emptyList()
+        return try {
+            val response = api.getMyResourceRequests(responderId)
+            if (response.success) response.requests ?: emptyList() else emptyList()
+        } catch (e: Exception) {
+            emptyList()
         }
-
-        throw Exception(response.message ?: "Unable to load equipment/supply requests")
     }
 
     suspend fun cancelResourceRequest(requestId: Int, responderId: Int): Result<Unit> {
@@ -183,15 +183,68 @@ class IncidentRepository {
         }
     }
 
-    suspend fun getCompletedIncidents(
-        responderId: Int
-    ): List<com.ers.emergencyresponseapp.network.CompletedIncidentDto> {
-        val response = api.getCompletedIncidents(responderId)
-        if (response.success) {
-            return response.incidents ?: emptyList()
-        }
+    suspend fun submitIncidentReview(
+        incidentId: Long,
+        responderId: Int,
+        responseRating: Int,
+        communicationRating: Int,
+        professionalismRating: Int,
+        outcome: String,
+        reviewText: String
+    ): Result<Unit> {
+        return try {
+            val response = api.submitIncidentReview(
+                incidentId = incidentId,
+                responderId = responderId,
+                responseRating = responseRating,
+                communicationRating = communicationRating,
+                professionalismRating = professionalismRating,
+                outcome = outcome,
+                reviewText = reviewText
+            )
 
-        throw Exception(response.message ?: "Unable to load completed incidents")
+            if (response.success) {
+                Result.success(Unit)
+            } else {
+                Result.failure(
+                    Exception(
+                        response.message ?: "Failed to submit review"
+                    )
+                )
+            }
+        } catch (e: Exception) {
+            Log.e(
+                "IncidentRepository",
+                "submitIncidentReview failed",
+                e
+            )
+
+            Result.failure(
+                Exception(e.message ?: "Network error")
+            )
+        }
+    }
+
+    suspend fun getPendingReviewIncidents(
+        responderId: Int
+    ): List<com.ers.emergencyresponseapp.network.PendingReviewIncidentDto> {
+        return try {
+            val response = api.getPendingReviewIncidents(responderId)
+
+            if (response.success) {
+                response.incidents ?: emptyList()
+            } else {
+                emptyList()
+            }
+        } catch (e: Exception) {
+            Log.e(
+                "IncidentRepository",
+                "Failed to load review incidents",
+                e
+            )
+
+            emptyList()
+        }
     }
 
     suspend fun setUnitPresence(

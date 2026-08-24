@@ -5,7 +5,6 @@ import androidx.lifecycle.viewModelScope
 import com.ers.emergencyresponseapp.data.IncidentRepository
 import java.io.IOException
 import java.net.SocketTimeoutException
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -44,12 +43,8 @@ class AssignedIncidentsViewModel(
     private var activeLoadJob: Job? = null
     private var statusUpdateJob: Job? = null
 
-    fun load(responderId: Int, force: Boolean = false) {
-        if (responderId <= 0) return
-        if (assignedLoadJob?.isActive == true) {
-            if (!force) return
-            assignedLoadJob?.cancel()
-        }
+    fun load(responderId: Int) {
+        if (responderId <= 0 || assignedLoadJob?.isActive == true) return
 
         assignedLoadJob = viewModelScope.launch {
             _ui.update { it.copy(loadingAssigned = true, assignedError = null) }
@@ -86,8 +81,6 @@ class AssignedIncidentsViewModel(
                         )
                     }
                 }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
             } catch (error: Exception) {
                 _ui.update {
                     it.copy(
@@ -100,12 +93,8 @@ class AssignedIncidentsViewModel(
         }
     }
 
-    fun loadActive(responderId: Int, force: Boolean = false) {
-        if (responderId <= 0) return
-        if (activeLoadJob?.isActive == true) {
-            if (!force) return
-            activeLoadJob?.cancel()
-        }
+    fun loadActive(responderId: Int) {
+        if (responderId <= 0 || activeLoadJob?.isActive == true) return
 
         activeLoadJob = viewModelScope.launch {
             _ui.update { it.copy(loadingActive = true, activeError = null) }
@@ -121,8 +110,6 @@ class AssignedIncidentsViewModel(
                         hasCompletedActiveRequest = true
                     )
                 }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
             } catch (error: Exception) {
                 _ui.update {
                     it.copy(
@@ -138,21 +125,9 @@ class AssignedIncidentsViewModel(
     fun updateStatus(
         assignmentId: String,
         status: String,
-        responderId: Int,
-        onResult: (success: Boolean, message: String?) -> Unit = { _, _ -> }
+        responderId: Int
     ) {
-        if (responderId <= 0) {
-            val message = "Responder information is missing."
-            _ui.update { it.copy(actionError = message) }
-            onResult(false, message)
-            return
-        }
-        if (statusUpdateJob?.isActive == true) {
-            val message = "Another assignment update is still in progress."
-            _ui.update { it.copy(actionError = message) }
-            onResult(false, message)
-            return
-        }
+        if (responderId <= 0 || statusUpdateJob?.isActive == true) return
 
         statusUpdateJob = viewModelScope.launch {
             _ui.update { it.copy(actionError = null) }
@@ -164,28 +139,18 @@ class AssignedIncidentsViewModel(
                 )
 
                 if (success) {
-                    // A status mutation must supersede an older in-flight poll;
-                    // otherwise that poll can publish the pre-action status and
-                    // briefly expose the same responder action again.
-                    load(responderId, force = true)
-                    onResult(true, null)
+                    load(responderId)
                 } else {
-                    val message = "The assignment status update was rejected."
                     _ui.update {
-                        it.copy(actionError = message)
+                        it.copy(actionError = "The assignment status update was rejected.")
                     }
-                    onResult(false, message)
                 }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
             } catch (error: Exception) {
-                val message = error.toUserMessage("the assignment status")
                 _ui.update {
                     it.copy(
-                        actionError = message
+                        actionError = error.toUserMessage("the assignment status")
                     )
                 }
-                onResult(false, message)
             }
         }
     }

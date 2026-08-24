@@ -168,6 +168,12 @@ private object QuickTemplateDefaults {
                 "Procedure effective" to "Current procedures were effective; continue reinforcing role assignment and accountability checks."
             )
 
+            "service_review" -> listOf(
+                "Professional response" to "The response was professional, timely, and clearly coordinated.",
+                "Clear communication" to "Responders provided clear updates and explained the next steps effectively.",
+                "Needs improvement" to "Response was completed, but communication and status updates could be improved."
+            )
+
             "resource_request_notes" -> listOf(
                 "Immediate field use" to "Required for immediate field use. Please prioritize available stock and advise the expected release time.",
                 "Replenishment" to "Requested to replenish supplies consumed during incident operations.",

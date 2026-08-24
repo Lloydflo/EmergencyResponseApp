@@ -71,9 +71,8 @@ Canonical type: `private_chat`
       "recipient_id": "42",
       "sender_id": "17",
       "sender_name": "Responder Santos",
-      "thread_id": "pm_17_42",
+      "thread_id": "17_42",
       "message_id": "-Oabc123",
-      "message_type": "text",
       "body": "Unit 12 is approaching from the north entrance."
     },
     "android": {
@@ -84,9 +83,7 @@ Canonical type: `private_chat`
 }
 ```
 
-Required fields: `recipient_id`, `sender_id`, `thread_id`, and `message_id`. `thread_id` must use the canonical `pm_<lower-user-id>_<higher-user-id>` format. Accepted type aliases: `private_message`, `new_private_message`, and `chat_message`.
-
-Set `message_type` to `text`, `image`, `file`, or `audio`. For an audio message, use a neutral body such as `Sent a voice message`; do not place the attachment URL in the notification payload.
+Required fields: `recipient_id`, `sender_id`, `thread_id`, and `message_id`. Accepted type aliases: `private_message`, `new_private_message`, and `chat_message`.
 
 The existing Android sender calls `notify-private-message.php` after the Firebase Realtime Database write succeeds. That endpoint must send this data payload to the recipient's active tokens.
 
@@ -105,7 +102,6 @@ Canonical type: `department_chat`
       "group_name": "Fire Operations",
       "sender_name": "Incident Command",
       "message_id": "9231",
-      "message_type": "text",
       "body": "All units stage at Sector Bravo."
     },
     "android": {
@@ -117,8 +113,6 @@ Canonical type: `department_chat`
 ```
 
 Required fields: `group_id` and `message_id`. `recipient_id` is strongly recommended when sending per member. Accepted type aliases: `department_message`, `group_chat`, and `group_message`.
-
-Set `message_type` to `text`, `image`, `file`, or `audio`. The provided PHP endpoint sends `message_type=audio` with `body=Sent a voice message` for coordination voice notes.
 
 Do not send a department alert back to the sender. Send only to approved group members with active device tokens.
 

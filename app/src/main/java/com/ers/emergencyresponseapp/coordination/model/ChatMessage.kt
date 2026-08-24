@@ -7,7 +7,6 @@ enum class MessageType {
     TEXT,
     IMAGE,   // image attachment — rendered inline in the bubble
     FILE,    // any other file — rendered as a file card in the bubble
-    AUDIO,   // recorded coordination voice note with in-app playback
     SYSTEM   // system / event messages (join, leave, etc.)
 }
 
@@ -40,12 +39,9 @@ data class ChatMessage(
     val status: MessageStatus  = MessageStatus.SENT,
     val reactions: List<MessageReaction> = emptyList(),
 
-    // ── Attachment fields (IMAGE, FILE, and AUDIO messages) ──────────────────
-    val attachmentUri: String? = null,
-    val attachmentName: String? = null,
-    val attachmentMimeType: String? = null,
-    val attachmentSize: Long = 0L,
-
-    // Server-authoritative or recorder-measured duration for voice messages.
-    val audioDurationMs: Long = 0L
+    // ── Attachment fields (IMAGE and FILE messages) ───────────────────────────
+    // Stored as a String so the data class stays serialisation-friendly.
+    // In the UI, pass Uri.parse(attachmentUri) to Coil's AsyncImage.
+    val attachmentUri: String?  = null,   // content:// or file:// URI as string
+    val attachmentName: String? = null    // original filename shown in FILE bubbles
 )

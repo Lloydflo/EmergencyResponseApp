@@ -3,7 +3,7 @@ package com.ers.emergencyresponseapp
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Assignment
+import androidx.compose.material.icons.filled.RateReview
 import androidx.compose.ui.graphics.vector.ImageVector
 
 sealed class BottomNavItem(
@@ -23,7 +23,7 @@ sealed class BottomNavItem(
     )
     object ReviewsFeedback : BottomNavItem(
         route = "reviews_feedback",
-        title = "Reports",
-        icon = Icons.Default.Assignment
+        title = "Reviews",
+        icon = Icons.Default.RateReview
     )
 }

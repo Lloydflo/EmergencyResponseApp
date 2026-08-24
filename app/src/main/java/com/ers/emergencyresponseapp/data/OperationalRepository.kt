@@ -171,6 +171,70 @@ class OperationalRepository(
         )
     }
 
+    suspend fun getIncidentReviews(
+        responderId: Int,
+        limit: Int = 100
+    ): Result<IncidentReviewResult> = runCatching {
+        require(responderId > 0) { "Invalid responder account" }
+
+        val url = endpoint("get-my-incident-reviews.php")
+            .toHttpUrl()
+            .newBuilder()
+            .addQueryParameter("responder_id", responderId.toString())
+            .addQueryParameter("limit", limit.coerceIn(1, 200).toString())
+            .build()
+
+        val json = getJson(url.toString())
+        val summaryJson = json.optJSONObject("summary") ?: JSONObject()
+        val reviewsJson = json.optJSONArray("reviews")
+
+        val reviews = buildList {
+            for (index in 0 until (reviewsJson?.length() ?: 0)) {
+                val item = reviewsJson?.optJSONObject(index) ?: continue
+                add(
+                    IncidentReviewRecord(
+                        id = item.optLong("id"),
+                        incidentId = item.optLong("incident_id"),
+                        referenceNo = item.optString("reference_no"),
+                        incidentType = item.optString("incident_type"),
+                        priority = item.optString("priority"),
+                        locationAddress = item.optString("location_address"),
+                        reviewStatus = item.optString("review_status"),
+                        responseRating = item.optInt("response_rating"),
+                        communicationRating = item.optInt("communication_rating"),
+                        professionalismRating = item.optInt("professionalism_rating"),
+                        outcome = item.optString("outcome"),
+                        reviewText = item.optString("review_text"),
+                        createdAtMillis = item.optLong("created_at_ms")
+                    )
+                )
+            }
+        }
+
+        IncidentReviewResult(
+            summary = IncidentReviewSummary(
+                reviewCount = summaryJson.optInt("review_count"),
+                averageResponseRating = summaryJson.optDouble(
+                    "average_response_rating",
+                    0.0
+                ),
+                averageCommunicationRating = summaryJson.optDouble(
+                    "average_communication_rating",
+                    0.0
+                ),
+                averageProfessionalismRating = summaryJson.optDouble(
+                    "average_professionalism_rating",
+                    0.0
+                ),
+                averageOverallRating = summaryJson.optDouble(
+                    "average_overall_rating",
+                    0.0
+                )
+            ),
+            reviews = reviews
+        )
+    }
+
     suspend fun getRouteAnalytics(
         responderId: Int,
         limit: Int = 50
@@ -317,26 +381,10 @@ class OperationalRepository(
                     json.optBoolean("follow_up_required", false),
             followUpDetails = json.optString("follow_up_details"),
             lessonsLearned = json.optString("lessons_learned"),
-            status = json.optString("workflow_status")
-                .trim()
-                .ifBlank { json.optString("status", "draft") },
+            status = json.optString("status", "draft"),
             reviewerNotes = json.optString("reviewer_notes"),
             createdAtMillis = json.optLong("created_at_ms"),
-            updatedAtMillis = json.optLong("updated_at_ms"),
-            approvedAtMillis = json.optLong("approved_at_ms")
-                .takeIf { it > 0L }
-                ?: json.optLong("reviewed_at_ms"),
-            historyEligibleAtMillis = json.optLong("history_eligible_at_ms"),
-            isInHistory = json.optBoolean("is_history", false),
-            incidentCompletedAtMillis = json.optJSONObject("incident")
-                ?.optLong("completed_at_ms")
-                ?: 0L,
-            incidentCompletionNotes = json.optJSONObject("incident")
-                ?.optString("completion_notes")
-                .orEmpty(),
-            incidentCompletionImagePath = json.optJSONObject("incident")
-                ?.optString("completion_image_path")
-                .orEmpty()
+            updatedAtMillis = json.optLong("updated_at_ms")
         )
 
     private fun JSONObject.optNullableDouble(name: String): Double? {
@@ -407,19 +455,42 @@ data class AfterActionReportRecord(
     val status: String,
     val reviewerNotes: String,
     val createdAtMillis: Long,
-    val updatedAtMillis: Long,
-    val approvedAtMillis: Long,
-    val historyEligibleAtMillis: Long,
-    val isInHistory: Boolean,
-    val incidentCompletedAtMillis: Long,
-    val incidentCompletionNotes: String,
-    val incidentCompletionImagePath: String
+    val updatedAtMillis: Long
 )
 
 data class CommunicationReportRecord(
     val id: Long,
     val status: String,
     val message: String
+)
+
+data class IncidentReviewSummary(
+    val reviewCount: Int,
+    val averageResponseRating: Double,
+    val averageCommunicationRating: Double,
+    val averageProfessionalismRating: Double,
+    val averageOverallRating: Double
+)
+
+data class IncidentReviewRecord(
+    val id: Long,
+    val incidentId: Long,
+    val referenceNo: String,
+    val incidentType: String,
+    val priority: String,
+    val locationAddress: String,
+    val reviewStatus: String,
+    val responseRating: Int,
+    val communicationRating: Int,
+    val professionalismRating: Int,
+    val outcome: String,
+    val reviewText: String,
+    val createdAtMillis: Long
+)
+
+data class IncidentReviewResult(
+    val summary: IncidentReviewSummary,
+    val reviews: List<IncidentReviewRecord>
 )
 
 data class RouteAnalyticsSummary(
