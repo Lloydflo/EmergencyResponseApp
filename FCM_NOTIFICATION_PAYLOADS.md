@@ -143,6 +143,36 @@ Canonical type: `broadcast`
 
 Required field: `broadcast_id`. Recommended fields: `recipient_id`, `incident_id`, `priority`, `title`, and `body`. Accepted type aliases: `emergency_broadcast`, `new_broadcast`, and `operational_broadcast`.
 
+## 5. Dispatcher protocol alert (Emergency Broadcast / Lockdown / Mass Casualty)
+
+Canonical type: `protocol_alert`
+
+```json
+{
+  "message": {
+    "token": "RESPONDER_DEVICE_FCM_TOKEN",
+    "data": {
+      "type": "protocol_alert",
+      "protocol": "lockdown",
+      "alert_id": "5231",
+      "title": "Lockdown Protocol",
+      "body": "🔴 LOCKDOWN\n\nArea:\n\nBarangay Holy Spirit\n\nReason:\n\nArmed suspect...",
+      "priority": "critical"
+    },
+    "android": {
+      "priority": "high",
+      "ttl": "86400s"
+    }
+  }
+}
+```
+
+Required field: `protocol`, one of `broadcast`, `lockdown`, or `mci`. Recommended fields: `alert_id`, `title`, `body`, `priority`.
+
+This is sent to **every** active responder device (`ers_fcm_send_to_all_responders`) whenever a dispatcher fires one of the Dispatch Center quick actions — Emergency Broadcast, Lockdown Protocol, or Mass Casualty. Unlike the other event types, the Android client does not treat this as a routine, swipe-away notification: it also raises a blocking in-app overlay on top of whatever screen the responder is looking at, and the system-tray notification stays (`ongoing`) until the responder acknowledges it in-app. See `CriticalAlertCenter` / `CriticalAlertOverlay` in the Android project.
+
+The companion PHP endpoint is `api/api_app/_protocol_alert.php` (`ers_send_protocol_alert`), called automatically by `api/activity_event.php` whenever a `dispatch_protocol` activity event is logged from `dispatcher/dispatch.php`.
+
 ## Delivery sequence on the PHP server
 
 For each operational event:

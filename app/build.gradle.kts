@@ -13,15 +13,15 @@ android {
         applicationId = "com.ers.emergencyresponseapp"
         minSdk = 23
         targetSdk = 34
-        versionCode = 28
-        versionName = "17.5"
+        versionCode = 31
+        versionName = "17.9"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         buildConfigField(
             "String",
             "BASE_URL",
-            "\"${project.findProperty("BASE_URL") ?: "https://emergency-response.alertaraqc.com/"}\""
+            "\"https://emergency-response.alertaraqc.com/\""
         )
         buildConfigField(
             "String",

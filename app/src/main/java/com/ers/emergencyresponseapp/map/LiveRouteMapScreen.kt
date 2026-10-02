@@ -55,9 +55,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -974,12 +977,13 @@ fun LiveRouteMapScreen(
         }
     }
 
-    val recenterBottomPadding = when {
-        usingAlternativeRoute && isNearDestination -> 300.dp
-        usingAlternativeRoute -> 250.dp
-        isNearDestination -> 230.dp
-        else -> 180.dp
-    }
+    // Measured height of the bottom button/info stack (in px), so the recenter
+    // button can sit just above it — no matter how tall that stack grows (long
+    // street names, wrapped "off nearest road" warnings, alternative-route
+    // buttons appearing/disappearing, larger system font scale, etc).
+    val density = LocalDensity.current
+    var bottomStackHeightPx by remember { mutableIntStateOf(0) }
+    val recenterBottomPadding = with(density) { bottomStackHeightPx.toDp() } + 12.dp
 
     Box(modifier = modifier.fillMaxSize()) {
         AndroidView(
@@ -1066,7 +1070,9 @@ fun LiveRouteMapScreen(
                     text = currentStep.instruction,
                     color = Color.White,
                     fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
 
                 val distanceToManeuver = if (
@@ -1097,7 +1103,10 @@ fun LiveRouteMapScreen(
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .navigationBarsPadding()
-                .padding(bottom = 12.dp),
+                .padding(bottom = 12.dp)
+                .onGloballyPositioned { coordinates ->
+                    bottomStackHeightPx = coordinates.size.height
+                },
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             if (!viewOnly) {
@@ -1226,7 +1235,9 @@ fun LiveRouteMapScreen(
                             Text(
                                 text = destinationAddress ?: "Pinned location",
                                 fontSize = 14.sp,
-                                fontWeight = FontWeight.Medium
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
                             )
                             Text(
                                 text = "Viewing pinned location",
@@ -1297,7 +1308,9 @@ fun LiveRouteMapScreen(
                                             )
                                         } from the nearest road — route shown starts there, not at your exact position",
                                         fontSize = 12.sp,
-                                        color = Color(0xFFB71C1C)
+                                        color = Color(0xFFB71C1C),
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                 }
 
@@ -1310,7 +1323,9 @@ fun LiveRouteMapScreen(
                                             )
                                         } from the nearest road — last stretch isn't shown",
                                         fontSize = 12.sp,
-                                        color = Color(0xFFB71C1C)
+                                        color = Color(0xFFB71C1C),
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                 }
 
@@ -1322,7 +1337,9 @@ fun LiveRouteMapScreen(
                     else -> {
                         Text(
                             text = destinationAddress ?: "Waiting for GPS…",
-                            fontSize = 14.sp
+                            fontSize = 14.sp,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }

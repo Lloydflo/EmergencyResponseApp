@@ -65,6 +65,7 @@ import com.ers.emergencyresponseapp.notification.NotificationNavigation
 import com.ers.emergencyresponseapp.notification.PushTokenManager
 import com.ers.emergencyresponseapp.presence.ResponderPresenceManager
 import com.ers.emergencyresponseapp.ui.components.ConnectivityStatusBanner
+import com.ers.emergencyresponseapp.ui.components.CriticalAlertOverlay
 import com.ers.emergencyresponseapp.ui.theme.EmergencyResponseAppTheme
 import com.ers.emergencyresponseapp.ui.theme.ThemeController
 import kotlinx.coroutines.Job
@@ -103,6 +104,12 @@ class MainActivity : ComponentActivity() {
             }
 
             EmergencyResponseAppTheme(darkTheme = darkMode) {
+                // Mounted once, above the nav host, so a dispatcher protocol
+                // alert (Emergency Broadcast / Lockdown / Mass Casualty) is a
+                // blocking overlay on top of whatever screen is currently
+                // showing — Home, Coordination, the live map, anywhere.
+                CriticalAlertOverlay()
+
                 val navController = rememberNavController()
                 val uiScope = rememberCoroutineScope()
                 val notificationDestination by NotificationNavigation.destination.collectAsState()

@@ -24,4 +24,5 @@
     <!-- shadow is represented as semi-transparent black in Compose; reserved here for reference -->
     <color name="shadow_1">#0D000000</color>
     <color name="notification_teal">#FF4C8A89</color>
+    <color name="notification_critical">#FFD32F2F</color>
 </resources>

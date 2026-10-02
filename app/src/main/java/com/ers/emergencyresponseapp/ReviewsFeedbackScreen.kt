@@ -29,6 +29,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.Comment
 import androidx.compose.material.icons.automirrored.filled.Notes
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
@@ -206,8 +207,13 @@ private data class SavedResourceRequest(
 
 private enum class ReviewHubTab(val label: String, val icon: ImageVector) {
     INCIDENTS("Post-Incident", Icons.Default.Description),
-    RESOURCES("Equipment", Icons.Default.Inventory2)
+    RESOURCES("Equipment", Icons.Default.Inventory2),
+    APPROVED("Approved", Icons.Default.CheckCircle)
 }
+
+/** After-Action Reports become visible under the Approved tab once this much
+ *  time has passed since they were marked Verified/Approved. */
+private const val APPROVED_REPORT_VISIBILITY_DELAY_MILLIS = 24L * 60 * 60 * 1000
 
 private enum class OperationalReportStatus(val label: String, val color: Color) {
     DRAFT("Draft", Color(0xFFB86B12)),
@@ -921,7 +927,7 @@ private fun ReviewCard(
                         contentPadding = PaddingValues(horizontal = 9.dp)
                     ) {
                         Icon(
-                            if (incident.status == ReviewStatus.Pending) Icons.Default.Star else Icons.Default.Visibility,
+                            if (incident.status == ReviewStatus.Pending) Icons.AutoMirrored.Filled.Comment else Icons.Default.Visibility,
                             contentDescription = null,
                             modifier = Modifier.size(16.dp)
                         )
@@ -1946,7 +1952,7 @@ private fun OperationalWorkflowCard(
                     )
                     Spacer(Modifier.width(7.dp))
                     Text(
-                        "Service ratings are feedback. The After-Action Report is the operational record. They are intentionally separate.",
+                        "Service review is feedback text, not a rating. The After-Action Report is the operational record. They are intentionally separate.",
                         color = RFColors.TextSecondary,
                         fontSize = 10.sp,
                         lineHeight = 15.sp
@@ -1982,6 +1988,7 @@ private fun HubTabSwitcher(
     selected: ReviewHubTab,
     pendingIncidents: Int,
     resourceCount: Int,
+    approvedReadyCount: Int,
     onSelect: (ReviewHubTab) -> Unit
 ) {
     Surface(
@@ -1997,7 +2004,11 @@ private fun HubTabSwitcher(
             divider = { HorizontalDivider(color = RFColors.Border) }
         ) {
             ReviewHubTab.entries.forEach { tab ->
-                val count = if (tab == ReviewHubTab.INCIDENTS) pendingIncidents else resourceCount
+                val count = when (tab) {
+                    ReviewHubTab.INCIDENTS -> pendingIncidents
+                    ReviewHubTab.RESOURCES -> resourceCount
+                    ReviewHubTab.APPROVED -> approvedReadyCount
+                }
                 Tab(
                     selected = selected == tab,
                     onClick = { onSelect(tab) },
@@ -3027,7 +3038,15 @@ fun ReviewsFeedbackScreen() {
     val submittedReportCount = afterActionReports.count { it.status == OperationalReportStatus.SUBMITTED }
     val verifiedReportCount = afterActionReports.count { it.status == OperationalReportStatus.VERIFIED }
     val serviceReviewCount = incidentReviewSummary?.reviewCount ?: 0
-    val averageServiceRating = incidentReviewSummary?.averageOverallRating ?: 0.0
+
+    // Reports move into the "Approved" tab once they've been Verified/Approved
+    // for at least APPROVED_REPORT_VISIBILITY_DELAY_MILLIS.
+    val approvedReports = remember(afterActionReports) {
+        val cutoff = System.currentTimeMillis() - APPROVED_REPORT_VISIBILITY_DELAY_MILLIS
+        afterActionReports
+            .filter { it.status == OperationalReportStatus.VERIFIED && it.updatedAt in 1..cutoff }
+            .sortedByDescending { it.updatedAt }
+    }
 
     suspend fun submitServiceReview(
         incident: ReviewableIncident,
@@ -3190,11 +3209,7 @@ fun ReviewsFeedbackScreen() {
                             } else {
                                 "$serviceReviewCount submitted service reviews"
                             },
-                            value = if (serviceReviewCount > 0) {
-                                "${String.format(Locale.getDefault(), "%.1f", averageServiceRating)} / 5"
-                            } else {
-                                "No ratings"
-                            },
+                            value = "$serviceReviewCount",
                             modifier = Modifier.weight(1f)
                         )
                     }
@@ -3206,6 +3221,7 @@ fun ReviewsFeedbackScreen() {
                     selected = hubTab,
                     pendingIncidents = pendingCount,
                     resourceCount = visibleResourceRequests.size,
+                    approvedReadyCount = approvedReports.size,
                     onSelect = { hubTab = it }
                 )
             }
@@ -3326,7 +3342,7 @@ fun ReviewsFeedbackScreen() {
                         }
                     }
                 }
-            } else {
+            } else if (hubTab == ReviewHubTab.RESOURCES) {
                 item {
                     ResourceRequestsPanel(
                         requests = visibleResourceRequests,
@@ -3337,6 +3353,119 @@ fun ReviewsFeedbackScreen() {
                         onSelect = { selectedRequest = it },
                         onCancel = { requestToCancel = it }
                     )
+                }
+            } else {
+                // ReviewHubTab.APPROVED — reports move here once they've been
+                // Verified/Approved for at least 24 hours.
+                if (approvedReports.isEmpty()) {
+                    item {
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                            shape = RoundedCornerShape(20.dp),
+                            colors = CardDefaults.cardColors(containerColor = RFColors.Bg),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
+                        ) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 34.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(9.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier.size(58.dp).clip(RoundedCornerShape(19.dp)).background(tonalSurface(RFColors.Primary)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = RFColors.Primary, modifier = Modifier.size(29.dp))
+                                }
+                                Text(
+                                    "No approved reports yet",
+                                    color = RFColors.Text,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp,
+                                    textAlign = TextAlign.Center
+                                )
+                                Text(
+                                    "Approved after-action reports move here 24 hours after approval.",
+                                    color = RFColors.TextSecondary,
+                                    fontSize = 11.sp,
+                                    lineHeight = 16.sp,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    items(
+                        items = approvedReports,
+                        key = { it.incidentId }
+                    ) { report ->
+                        Box(modifier = Modifier.padding(horizontal = 12.dp)) {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(containerColor = RFColors.Bg),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
+                            ) {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth().padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            "${report.incidentType} • #${report.incidentId}",
+                                            color = RFColors.Text,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 14.sp
+                                        )
+                                        Surface(
+                                            color = tonalSurface(RFColors.Success),
+                                            shape = RoundedCornerShape(999.dp)
+                                        ) {
+                                            Text(
+                                                "Approved",
+                                                color = RFColors.Success,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        SimpleDateFormat("MMM dd, yyyy • hh:mm a", Locale.getDefault())
+                                            .format(Date(report.updatedAt)),
+                                        color = RFColors.TextSecondary,
+                                        fontSize = 11.sp
+                                    )
+                                    if (report.incidentSummary.isNotBlank()) {
+                                        Text(
+                                            report.incidentSummary,
+                                            color = RFColors.Text.copy(alpha = 0.85f),
+                                            fontSize = 12.sp,
+                                            maxLines = 3,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    OutlinedButton(
+                                        onClick = {
+                                            allIncidents.firstOrNull {
+                                                normalizedIncidentId(it.id) == report.incidentId
+                                            }?.let { reportTarget = it }
+                                        },
+                                        modifier = Modifier.align(Alignment.End),
+                                        shape = RoundedCornerShape(10.dp),
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, RFColors.Border)
+                                    ) {
+                                        Icon(Icons.Default.Assignment, contentDescription = null, modifier = Modifier.size(14.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("View report", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             }
@@ -3454,7 +3583,7 @@ fun ReviewsFeedbackScreen() {
             title = { Text("Submit Service Review?", color = RFColors.Text, fontWeight = FontWeight.Bold) },
             text = {
                 Text(
-                    "This sends ratings and feedback for verification. It does not replace the operational After-Action Report.",
+                    "This sends your feedback for verification. It does not replace the operational After-Action Report.",
                     color = RFColors.TextSecondary,
                     fontSize = 13.sp,
                     lineHeight = 19.sp
@@ -3466,10 +3595,6 @@ fun ReviewsFeedbackScreen() {
                         if (isSubmittingReview) return@Button
                         val fullReview = """
                             Outcome: $selectedOutcome
-
-                            Response Time Rating: $responseRating/5
-                            Communication Rating: $communicationRating/5
-                            Professionalism Rating: $professionalismRating/5
 
                             Service Feedback:
                             ${reviewText.value.trim()}
@@ -3670,19 +3795,12 @@ fun ReviewsFeedbackScreen() {
                                     Icon(Icons.Default.Info, contentDescription = null, tint = RFColors.Info, modifier = Modifier.size(17.dp))
                                     Spacer(Modifier.width(7.dp))
                                     Text(
-                                        "Rate response quality and communication here. Operational actions, handoff, safety concerns, and follow-up belong in the After-Action Report.",
+                                        "Feedback here covers communication and coordination quality. Operational actions, handoff, safety concerns, and follow-up belong in the After-Action Report.",
                                         color = RFColors.TextSecondary,
                                         fontSize = 10.sp,
                                         lineHeight = 15.sp
                                     )
                                 }
-                            }
-                        }
-                        item {
-                            SectionCard(title = "Service ratings", icon = Icons.Default.Star) {
-                                RatingSelector("Response time", responseRating) { responseRating = it }
-                                RatingSelector("Communication", communicationRating) { communicationRating = it }
-                                RatingSelector("Professionalism", professionalismRating) { professionalismRating = it }
                             }
                         }
                         item {
@@ -3933,35 +4051,6 @@ fun ReviewsFeedbackScreen() {
                 requestRefreshKey++
             }
         )
-    }
-}
-
-@Composable
-private fun RatingSelector(
-    title: String,
-    rating: Int,
-    onRatingChange: (Int) -> Unit
-) {
-    Column {
-        Text(
-            title,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = RFColors.TextSecondary
-        )
-
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            (1..5).forEach { value ->
-                Icon(
-                    imageVector = if (value <= rating) Icons.Default.Star else Icons.Default.StarBorder,
-                    contentDescription = null,
-                    tint = if (value <= rating) Color(0xFFFFB300) else RFColors.Border,
-                    modifier = Modifier
-                        .size(28.dp)
-                        .clickable { onRatingChange(value) }
-                )
-            }
-        }
     }
 }
 

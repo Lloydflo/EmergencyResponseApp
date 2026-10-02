@@ -3,6 +3,9 @@ package com.ers.emergencyresponseapp.messaging
 import android.content.Context
 import com.ers.emergencyresponseapp.AppScreenTracker
 import com.ers.emergencyresponseapp.AppState
+import com.ers.emergencyresponseapp.alert.CriticalAlert
+import com.ers.emergencyresponseapp.alert.CriticalAlertCenter
+import com.ers.emergencyresponseapp.alert.ProtocolAlertKind
 import com.ers.emergencyresponseapp.notification.AppNotificationManager
 import com.ers.emergencyresponseapp.notification.PushTokenManager
 import com.google.firebase.messaging.FirebaseMessagingService
@@ -20,7 +23,8 @@ private val SUPPORTED_NOTIFICATION_TYPES = setOf(
     "department_chat", "department_message", "group_chat", "group_message",
     "broadcast", "emergency_broadcast", "new_broadcast", "operational_broadcast",
     "assigned_incident", "new_assigned_incident", "incident_assigned",
-    "new_assignment", "dispatch_assignment", "assignment"
+    "new_assignment", "dispatch_assignment", "assignment",
+    "protocol_alert", "dispatch_protocol", "dispatch_protocol_alert"
 )
 
 /**
@@ -148,6 +152,47 @@ class EmergencyFirebaseMessagingService : FirebaseMessagingService() {
                         .ifBlank { message.notification?.title.orEmpty() },
                     body = firstNonBlank(data, "body", "message", "text", "description")
                         .ifBlank { message.notification?.body.orEmpty() }
+                )
+            }
+
+            "protocol_alert", "dispatch_protocol", "dispatch_protocol_alert" -> {
+                val protocolRaw = firstNonBlank(data, "protocol", "protocol_kind")
+                    .lowercase(Locale.US)
+                val kind = when (protocolRaw) {
+                    "lockdown" -> ProtocolAlertKind.LOCKDOWN
+                    "mci", "mass_casualty", "mass_casualty_incident" -> ProtocolAlertKind.MASS_CASUALTY
+                    else -> ProtocolAlertKind.BROADCAST
+                }
+                val alertId = firstNonBlank(data, "alert_id", "protocol_id")
+                    .ifBlank { message.messageId.orEmpty() }
+                    .ifBlank { message.sentTime.toString() }
+                val eventKey = "protocol:$alertId"
+                val title = firstNonBlank(data, "title", "protocol_label")
+                    .ifBlank { message.notification?.title.orEmpty() }
+                val body = firstNonBlank(data, "body", "message", "text")
+                    .ifBlank { message.notification?.body.orEmpty() }
+                val priority = firstNonBlank(data, "priority", "severity").ifBlank { "critical" }
+
+                // Pushed into the in-memory queue first so the blocking overlay
+                // appears the instant the app is in the foreground, regardless
+                // of which screen the responder is currently viewing.
+                CriticalAlertCenter.push(
+                    CriticalAlert(
+                        id = alertId,
+                        kind = kind,
+                        title = title,
+                        message = body,
+                        priority = priority,
+                        receivedAtMillis = System.currentTimeMillis()
+                    )
+                )
+
+                AppNotificationManager.showProtocolAlert(
+                    context = applicationContext,
+                    eventKey = eventKey,
+                    protocolKind = protocolRaw,
+                    title = title,
+                    body = body
                 )
             }
 

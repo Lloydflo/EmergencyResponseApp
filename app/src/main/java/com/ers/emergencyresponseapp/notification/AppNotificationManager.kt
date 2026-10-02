@@ -26,11 +26,13 @@ object AppNotificationManager {
     const val CHANNEL_DEPARTMENT_CHAT = "department_chat_messages"
     const val CHANNEL_BROADCAST = "emergency_broadcasts"
     const val CHANNEL_ASSIGNED_INCIDENT = "assigned_incident_alerts"
+    const val CHANNEL_PROTOCOL_ALERT = "dispatch_protocol_alerts"
     private const val LEGACY_INCIDENT_CHANNEL = "emergency_incidents"
 
     private val CHAT_VIBRATION = longArrayOf(0, 180, 100, 260)
     private val BROADCAST_VIBRATION = longArrayOf(0, 500, 180, 500, 180, 700)
     private val ASSIGNMENT_VIBRATION = longArrayOf(0, 650, 180, 350, 180, 650)
+    private val PROTOCOL_VIBRATION = longArrayOf(0, 800, 300, 800, 300, 800, 300, 800)
 
     fun createChannels(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -77,6 +79,18 @@ object AppNotificationManager {
                     enableVibration(true)
                     vibrationPattern = ASSIGNMENT_VIBRATION
                     lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                },
+                NotificationChannel(
+                    CHANNEL_PROTOCOL_ALERT,
+                    "Dispatch protocol alerts",
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "Emergency Broadcast, Lockdown Protocol, and Mass " +
+                            "Casualty alerts issued by the dispatch center"
+                    enableVibration(true)
+                    vibrationPattern = PROTOCOL_VIBRATION
+                    lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                    setBypassDnd(true)
                 }
             )
         )
@@ -257,6 +271,57 @@ object AppNotificationManager {
             .build()
 
         NotificationManagerCompat.from(context).notify(eventKey.hashCode(), notification)
+    }
+
+    /**
+     * Emergency Broadcast, Lockdown Protocol, and Mass Casualty alerts issued
+     * from the Dispatch Center's quick actions. These are command-level
+     * alerts: the notification is `ongoing` (not swipe-dismissible) and stays
+     * in the tray until [clearAlert] is called, which happens only after the
+     * responder acknowledges the matching in-app overlay
+     * (see `CriticalAlertOverlay` / `CriticalAlertCenter`).
+     */
+    fun showProtocolAlert(
+        context: Context,
+        eventKey: String,
+        protocolKind: String,
+        title: String,
+        body: String
+    ) {
+        if (!canNotify(context) || !claimEvent(context, eventKey)) return
+        createChannels(context)
+
+        val intent = baseIntent(context)
+        val notificationTitle = title.ifBlank {
+            when (protocolKind) {
+                "lockdown" -> "Lockdown Protocol"
+                "mci" -> "Mass Casualty Incident"
+                else -> "Emergency Broadcast"
+            }
+        }
+        val content = body.ifBlank { "Open the app immediately for full details." }.take(900)
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_PROTOCOL_ALERT)
+            .setSmallIcon(R.drawable.ic_stat_emergency)
+            .setColor(ContextCompat.getColor(context, R.color.notification_critical))
+            .setContentTitle("\u26A0 $notificationTitle")
+            .setContentText(content)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(content))
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setVibrate(PROTOCOL_VIBRATION)
+            .setOngoing(true)
+            .setAutoCancel(false)
+            .setContentIntent(pendingIntent(context, eventKey, intent))
+            .build()
+
+        NotificationManagerCompat.from(context).notify(eventKey.hashCode(), notification)
+    }
+
+    /** Cancels a still-showing system notification, e.g. once acknowledged in-app. */
+    fun clearAlert(context: Context, eventKey: String) {
+        NotificationManagerCompat.from(context).cancel(eventKey.hashCode())
     }
 
     private fun baseIntent(context: Context): Intent =

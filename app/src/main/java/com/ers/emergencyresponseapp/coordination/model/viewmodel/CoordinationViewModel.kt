@@ -676,6 +676,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                     val messageType = when (typeText.uppercase()) {
                         "IMAGE" -> MessageType.IMAGE
                         "FILE" -> MessageType.FILE
+                        "AUDIO" -> MessageType.AUDIO
                         else -> MessageType.TEXT
                     }
 
@@ -702,7 +703,10 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                             status = messageStatus,   // <-- was hardcoded MessageStatus.SENT
                             isOwn = senderId == myUserId || senderName.equals(myUserName, ignoreCase = true),
                             attachmentUri = item.optString("attachmentUri").takeIf { it.isNotBlank() && it != "null" },
-                            attachmentName = item.optString("attachmentName").takeIf { it.isNotBlank() && it != "null" }
+                            attachmentName = item.optString("attachmentName").takeIf { it.isNotBlank() && it != "null" },
+                            attachmentMimeType = item.optString("attachmentMimeType").takeIf { it.isNotBlank() && it != "null" },
+                            attachmentSize = item.optLong("attachmentSize", -1L).takeIf { it >= 0L },
+                            audioDurationMs = item.optLong("audioDurationMs", -1L).takeIf { it >= 0L }
                         )
                     )
                 }
@@ -806,11 +810,15 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                     val msgType = when (typeText.uppercase()) {
                         "IMAGE" -> MessageType.IMAGE
                         "FILE" -> MessageType.FILE
+                        "AUDIO" -> MessageType.AUDIO
                         else -> MessageType.TEXT
                     }
 
                     val attachmentUri = child.child("attachmentUri").getValue(String::class.java)
                     val attachmentName = child.child("attachmentName").getValue(String::class.java)
+                    val attachmentMimeType = child.child("attachmentMimeType").getValue(String::class.java)
+                    val attachmentSize = child.child("attachmentSize").getValue(Long::class.java)
+                    val audioDurationMs = child.child("audioDurationMs").getValue(Long::class.java)
                     val statusText = child.child("status").getValue(String::class.java) ?: "sent"
 
                     val messageStatus = when (statusText.lowercase()) {
@@ -846,6 +854,9 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                             isOwn = senderId == myUserId,
                             attachmentUri = attachmentUri,
                             attachmentName = attachmentName,
+                            attachmentMimeType = attachmentMimeType,
+                            attachmentSize = attachmentSize,
+                            audioDurationMs = audioDurationMs,
                             reactions = reactions
                         )
                     )
@@ -934,6 +945,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
             !message.text.isNullOrBlank() -> message.text!!.trim()
             message.type == MessageType.IMAGE -> "Sent an image"
             message.type == MessageType.FILE -> "Sent a file"
+            message.type == MessageType.AUDIO -> "Sent a voice message"
             else -> "New message"
         }
 
@@ -1051,6 +1063,7 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
             preview.contains("ERS_COORDINATION_TIP_") -> "Incident tip shared"
             messageType.equals("image", ignoreCase = true) -> "Sent an image"
             messageType.equals("file", ignoreCase = true) -> "Sent a file: ${preview.take(100)}"
+            messageType.equals("audio", ignoreCase = true) -> "Sent a voice message"
             else -> preview.trim().take(240)
         }
 
@@ -1394,6 +1407,185 @@ class CoordinationViewModel(application: Application) : AndroidViewModel(applica
                 restoreLocalThreadPreview(threadId, previousPreview)
                 latestNotification.value =
                     "Attachment message was not sent: ${error.localizedMessage ?: "Firebase write failed"}"
+            }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    //  VOICE MESSAGE SENDING
+    // ─────────────────────────────────────────────────────────────────────────
+    fun sendVoiceMessage(
+        meId: String,
+        peer: ResponderBrief,
+        recording: com.ers.emergencyresponseapp.coordination.voice.VoiceRecording
+    ) {
+        val threadId = buildChatId(meId, peer.id)
+        val uri = Uri.fromFile(recording.file)
+
+        uploadFileToServer(
+            uri = uri,
+            fileName = recording.file.name,
+            onSuccess = { fileUrl, uploadedName, fileSize, mimeType ->
+                pushVoiceMessageToFirebase(
+                    threadId = threadId,
+                    senderId = meId,
+                    senderName = myUserName.ifBlank { meId },
+                    role = myRole,
+                    recipientId = peer.id,
+                    fileUrl = fileUrl,
+                    fileName = uploadedName,
+                    fileSize = fileSize,
+                    mimeType = mimeType,
+                    durationMs = recording.durationMs
+                )
+                recording.file.delete()
+            },
+            onError = { error ->
+                recording.file.delete()
+                latestNotification.value = "Voice message upload failed: $error"
+            }
+        )
+    }
+
+    fun sendVoiceMessageToDepartment(
+        meId: String,
+        department: String,
+        recording: com.ers.emergencyresponseapp.coordination.voice.VoiceRecording
+    ) {
+        val groupId = department.toIntOrNull() ?: return
+        val uri = Uri.fromFile(recording.file)
+
+        uploadFileToServer(
+            uri = uri,
+            fileName = recording.file.name,
+            onSuccess = { fileUrl, uploadedName, fileSize, mimeType ->
+                sendGroupVoiceToSql(
+                    groupId = groupId,
+                    senderUserId = meId,
+                    fileUrl = fileUrl,
+                    fileName = uploadedName,
+                    fileSize = fileSize,
+                    mimeType = mimeType,
+                    durationMs = recording.durationMs
+                )
+                recording.file.delete()
+            },
+            onError = { error ->
+                recording.file.delete()
+                latestNotification.value = "Voice message upload failed: $error"
+            }
+        )
+    }
+
+    private fun sendGroupVoiceToSql(
+        groupId: Int,
+        senderUserId: String,
+        fileUrl: String,
+        fileName: String,
+        fileSize: Long,
+        mimeType: String,
+        durationMs: Long
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val formBody = okhttp3.FormBody.Builder()
+                    .add("group_id", groupId.toString())
+                    .add("sender_user_id", senderUserId)
+                    .add("file_url", fileUrl)
+                    .add("file_name", fileName)
+                    .add("mime_type", mimeType)
+                    .add("file_size", fileSize.coerceAtLeast(0L).toString())
+                    .add("is_image", "0")
+                    .add("message_type", "AUDIO")
+                    .add("audio_duration_ms", durationMs.coerceAtLeast(0L).toString())
+                    .build()
+
+                val request = Request.Builder()
+                    .url(apiUrl("send-interagency-group-attachment.php"))
+                    .post(formBody)
+                    .build()
+
+                val json = executeJson(request)
+
+                if (json.optBoolean("success")) {
+                    loadInteragencyGroupMessages(groupId)
+                } else {
+                    launch(Dispatchers.Main) {
+                        latestNotification.value = json.optString("message", "Failed to send voice message")
+                    }
+                }
+            } catch (e: Exception) {
+                launch(Dispatchers.Main) {
+                    latestNotification.value = "Failed to send voice message: ${e.message}"
+                }
+            }
+        }
+    }
+
+    private fun pushVoiceMessageToFirebase(
+        threadId: String,
+        senderId: String,
+        senderName: String,
+        role: String,
+        recipientId: String,
+        fileUrl: String,
+        fileName: String,
+        fileSize: Long,
+        mimeType: String,
+        durationMs: Long
+    ) {
+        val now = System.currentTimeMillis()
+        val messageId = db.child("messages").child(threadId).push().key
+        if (messageId.isNullOrBlank()) {
+            latestNotification.value = "Unable to create voice message."
+            return
+        }
+
+        val previewText = "🎤 Voice message"
+        val data = mapOf(
+            "senderId" to senderId,
+            "senderName" to senderName,
+            "role" to role,
+            "text" to previewText,
+            "type" to "AUDIO",
+            "attachmentUri" to fileUrl,
+            "attachmentName" to fileName,
+            "attachmentSize" to fileSize.coerceAtLeast(0L),
+            "attachmentMimeType" to mimeType,
+            "audioDurationMs" to durationMs.coerceAtLeast(0L),
+            "createdAt" to now,
+            "status" to "sent"
+        )
+
+        val previousPreview = directThreadPreviewByThreadId[threadId]
+        updateLocalThreadPreview(threadId, previewText, now)
+
+        val updates: Map<String, Any?> = mapOf(
+            "messages/$threadId/$messageId" to data,
+            "threads/$threadId/lastMessage" to previewText,
+            "threads/$threadId/lastMessageTime" to now,
+            "threads/$threadId/lastSenderId" to senderId,
+            "threads/$threadId/lastSenderName" to senderName,
+            "threads/$threadId/participants/$senderId" to true,
+            "threads/$threadId/participants/$recipientId" to true
+        )
+
+        db.updateChildren(updates)
+            .addOnSuccessListener {
+                incrementPrivateUnread(recipientId, threadId)
+                dispatchPrivatePush(
+                    senderId = senderId,
+                    recipientId = recipientId,
+                    threadId = threadId,
+                    messageId = messageId,
+                    senderName = senderName,
+                    messageType = "audio",
+                    preview = previewText
+                )
+            }
+            .addOnFailureListener { error ->
+                restoreLocalThreadPreview(threadId, previousPreview)
+                latestNotification.value =
+                    "Voice message was not sent: ${error.localizedMessage ?: "Firebase write failed"}"
             }
     }
 

@@ -26,6 +26,9 @@ object ResponderWorkflowPolicy {
         IncidentStatus.ON_SCENE -> IncidentPrimaryAction.COMPLETE_INCIDENT
         IncidentStatus.RESOLVED,
         IncidentStatus.UNKNOWN -> IncidentPrimaryAction.NONE
+
+        IncidentStatus.PENDING_REVIEW -> TODO()
+        IncidentStatus.SUBMITTED_REVIEW -> TODO()
     }
 
     fun hasValidCoordinates(latitude: Double?, longitude: Double?): Boolean {

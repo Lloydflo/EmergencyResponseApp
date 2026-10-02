@@ -57,6 +57,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -66,6 +67,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Done
@@ -73,6 +75,7 @@ import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.LocalHospital
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -146,6 +149,7 @@ import com.ers.emergencyresponseapp.ui.components.AppPullToRefresh
 import com.ers.emergencyresponseapp.features.assigned.toDomain
 import com.ers.emergencyresponseapp.home.Incident
 import com.ers.emergencyresponseapp.home.IncidentPriority
+import com.ers.emergencyresponseapp.home.IncidentStatus
 import com.ers.emergencyresponseapp.home.IncidentType
 import com.ers.emergencyresponseapp.home.composables.BackupRequest
 import com.ers.emergencyresponseapp.home.composables.DepartmentSelectionDialog
@@ -465,7 +469,13 @@ private fun AssignedIncidentEmptyState(
     requestCompleted: Boolean,
     serverError: String?,
     lastSyncMillis: Long?,
-    onRetry: () -> Unit
+    onRetry: () -> Unit,
+    idleIcon: ImageVector = Icons.Default.Notifications,
+    checkingTitle: String = "Checking for incident assignments",
+    checkingMessage: String = "Contacting dispatch and verifying your latest assignment status.",
+    idleTitle: String = "Waiting for an incident assignment",
+    idleMessage: String = "No active assignment yet. New incidents will appear here automatically when dispatch assigns your unit.",
+    idleStatusText: String = "Online • Listening for dispatch"
 ) {
     val isOffline = networkStatus == ConnectivityStatus.Offline
     val hasServerError = !isOffline && !serverError.isNullOrBlank()
@@ -504,13 +514,13 @@ private fun AssignedIncidentEmptyState(
     val icon = when {
         isOffline -> Icons.Default.CloudOff
         hasServerError -> Icons.Default.Warning
-        else -> Icons.Default.Notifications
+        else -> idleIcon
     }
     val title = when {
         isOffline -> "You’re offline"
         hasServerError -> "Dispatch service unavailable"
-        isChecking -> "Checking for incident assignments"
-        else -> "Waiting for an incident assignment"
+        isChecking -> checkingTitle
+        else -> idleTitle
     }
     val message = when {
         isOffline ->
@@ -520,16 +530,16 @@ private fun AssignedIncidentEmptyState(
             "Your internet connection is active, but the dispatch server did not respond. Your last known information remains visible."
 
         isChecking ->
-            "Contacting dispatch and verifying your latest assignment status."
+            checkingMessage
 
         else ->
-            "No active assignment yet. New incidents will appear here automatically when dispatch assigns your unit."
+            idleMessage
     }
     val statusText = when {
         isOffline -> "Offline • ${formatLastSyncLabel(lastSyncMillis)}"
         hasServerError -> "Unable to sync • ${formatLastSyncLabel(lastSyncMillis)}"
         isChecking -> "Checking dispatch…"
-        else -> "Online • Listening for dispatch"
+        else -> idleStatusText
     }
     val statusSurface = when {
         isOffline -> AppColors.DangerSurface
@@ -715,6 +725,16 @@ private fun AssignedActionButtons(
     onNavigateStatusUpdate: (Incident) -> Unit
 ) {
     val completeColor = if (ThemeController.isDarkMode.value) Color(0xFF81C784) else Color(0xFF2E7D32)
+    val onSceneColor = if (ThemeController.isDarkMode.value) Color(0xFF64B5F6) else Color(0xFF1565C0)
+
+    // Real-time gating: the responder can only report On Scene once GPS says
+    // they're actually near the incident (see onSceneLocationCallback), and
+    // can only Complete/Mark Done once On Scene has been confirmed by the
+    // server. This mirrors the live map's own arrival check so the panel can
+    // see the same "navigate → arrive → on scene → complete" flow on Home.
+    val isConfirmedOnScene = inc.status == IncidentStatus.ON_SCENE
+    val canReportOnScene = networkAvailable && onSceneEnabled && !isConfirmedOnScene
+    val canCompleteIncident = networkAvailable && isConfirmedOnScene
 
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -768,14 +788,66 @@ private fun AssignedActionButtons(
             Text("Navigate to Incident", fontWeight = FontWeight.SemiBold)
         }
 
+        if (isConfirmedOnScene) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(onSceneColor.copy(alpha = 0.10f), RoundedCornerShape(14.dp))
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = onSceneColor,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "On scene confirmed",
+                    color = onSceneColor,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        } else {
+            OutlinedButton(
+                enabled = canReportOnScene,
+                onClick = { sendOnSceneReport(inc) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp),
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(1.dp, onSceneColor.copy(alpha = if (canReportOnScene) 0.65f else 0.25f)),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = onSceneColor
+                )
+            ) {
+                Icon(Icons.Default.MyLocation, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("On Scene", fontWeight = FontWeight.SemiBold)
+            }
+            if (networkAvailable && !onSceneEnabled) {
+                Text(
+                    text = "Get near the incident location — this unlocks automatically " +
+                            "from your live GPS position.",
+                    modifier = Modifier.fillMaxWidth(),
+                    color = AppColors.TextSecondary,
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+
         OutlinedButton(
-            enabled = networkAvailable,
+            enabled = canCompleteIncident,
             onClick = { openMarkDone(inc) },
             modifier = Modifier
                 .fillMaxWidth()
                 .height(48.dp),
             shape = RoundedCornerShape(14.dp),
-            border = BorderStroke(1.dp, completeColor.copy(alpha = 0.65f)),
+            border = BorderStroke(1.dp, completeColor.copy(alpha = if (canCompleteIncident) 0.65f else 0.25f)),
             colors = ButtonDefaults.outlinedButtonColors(
                 contentColor = completeColor
             )
@@ -783,6 +855,18 @@ private fun AssignedActionButtons(
             Icon(Icons.Default.Done, contentDescription = null)
             Spacer(Modifier.width(6.dp))
             Text("Complete Incident", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        }
+
+        if (networkAvailable && !isConfirmedOnScene) {
+            Text(
+                text = "Report On Scene first — Complete Incident unlocks once your " +
+                        "arrival is confirmed.",
+                modifier = Modifier.fillMaxWidth(),
+                color = AppColors.TextSecondary,
+                fontSize = 11.sp,
+                lineHeight = 15.sp,
+                textAlign = TextAlign.Center
+            )
         }
 
         if (!networkAvailable) {
@@ -1980,7 +2064,15 @@ fun HomeScreen(
                 .remove("pending_en_route_incident_id")
                 .commit()
 
-            assignedVm.load(responderId)
+            // NOTE: do not call assignedVm.load(responderId) here. updateStatus()
+            // above already reloads the assigned list itself once the server
+            // confirms the "on_scene" status. Calling load() again immediately,
+            // before that PUT finishes, used to race it: this early call could
+            // grab assignedLoadJob first and fetch the *old* status, and since
+            // load() no-ops while a job is already active, updateStatus()'s own
+            // (correct, post-confirmation) reload would then get silently
+            // dropped — leaving "On Scene"/"Complete Incident" stuck locked even
+            // after the server had actually recorded the arrival.
             assignedVm.loadActive(responderId)
             scope.launch {
                 try {
@@ -2175,6 +2267,15 @@ fun HomeScreen(
             Toast.makeText(
                 context,
                 "You’re offline. Reconnect before requesting backup.",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
+        if (displayedAssignedDtos.isEmpty()) {
+            Toast.makeText(
+                context,
+                "You need an assigned incident before requesting backup",
                 Toast.LENGTH_SHORT
             ).show()
             return
@@ -3201,8 +3302,18 @@ fun HomeScreen(
                             // Action buttons row
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Button(
-                                    enabled = isNetworkAvailable,
-                                    onClick = { showDepartmentSelection = true },
+                                    enabled = isNetworkAvailable && displayedAssignedDtos.isNotEmpty(),
+                                    onClick = {
+                                        if (displayedAssignedDtos.isEmpty()) {
+                                            Toast.makeText(
+                                                context,
+                                                "You need an assigned incident before requesting backup",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        } else {
+                                            showDepartmentSelection = true
+                                        }
+                                    },
                                     modifier = Modifier.weight(1f).height(38.dp),
                                     shape = RoundedCornerShape(10.dp),
                                     contentPadding = PaddingValues(horizontal = 8.dp),
@@ -3433,106 +3544,22 @@ fun HomeScreen(
                             }
                         }
                     } else if (activeListVisible.isEmpty()) {
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp),
-                            shape = RoundedCornerShape(22.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = AppColors.CardBg
-                            ),
-                            elevation = CardDefaults.cardElevation(2.dp),
-                            border = BorderStroke(
-                                1.dp,
-                                AppColors.Primary.copy(alpha = 0.16f)
-                            )
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 22.dp, vertical = 28.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(58.dp)
-                                        .clip(RoundedCornerShape(18.dp))
-                                        .background(AppColors.Primary.copy(alpha = 0.10f)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = when {
-                                            networkStatus == ConnectivityStatus.Offline -> Icons.Default.CloudOff
-                                            !assignedUi.activeError.isNullOrBlank() -> Icons.Default.Warning
-                                            else -> Icons.Default.Done
-                                        },
-                                        contentDescription = null,
-                                        tint = when {
-                                            networkStatus == ConnectivityStatus.Offline -> AppColors.DangerText
-                                            !assignedUi.activeError.isNullOrBlank() -> AppColors.DispatchText
-                                            else -> AppColors.Primary
-                                        },
-                                        modifier = Modifier.size(32.dp)
-                                    )
-                                }
-
-                                Spacer(Modifier.height(14.dp))
-
-                                Text(
-                                    text = when {
-                                        networkStatus == ConnectivityStatus.Offline -> "Active incidents unavailable offline"
-                                        !assignedUi.activeError.isNullOrBlank() -> "Unable to refresh active incidents"
-                                        else -> "No active incidents"
-                                    },
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = AppColors.Text
-                                )
-
-                                Spacer(Modifier.height(6.dp))
-
-                                Text(
-                                    text = when {
-                                        networkStatus == ConnectivityStatus.Offline ->
-                                            "Reconnect to verify whether other incidents are currently active."
-                                        !assignedUi.activeError.isNullOrBlank() ->
-                                            "The dispatch server did not respond. Try again when the service is available."
-                                        else ->
-                                            "Other assigned incidents will appear here for awareness."
-                                    },
-                                    fontSize = 13.sp,
-                                    color = AppColors.TextSecondary,
-                                    textAlign = TextAlign.Center
-                                )
-
-                                Spacer(Modifier.height(16.dp))
-
-                                Surface(
-                                    color = when {
-                                        networkStatus == ConnectivityStatus.Offline -> AppColors.DangerSurface
-                                        !assignedUi.activeError.isNullOrBlank() -> AppColors.DispatchSurface
-                                        else -> AppColors.Primary.copy(alpha = 0.08f)
-                                    },
-                                    shape = RoundedCornerShape(999.dp)
-                                ) {
-                                    Text(
-                                        text = when {
-                                            networkStatus == ConnectivityStatus.Offline -> "Offline • ${formatLastSyncLabel(activeLastSyncMillis)}"
-                                            !assignedUi.activeError.isNullOrBlank() -> "Unable to sync • ${formatLastSyncLabel(activeLastSyncMillis)}"
-                                            else -> "Monitoring dispatch updates"
-                                        },
-                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
-                                        color = when {
-                                            networkStatus == ConnectivityStatus.Offline -> AppColors.DangerText
-                                            !assignedUi.activeError.isNullOrBlank() -> AppColors.DispatchText
-                                            else -> AppColors.Primary
-                                        },
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                }
-                            }
-                        }
+                        // Same animated "waiting/checking" empty state used for Assigned
+                        // Incidents, reworded for the Active (other-responder) context.
+                        AssignedIncidentEmptyState(
+                            networkStatus = networkStatus,
+                            loading = assignedUi.loadingActive,
+                            requestCompleted = assignedUi.hasCompletedActiveRequest,
+                            serverError = assignedUi.activeError,
+                            lastSyncMillis = activeLastSyncMillis,
+                            onRetry = { assignedVm.loadActive(responderId) },
+                            idleIcon = Icons.Default.Done,
+                            checkingTitle = "Checking for other active incidents",
+                            checkingMessage = "Contacting dispatch and verifying incidents assigned to other responders.",
+                            idleTitle = "No active incidents",
+                            idleMessage = "Other assigned incidents will appear here automatically for awareness.",
+                            idleStatusText = "Monitoring dispatch updates"
+                        )
                     } else {
                         Card(
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).heightIn(max = 320.dp),
@@ -4122,7 +4149,7 @@ fun HomeScreen(
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text("Notifications", fontWeight = FontWeight.Bold, fontSize = 20.sp)
                                     Text(
-                                        "$unreadBroadcastCount unacknowledged broadcast${if (unreadBroadcastCount == 1) "" else "s"}",
+                                        "$unreadBroadcastCount broadcast${if (unreadBroadcastCount == 1) "" else "s"} pending dispatcher notification",
                                         color = AppColors.TextSecondary,
                                         fontSize = 11.sp
                                     )
@@ -4618,7 +4645,7 @@ private fun BroadcastNoticeCard(
                         shape = RoundedCornerShape(999.dp)
                     ) {
                         Text(
-                            "ACKNOWLEDGED",
+                            "DISPATCHER NOTIFIED",
                             color = AppColors.SuccessText,
                             fontSize = 8.sp,
                             fontWeight = FontWeight.Bold,
@@ -4672,7 +4699,7 @@ private fun BroadcastNoticeCard(
                         ),
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 5.dp)
                     ) {
-                        Text("Acknowledge", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Text("Notify Dispatcher", fontSize = 10.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
